@@ -115,7 +115,7 @@ async function showMenu() {
   await refreshSaves();
   void audio.playMusic("audio/music_menu", { fade: 4, volume: 0.8 }).catch(() => {});
   // build the ride behind the menu straight away (downloads overlap with parsing/compiling)
-  void preloadCart();
+  void preloadPrologue();
 }
 
 async function refreshSaves() {
@@ -125,27 +125,36 @@ async function refreshSaves() {
   if (buttons[sel].disabled) select(0);
 }
 
-// ---------------------------------------------------------------- cart preloading
-// As soon as the ride's start pack is cached, build the whole cart scene (GPU uploads, shader
-// compilation) behind the menu, so "新游戏" only has to fade.
-type CartStageT = import("./scenes/cart/CartStage").CartStage;
-let cartPreload: Promise<CartStageT> | null = null;
-function preloadCart() {
-  cartPreload ??= (async () => {
+// ---------------------------------------------------------------- prologue preloading
+// The world and the first chapter are built behind the menu (downloads overlap with parsing and
+// shader compilation), so "新游戏" only has to fade.
+type PrologueStageT = import("./prologue/PrologueStage").PrologueStage;
+type PrologueSaveT = import("./prologue/PrologueStage").PrologueSave;
+let preload: Promise<PrologueStageT> | null = null;
+function preloadPrologue() {
+  preload ??= (async () => {
     const game = await getGame();
     const tw = performance.now();
-    // request the whole start pack now (it jumps the queue); init() consumes each asset as it lands
+    // request the ride's start pack now (it jumps the queue); init() consumes each asset as it lands
     void Promise.all(assets.startPack("cart").map((id) => assets.get(id))).then(() =>
       console.info(`[timing] start pack ready +${(performance.now() - tw).toFixed(0)} ms`),
     );
-    const { CartStage } = await import("./scenes/cart/CartStage");
-    const st = new CartStage(game);
+    const { PrologueStage } = await import("./prologue/PrologueStage");
+    const st = new PrologueStage(game);
     await st.init();
     mark("cart-preloaded");
     return st;
   })();
-  cartPreload.catch(() => (cartPreload = null));
-  return cartPreload;
+  preload.catch(() => (preload = null));
+  return preload;
+}
+
+/** Saves from M1 stored the ride state directly. */
+function toPrologueSave(save: SaveGame | null): PrologueSaveT {
+  if (!save) return { chapter: "cart", state: null };
+  const st = save.state as Record<string, unknown>;
+  if (st && typeof st.chapter === "string") return st as unknown as PrologueSaveT;
+  return { chapter: "cart", state: st };
 }
 
 let starting = false;
@@ -156,22 +165,23 @@ async function startFromSave(save: SaveGame | null) {
   audio.uiTick("select");
   try {
     const game = await getGame();
-    assets.setSegment("cart"); // M1 ships the cart ride only; later segments resume here too
+    const ps = toPrologueSave(save);
+    assets.setSegment(ps.chapter);
     let ready = false;
     const off = assets.onProgress(() => {
-      if (!ready) hud.loading(true, `正在准备 ${Math.round(assets.startPackProgress("cart") * 100)}%`);
+      if (!ready) hud.loading(true, `正在准备 ${Math.round(assets.startPackProgress(ps.chapter) * 100)}%`);
     });
     hud.loading(true, "正在准备");
     menuEl.classList.add("fade");
     audio.stopMusic(2.5);
-    const st = await preloadCart();
-    cartPreload = null; // a later "new game" builds a fresh stage
+    const st = await preloadPrologue();
+    preload = null; // a later "new game" builds a fresh stage
+    await st.prepareChapter(ps);
     ready = true;
     off();
     hud.loading(false);
     await hud.fade(true, 1.0);
     menuEl.classList.add("hidden");
-    st.applyState((save?.state as Record<string, number>) ?? null);
     await game.setStage(async () => st);
     if (!save) await game.save("auto");
     mark("cart-started");

@@ -5,7 +5,7 @@ import { Quaternion, Vector3 } from "@babylonjs/core/Maths/math.vector";
 import type { Scene } from "@babylonjs/core/scene";
 import type { Node } from "@babylonjs/core/node";
 import type { AbstractMesh } from "@babylonjs/core/Meshes/abstractMesh";
-import type { Route } from "../../world/route";
+import type { Route } from "../world/route";
 
 const WHEEL_R = 0.58;
 const AXLE = 1.15;

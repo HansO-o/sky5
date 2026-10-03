@@ -12,9 +12,10 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, id: string): HTMLElem
 
 /** Lightweight DOM overlays shared by all scenes. */
 export const hud = {
-  subtitle(who: string | null, text: string) {
+  /** `force` shows the line even with subtitles off (lines without voice-over). */
+  subtitle(who: string | null, text: string, force = false) {
     const s = el("div", "subtitle");
-    if (!settings.value.subtitles || !text) {
+    if ((!settings.value.subtitles && !force) || !text) {
       s.style.opacity = "0";
       return;
     }
