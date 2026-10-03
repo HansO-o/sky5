@@ -1,0 +1,475 @@
+{
+ "polyhaven": [
+  {
+   "id": "boulder_01",
+   "kind": "model",
+   "name": "Boulder 01",
+   "authors": [
+    "Rico Cilliers"
+   ],
+   "source": "https://polyhaven.com/a/boulder_01",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
+   "id": "dead_tree_trunk",
+   "kind": "model",
+   "name": "Dead Tree Trunk",
+   "authors": [
+    "Rob Tuytel"
+   ],
+   "source": "https://polyhaven.com/a/dead_tree_trunk",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
+   "id": "fern_02",
+   "kind": "model",
+   "name": "Fern 02",
+   "authors": [
+    "Rob Tuytel",
+    "Rico Cilliers"
+   ],
+   "source": "https://polyhaven.com/a/fern_02",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
+   "id": "fir_tree_01",
+   "kind": "texture",
+   "name": "Fir Tree 01",
+   "authors": [
+    "Rob Tuytel",
+    "Rico Cilliers"
+   ],
+   "source": "https://polyhaven.com/a/fir_tree_01",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
+   "id": "forest_ground_04",
+   "kind": "texture",
+   "name": "Forest Ground 04",
+   "authors": [
+    "Rob Tuytel",
+    "Rico Cilliers"
+   ],
+   "source": "https://polyhaven.com/a/forest_ground_04",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
+   "id": "forrest_ground_01",
+   "kind": "texture",
+   "name": "Forest Ground 01",
+   "authors": [
+    "Rob Tuytel"
+   ],
+   "source": "https://polyhaven.com/a/forrest_ground_01",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
+   "id": "kite_shield",
+   "kind": "model",
+   "name": "Kite Shield",
+   "authors": [
+    "Ulan Cabanilla"
+   ],
+   "source": "https://polyhaven.com/a/kite_shield",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
+   "id": "kloofendal_overcast_puresky",
+   "kind": "hdri",
+   "name": "Kloofendal Overcast (Pure Sky)",
+   "authors": [
+    "Greg Zaal"
+   ],
+   "source": "https://polyhaven.com/a/kloofendal_overcast_puresky",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
+   "id": "large_castle_door",
+   "kind": "model",
+   "name": "Large Castle Door",
+   "authors": [
+    "Tina"
+   ],
+   "source": "https://polyhaven.com/a/large_castle_door",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
+   "id": "medieval_wood",
+   "kind": "texture",
+   "name": "Medieval Wood",
+   "authors": [
+    "Rob Tuytel"
+   ],
+   "source": "https://polyhaven.com/a/medieval_wood",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
+   "id": "modular_fort_01",
+   "kind": "model",
+   "name": "Modular Fort 01",
+   "authors": [
+    "Rico Cilliers"
+   ],
+   "source": "https://polyhaven.com/a/modular_fort_01",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
+   "id": "mountainside",
+   "kind": "model",
+   "name": "Mountainside",
+   "authors": [
+    "Dario Barresi",
+    "Rico Cilliers"
+   ],
+   "source": "https://polyhaven.com/a/mountainside",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
+   "id": "pine_bark",
+   "kind": "texture",
+   "name": "Pine Bark",
+   "authors": [
+    "Dimitrios Savva"
+   ],
+   "source": "https://polyhaven.com/a/pine_bark",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
+   "id": "plastered_stone_wall",
+   "kind": "texture",
+   "name": "Plastered Stone Wall",
+   "authors": [
+    "Rob Tuytel"
+   ],
+   "source": "https://polyhaven.com/a/plastered_stone_wall",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
+   "id": "rock_face_01",
+   "kind": "model",
+   "name": "Rock Face 01",
+   "authors": [
+    "Dario Barresi"
+   ],
+   "source": "https://polyhaven.com/a/rock_face_01",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
+   "id": "rock_moss_set_01",
+   "kind": "model",
+   "name": "Rock Moss Set 01",
+   "authors": [
+    "Kless Gyzen"
+   ],
+   "source": "https://polyhaven.com/a/rock_moss_set_01",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
+   "id": "rock_moss_set_02",
+   "kind": "model",
+   "name": "Rock Moss Set 02",
+   "authors": [
+    "Kless Gyzen"
+   ],
+   "source": "https://polyhaven.com/a/rock_moss_set_02",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
+   "id": "rocky_terrain_02",
+   "kind": "texture",
+   "name": "Rocky Terrain 02",
+   "authors": [
+    "Amal Kumar"
+   ],
+   "source": "https://polyhaven.com/a/rocky_terrain_02",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
+   "id": "rocky_trail",
+   "kind": "texture",
+   "name": "Rocky Trail",
+   "authors": [
+    "Amal Kumar"
+   ],
+   "source": "https://polyhaven.com/a/rocky_trail",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
+   "id": "rusty_metal_02",
+   "kind": "texture",
+   "name": "Rusty Metal 02",
+   "authors": [
+    "Rob Tuytel"
+   ],
+   "source": "https://polyhaven.com/a/rusty_metal_02",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
+   "id": "snow_02",
+   "kind": "texture",
+   "name": "Snow 02",
+   "authors": [
+    "Rob Tuytel"
+   ],
+   "source": "https://polyhaven.com/a/snow_02",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
+   "id": "thatch_roof_angled",
+   "kind": "texture",
+   "name": "Thatch Roof Angled",
+   "authors": [
+    "Rob Tuytel",
+    "Dimitrios Savva"
+   ],
+   "source": "https://polyhaven.com/a/thatch_roof_angled",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
+   "id": "tree_stump_01",
+   "kind": "model",
+   "name": "Tree Stump 01",
+   "authors": [
+    "Rob Tuytel"
+   ],
+   "source": "https://polyhaven.com/a/tree_stump_01",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
+   "id": "weathered_brown_planks",
+   "kind": "texture",
+   "name": "Weathered Brown Planks",
+   "authors": [
+    "Dimitrios Savva",
+    "Rico Cilliers"
+   ],
+   "source": "https://polyhaven.com/a/weathered_brown_planks",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
+   "id": "wicker_basket_01",
+   "kind": "model",
+   "name": "Wicker Basket 01",
+   "authors": [
+    "Kuutti Siitonen"
+   ],
+   "source": "https://polyhaven.com/a/wicker_basket_01",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
+   "id": "wooden_barrels_01",
+   "kind": "model",
+   "name": "Wooden Barrels 01",
+   "authors": [
+    "James Ray Cock"
+   ],
+   "source": "https://polyhaven.com/a/wooden_barrels_01",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
+   "id": "wooden_bucket_01",
+   "kind": "model",
+   "name": "Wooden Bucket 01",
+   "authors": [
+    "James Ray Cock"
+   ],
+   "source": "https://polyhaven.com/a/wooden_bucket_01",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
+   "id": "wooden_crate_01",
+   "kind": "model",
+   "name": "Wooden Crate 01",
+   "authors": [
+    "James Ray Cock"
+   ],
+   "source": "https://polyhaven.com/a/wooden_crate_01",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
+   "id": "wooden_lantern_01",
+   "kind": "model",
+   "name": "Wooden Lantern 01",
+   "authors": [
+    "James Ray Cock"
+   ],
+   "source": "https://polyhaven.com/a/wooden_lantern_01",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  }
+ ],
+ "extra": [
+  {
+   "id": "quaternius-ubc",
+   "kind": "model",
+   "name": "Universal Base Characters",
+   "authors": [
+    "Quaternius"
+   ],
+   "source": "https://quaternius.com/packs/universalbasecharacters.html",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "quaternius-outfits",
+   "kind": "model",
+   "name": "Modular Character Outfits – Fantasy",
+   "authors": [
+    "Quaternius"
+   ],
+   "source": "https://quaternius.com/packs/modularcharacteroutfitsfantasy.html",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "quaternius-ual",
+   "kind": "animation",
+   "name": "Universal Animation Library 1 & 2",
+   "authors": [
+    "Quaternius"
+   ],
+   "source": "https://quaternius.com/packs/universalanimationlibrary.html",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "0ad-horse",
+   "kind": "model",
+   "name": "Horse model, texture and walk animation (0 A.D.)",
+   "authors": [
+    "Wildfire Games"
+   ],
+   "source": "https://play0ad.com",
+   "license": "CC BY-SA 3.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by-sa/3.0/",
+   "note": "经 ZeroAD-Godot 项目转换为 glTF"
+  },
+  {
+   "id": "music-frost",
+   "kind": "music",
+   "name": "Frost in the Northern Winter",
+   "authors": [
+    "Kaiser (the-oracle)"
+   ],
+   "source": "https://opengameart.org/content/frost-in-the-northern-winter",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "music-lament",
+   "kind": "music",
+   "name": "Fantasy: Lament for a Warrior's Soul",
+   "authors": [
+    "RandomMind"
+   ],
+   "source": "https://opengameart.org/content/fantasy-lament-for-a-warriors-soul",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-627064",
+   "kind": "sound",
+   "name": "Ambiance_Forest (Birds, wind)",
+   "authors": [
+    "KaleidacousticsAudio"
+   ],
+   "source": "https://freesound.org/s/627064/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-479790",
+   "kind": "sound",
+   "name": "R22-05-Two Horses on Dirt Road",
+   "authors": [
+    "craigsmith"
+   ],
+   "source": "https://freesound.org/s/479790/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-538438",
+   "kind": "sound",
+   "name": "horse with old cart",
+   "authors": [
+    "bruno.auzet"
+   ],
+   "source": "https://freesound.org/s/538438/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "lib-babylon",
+   "kind": "library",
+   "name": "Babylon.js",
+   "authors": [
+    "Babylon.js contributors"
+   ],
+   "source": "https://www.babylonjs.com",
+   "license": "Apache-2.0",
+   "licenseUrl": "https://github.com/BabylonJS/Babylon.js/blob/master/license.md"
+  },
+  {
+   "id": "lib-jolt",
+   "kind": "library",
+   "name": "Jolt Physics / JoltPhysics.js",
+   "authors": [
+    "Jorrit Rouwe"
+   ],
+   "source": "https://github.com/jrouwe/JoltPhysics.js",
+   "license": "MIT",
+   "licenseUrl": "https://github.com/jrouwe/JoltPhysics.js/blob/main/LICENSE"
+  },
+  {
+   "id": "lib-meshopt",
+   "kind": "library",
+   "name": "meshoptimizer",
+   "authors": [
+    "Arseny Kapoulkine"
+   ],
+   "source": "https://github.com/zeux/meshoptimizer",
+   "license": "MIT",
+   "licenseUrl": "https://github.com/zeux/meshoptimizer/blob/master/LICENSE.md"
+  },
+  {
+   "id": "lib-basis",
+   "kind": "library",
+   "name": "Basis Universal",
+   "authors": [
+    "Binomial LLC"
+   ],
+   "source": "https://github.com/BinomialLLC/basis_universal",
+   "license": "Apache-2.0",
+   "licenseUrl": "https://github.com/BinomialLLC/basis_universal/blob/master/LICENSE"
+  }
+ ]
+}

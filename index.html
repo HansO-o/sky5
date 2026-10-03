@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>北境：序章</title>
+    <meta name="description" content="北境：序章 — 浏览器里的北地奇幻开场。" />
+    <meta name="theme-color" content="#000000" />
+    <link rel="preload" href="./manifest.json" as="fetch" crossorigin />
+    <style>
+      :root {
+        --ink: #e9e4d8;
+        --ink-dim: #9b968b;
+        --ink-faint: #5d5a54;
+        --glow: rgba(255, 244, 220, 0.55);
+        --panel: rgba(8, 8, 8, 0.82);
+        --line: rgba(233, 228, 216, 0.22);
+        --serif: "Noto Serif SC", "Source Han Serif SC", "Source Han Serif CN", "Songti SC", "STSong", "SimSun", serif;
+        --sans: "Noto Sans SC", "Source Han Sans SC", "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", sans-serif;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; background: #000; color: var(--ink); overflow: hidden; font-family: var(--sans); }
+      #scene { position: fixed; inset: 0; width: 100%; height: 100%; display: block; outline: none; touch-action: none; }
+      /* CSS smoke shown until the 3D menu background is running */
+      #smoke { position: fixed; inset: -20%; pointer-events: none; opacity: 0.55; transition: opacity 1.6s;
+        background:
+          radial-gradient(40% 30% at 30% 60%, rgba(120,120,120,.35), transparent 70%),
+          radial-gradient(35% 25% at 70% 40%, rgba(110,110,110,.30), transparent 70%),
+          radial-gradient(50% 35% at 50% 80%, rgba(90,90,90,.35), transparent 70%);
+        animation: drift 28s ease-in-out infinite alternate; filter: blur(18px); }
+      #smoke.off { opacity: 0; }
+      @keyframes drift { from { transform: translate3d(-4%, 2%, 0) scale(1.05); } to { transform: translate3d(4%, -3%, 0) scale(1.15); } }
+      #ui { position: fixed; inset: 0; pointer-events: none; }
+      #ui > * { pointer-events: auto; }
+      .hidden { display: none !important; }
+
+      /* ---------------- main menu */
+      #menu { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4.5vh; pointer-events: none; transition: opacity .8s; }
+      #menu.fade { opacity: 0; }
+      .title { text-align: center; font-family: var(--serif); letter-spacing: .35em; user-select: none; }
+      .title .emblem { width: 72px; height: 72px; margin: 0 auto 12px; opacity: .85; }
+      .title h1 { margin: 0; font-weight: 400; font-size: clamp(44px, 7vw, 92px); text-shadow: 0 0 28px rgba(0,0,0,.9), 0 0 2px var(--glow); padding-left: .35em; }
+      .title p { margin: 6px 0 0; color: var(--ink-dim); font-size: clamp(14px, 1.4vw, 18px); letter-spacing: .8em; padding-left: .8em; }
+      #menu nav { display: flex; flex-direction: column; align-items: center; gap: 6px; pointer-events: auto; min-height: 210px; }
+      #menu nav button { all: unset; cursor: pointer; font-family: var(--serif); font-size: clamp(17px, 1.6vw, 21px); letter-spacing: .4em; padding: 7px 0 7px .4em; color: var(--ink-dim); transition: color .15s, text-shadow .15s; text-shadow: 0 0 8px #000; }
+      #menu nav button:hover, #menu nav button:focus-visible, #menu nav button.sel { color: #fff; text-shadow: 0 0 14px var(--glow), 0 0 4px #000; }
+      #menu nav button:disabled { color: var(--ink-faint); cursor: default; text-shadow: none; }
+      #menu nav button.sel::before, #menu nav button.sel::after { content: "—"; color: var(--ink-dim); margin: 0 .6em; letter-spacing: 0; }
+
+      /* ---------------- panels (settings / credits / load) */
+      .panel { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(720px, calc(100vw - 32px)); max-height: calc(100vh - 64px); overflow: auto; background: var(--panel); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 26px 32px; font-size: 15px; backdrop-filter: blur(4px); }
+      .panel h2 { margin: 0 0 18px; font-family: var(--serif); font-weight: 400; letter-spacing: .4em; text-align: center; font-size: 22px; }
+      .panel .row { display: grid; grid-template-columns: 9em 1fr auto; align-items: center; gap: 12px; padding: 7px 0; border-bottom: 1px solid rgba(255,255,255,.05); }
+      .panel .row label { color: var(--ink-dim); }
+      .panel .row output { min-width: 4em; text-align: right; font-variant-numeric: tabular-nums; color: var(--ink-dim); }
+      .panel input[type=range] { width: 100%; accent-color: #cfc6b0; }
+      .panel select, .panel .btn { background: #111; color: var(--ink); border: 1px solid var(--line); padding: 5px 10px; font: inherit; }
+      .panel .btn { cursor: pointer; }
+      .panel .btn:hover { border-color: var(--ink-dim); }
+      .panel .actions { display: flex; justify-content: center; gap: 16px; margin-top: 20px; }
+      .panel .keys { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px 24px; }
+      .panel .keys .btn { min-width: 6em; text-align: center; }
+      .panel .keys .btn.wait { border-color: #fff; }
+      .panel h3 { font-family: var(--serif); font-weight: 400; letter-spacing: .2em; color: var(--ink-dim); margin: 20px 0 8px; font-size: 15px; }
+      .credits { line-height: 1.75; font-size: 13.5px; color: #cfc9bc; }
+      .credits a { color: #e9dfc7; }
+      .credits .lic { color: var(--ink-dim); }
+
+      /* ---------------- in-game overlays */
+      #subtitle { position: fixed; left: 50%; bottom: 11vh; transform: translateX(-50%); max-width: min(900px, 86vw); text-align: center; font-size: clamp(16px, 1.5vw, 21px); line-height: 1.5; text-shadow: 0 0 6px #000, 0 0 2px #000, 0 1px 2px #000; pointer-events: none; transition: opacity .25s; }
+      #subtitle .who { color: #d9cfb6; margin-right: .5em; }
+      #loadhint { position: fixed; right: 22px; bottom: 18px; display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--ink-dim); pointer-events: none; opacity: 0; transition: opacity .4s; text-shadow: 0 0 4px #000; }
+      #loadhint.on { opacity: 1; }
+      #loadhint i { width: 14px; height: 14px; border: 2px solid var(--ink-faint); border-top-color: var(--ink); border-radius: 50%; animation: spin 1s linear infinite; }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      #fade { position: fixed; inset: 0; background: #000; opacity: 0; pointer-events: none; transition: opacity 1.2s; }
+      #fade.on { opacity: 1; }
+      #crosshair { position: fixed; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px; border-radius: 50%; background: rgba(255,255,255,.7); pointer-events: none; }
+      #toast { position: fixed; left: 28px; top: 24px; font-family: var(--serif); font-size: 17px; letter-spacing: .1em; color: var(--ink); text-shadow: 0 0 6px #000; pointer-events: none; opacity: 0; transition: opacity .6s; }
+      #toast.on { opacity: 1; }
+      #dlstatus { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); font-size: 12px; color: var(--ink-faint); pointer-events: none; letter-spacing: .1em; }
+      #prompt { position: fixed; left: 50%; bottom: 26vh; transform: translateX(-50%); font-size: 14px; color: var(--ink-dim); text-shadow: 0 0 4px #000; pointer-events: none; }
+      #endcard { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; font-family: var(--serif); pointer-events: auto; }
+      #endcard h2 { font-weight: 400; letter-spacing: .5em; margin: 0; font-size: clamp(24px, 3vw, 36px); }
+      #endcard p { color: var(--ink-dim); margin: 0; letter-spacing: .2em; }
+      #endcard button { all: unset; cursor: pointer; margin-top: 20px; letter-spacing: .3em; color: var(--ink-dim); }
+      #endcard button:hover { color: #fff; }
+      #fatal { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 16px; background: #000; color: var(--ink); }
+    </style>
+  </head>
+  <body>
+    <canvas id="scene" tabindex="0" aria-label="游戏画面"></canvas>
+    <div id="smoke"></div>
+    <div id="ui">
+      <section id="menu" aria-label="主菜单">
+        <div class="title">
+          <svg class="emblem" viewBox="0 0 100 100" aria-hidden="true">
+            <g fill="none" stroke="#d8d0bd" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M50 8 L50 92" />
+              <path d="M50 22 C 36 30 22 28 12 18 C 20 36 34 44 50 40 C 66 44 80 36 88 18 C 78 28 64 30 50 22 Z" />
+              <path d="M50 52 C 40 58 30 58 22 52 C 30 64 40 68 50 64 C 60 68 70 64 78 52 C 70 58 60 58 50 52 Z" />
+              <path d="M42 80 L50 92 L58 80" />
+            </g>
+          </svg>
+          <h1>北境</h1>
+          <p>序章</p>
+        </div>
+        <nav>
+          <button data-act="continue" disabled>继续</button>
+          <button data-act="new">新游戏</button>
+          <button data-act="load" disabled>读取</button>
+          <button data-act="settings">设置</button>
+          <button data-act="credits">制作人员</button>
+        </nav>
+      </section>
+      <div id="dlstatus"></div>
+    </div>
+    <noscript><div id="fatal">需要启用 JavaScript 才能运行。</div></noscript>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

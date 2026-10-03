@@ -1,0 +1,65 @@
+import { settings } from "../core/settings";
+
+function el<K extends keyof HTMLElementTagNameMap>(tag: K, id: string): HTMLElementTagNameMap[K] {
+  let e = document.getElementById(id) as HTMLElementTagNameMap[K] | null;
+  if (!e) {
+    e = document.createElement(tag);
+    e.id = id;
+    document.getElementById("ui")!.appendChild(e);
+  }
+  return e;
+}
+
+/** Lightweight DOM overlays shared by all scenes. */
+export const hud = {
+  subtitle(who: string | null, text: string) {
+    const s = el("div", "subtitle");
+    if (!settings.value.subtitles || !text) {
+      s.style.opacity = "0";
+      return;
+    }
+    s.innerHTML = "";
+    if (who) {
+      const w = document.createElement("span");
+      w.className = "who";
+      w.textContent = who + "：";
+      s.appendChild(w);
+    }
+    s.appendChild(document.createTextNode(text));
+    s.style.opacity = "1";
+  },
+  clearSubtitle() {
+    el("div", "subtitle").style.opacity = "0";
+  },
+  /** Small corner indicator; never a full-screen loading screen. */
+  loading(on: boolean, text = "加载中") {
+    const h = el("div", "loadhint");
+    if (!h.firstChild) h.innerHTML = "<i></i><span></span>";
+    h.querySelector("span")!.textContent = text;
+    h.classList.toggle("on", on);
+  },
+  fade(on: boolean, seconds = 1.2) {
+    const f = el("div", "fade");
+    f.style.transitionDuration = `${seconds}s`;
+    f.classList.toggle("on", on);
+    return new Promise<void>((r) => setTimeout(r, seconds * 1000));
+  },
+  toast(text: string, ms = 4000) {
+    const t = el("div", "toast");
+    t.textContent = text;
+    t.classList.add("on");
+    clearTimeout((t as unknown as { _t: number })._t);
+    (t as unknown as { _t: number })._t = window.setTimeout(() => t.classList.remove("on"), ms);
+  },
+  prompt(text: string | null) {
+    const p = el("div", "prompt");
+    p.textContent = text ?? "";
+    p.classList.toggle("hidden", !text);
+  },
+  crosshair(on: boolean) {
+    el("div", "crosshair").classList.toggle("hidden", !on);
+  },
+  downloadStatus(text: string) {
+    el("div", "dlstatus").textContent = text;
+  },
+};
