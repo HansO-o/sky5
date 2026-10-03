@@ -28,7 +28,9 @@ export type Part =
   | "hair_simpleparted"
   | "hair_beard"
   | "hair_buzzed"
-  | "hair_long";
+  | "hair_long"
+  | "hair_buns"
+  | "hair_buzzedfemale";
 
 export const OUTFITS = {
   rebel: ["outfit_ranger_Arms", "outfit_ranger_Body", "outfit_ranger_Body_Belt_1", "outfit_ranger_Feet_Boots", "outfit_ranger_Legs", "outfit_ranger_Arms_Bracer"],
@@ -39,6 +41,8 @@ export const OUTFITS = {
 
 export interface CharacterSpec {
   name: string;
+  /** body: male (default) or female */
+  sex?: "m" | "f";
   outfit: Part[];
   hair?: Part[];
   /** hood hides hair */
@@ -48,6 +52,8 @@ export interface CharacterSpec {
 /** Shared factory: one loaded body container + one animation container. */
 export class CharacterFactory {
   private clips = new Map<string, AnimationGroup>();
+  /** female body container, loaded on demand (see World.ensureFemale) */
+  female: AssetContainer | null = null;
   constructor(
     private scene: Scene,
     private body: AssetContainer,
@@ -62,7 +68,9 @@ export class CharacterFactory {
 
   create(spec: CharacterSpec) {
     const keep = new Set<string>([...spec.outfit, ...(spec.hair ?? []), ...(spec.face === false ? [] : ["head", "eyes", "brows"])]);
-    const inst = instantiateSubset(this.body, (n) => keep.has(n), (n) => PART_RE.test(n));
+    const body = spec.sex === "f" ? this.female : this.body;
+    if (!body) throw new Error("female body not loaded");
+    const inst = instantiateSubset(body, (n) => keep.has(n), (n) => PART_RE.test(n));
     const root = new TransformNode(`npc_${spec.name}`, this.scene);
     root.rotationQuaternion = Quaternion.Identity();
     for (const r of inst.rootNodes) r.parent = root;
@@ -100,7 +108,7 @@ export class Character {
   headDown = 0;
 
   constructor(
-    private scene: Scene,
+    readonly scene: Scene,
     readonly name: string,
     readonly root: TransformNode,
     private nodes: Map<string, TransformNode>,
@@ -206,6 +214,13 @@ export class Character {
     head.rotationQuaternion ??= new Quaternion();
     head.rotationQuaternion.copyFrom(tmpQ);
     head.computeWorldMatrix(true);
+  }
+
+  /** Stop every clip (e.g. before a ragdoll takes over). */
+  stopAnimations() {
+    for (const g of this.groups.values()) g.stop();
+    this.current = null;
+    this.lookTarget = null;
   }
 
   /** Skeleton bone (glTF joint node) by name. */

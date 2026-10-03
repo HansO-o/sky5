@@ -246,6 +246,15 @@ export class World {
 
   // ------------------------------------------------------------------ NPCs
 
+  private femaleP: Promise<void> | null = null;
+  /** Load the female body (muster segment) once. */
+  ensureFemale() {
+    this.femaleP ??= loadGLB("chars/female", this.scene).then((c) => {
+      this.factory.female = c;
+    });
+    return this.femaleP;
+  }
+
   /** Get a named NPC, creating it on first use. */
   npc(name: string, spec?: Omit<CharacterSpec, "name">) {
     let c = this.npcs.get(name);

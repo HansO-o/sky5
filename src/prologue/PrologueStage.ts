@@ -16,19 +16,28 @@ import { Cancelled, Director } from "./Director";
 import { World } from "./World";
 import type { Wagon } from "./wagon";
 import type { Chapter, ChapterContext } from "./chapters/types";
+import { defaultAppearance, type Appearance } from "../world/appearance";
+import { PlayerController } from "./player";
+import { createPlayerBody } from "./playerBody";
 import { CartChapter } from "./chapters/cart";
 import { RoamChapter } from "./chapters/roam";
+import { MusterChapter } from "./chapters/muster";
 
 type ChapterFactory = (ctx: ChapterContext) => Chapter;
 
 /** Chapters in play order. Later milestones append to this list. */
-export const CHAPTERS: { id: SegmentId; make: ChapterFactory }[] = [{ id: "cart", make: (c) => new CartChapter(c) }];
+export const CHAPTERS: { id: SegmentId; make: ChapterFactory }[] = [
+  { id: "cart", make: (c) => new CartChapter(c) },
+  { id: "muster", make: (c) => new MusterChapter(c) },
+];
 const DEBUG = new URLSearchParams(location.search);
 if (DEBUG.has("debug") && DEBUG.has("roam")) CHAPTERS.splice(0, CHAPTERS.length, { id: "muster", make: (c) => new RoamChapter(c) });
 
 export interface PrologueSave {
   chapter: SegmentId;
   state: Record<string, unknown> | null;
+  /** the player's character (set during the muster) */
+  appearance?: Appearance | null;
 }
 
 /**
@@ -44,6 +53,10 @@ export class PrologueStage implements Stage {
   wagons: Wagon[] = [];
   townReady = false;
   town: Town | null = null;
+  /** the player's created character; null until the muster */
+  appearance: Appearance | null = null;
+  /** on-foot player (created by the first chapter that needs it, kept across chapters) */
+  player: PlayerController | null = null;
   physics: Physics | null = null;
   private townP: Promise<void> | null = null;
   private physicsP: Promise<Physics> | null = null;
@@ -75,6 +88,7 @@ export class PrologueStage implements Stage {
 
   /** Prepare the chapter a save (or a new game) starts in. */
   async prepareChapter(save: PrologueSave) {
+    if (save.appearance !== undefined) this.appearance = save.appearance;
     const index = Math.max(0, CHAPTERS.findIndex((c) => c.id === save.chapter));
     if (this.prepared && this.prepared.index === index && !save.state && !this.prepared.resume) return;
     this.prepared?.chapter.dispose();
@@ -144,6 +158,18 @@ export class PrologueStage implements Stage {
   }
   breachBody: ReturnType<Physics["addStaticMesh"]> | null = null;
 
+  /** The on-foot player, created at `pos` facing `yaw` on first use (later calls teleport it). */
+  async ensurePlayer(pos: Vector3, yaw: number) {
+    const ph = await this.ensurePhysics();
+    if (!this.player) {
+      const { body, heightScale } = await createPlayerBody(this.world, this.appearance ?? defaultAppearance());
+      this.player = new PlayerController(ph, this.world.rig, body, pos, yaw);
+      this.player.setEyeHeight(1.62 * heightScale);
+    } else this.player.teleport(pos, yaw);
+    this.world.rig.follow(this.player);
+    return this.player;
+  }
+
   private skipResolve: (() => void) | null = null;
   /** Skip the rest of the current chapter (pause menu / hold-to-skip). */
   async skipChapter() {
@@ -166,7 +192,11 @@ export class PrologueStage implements Stage {
     try {
       for (let i = p.index; i < CHAPTERS.length; i++) {
         const ch = i === p.index ? p.chapter : CHAPTERS[i].make(this.ctx);
-        if (i !== p.index) await ch.prepare(null);
+        if (i !== p.index) {
+          // chapters change behind a black screen; each chapter fades in when it is ready
+          await hud.fade(true, 1.0);
+          await ch.prepare(null);
+        }
         this.chapter = ch;
         this.segment = ch.id;
         assets.setSegment(ch.id);
@@ -184,7 +214,6 @@ export class PrologueStage implements Stage {
           hud.clearSubtitle();
           hud.prompt(null);
           ch.skip?.();
-          await hud.fade(false, 0.6);
         }
         ch.dispose();
       }
@@ -217,6 +246,7 @@ export class PrologueStage implements Stage {
   update(dt: number) {
     if (this.paused) return;
     this.director.update(dt);
+    this.player?.update(dt);
     this.chapter?.update?.(dt);
     this.world.update(dt);
   }
@@ -232,7 +262,7 @@ export class PrologueStage implements Stage {
 
   saveState() {
     const ch = this.chapter ?? this.prepared?.chapter;
-    return { label: ch?.label ?? "序章", state: { chapter: ch?.id ?? "cart", state: ch?.save() ?? null } as unknown as Record<string, unknown> };
+    return { label: ch?.label ?? "序章", state: { chapter: ch?.id ?? "cart", state: ch?.save() ?? null, appearance: this.appearance } as unknown as Record<string, unknown> };
   }
 
   dispose() {
@@ -241,6 +271,7 @@ export class PrologueStage implements Stage {
     this.prepared?.chapter.dispose();
     for (const w of this.wagons) w.dispose();
     audio.stopAllBeds(1);
+    this.player?.dispose();
     this.world.dispose();
     this.physics?.dispose();
     hud.clearSubtitle();

@@ -191,6 +191,29 @@ class AudioSystem {
     }
   }
 
+  /** Fire-and-forget sound, optionally positional. */
+  async playOneShot(id: string, volume = 1, pos?: { x: number; y: number; z: number }, bus: Bus = "sfx", rate = 1) {
+    if (!this.ctx) return;
+    const buf = await this.load(id).catch(() => null);
+    if (!buf || !this.ctx) return;
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    src.playbackRate.value = rate;
+    const g = this.ctx.createGain();
+    g.gain.value = volume;
+    src.connect(g);
+    if (pos) {
+      const p = this.emitter(bus)!;
+      p.positionX.value = pos.x;
+      p.positionY.value = pos.y;
+      p.positionZ.value = pos.z;
+      g.connect(p);
+      src.onended = () => p.disconnect();
+    } else g.connect(this.buses[bus]);
+    src.start();
+    return src;
+  }
+
   /** Short synthesized UI tick (no asset needed). */
   uiTick(kind: "move" | "select" = "move") {
     if (!this.ctx) return;

@@ -36,6 +36,8 @@ export class Game {
   private instr: SceneInstrumentation | null = null;
   /** debug: simulation speed multiplier (?timescale=N together with ?debug) */
   timeScale = 1;
+  /** a modal UI (e.g. character creation) owns the mouse: don't pause on pointer unlock */
+  modal = false;
   onExitToMenu: (() => void) | null = null;
 
   constructor(readonly canvas: HTMLCanvasElement) {}
@@ -56,10 +58,10 @@ export class Game {
     });
     document.addEventListener("pointerlockchange", () => {
       // Esc releases pointer lock in the browser; treat that as "open the pause menu".
-      if (!input.locked && this.stage?.gameplay && !this.paused && !this.transitioning) this.pause(true);
+      if (!input.locked && this.stage?.gameplay && !this.paused && !this.transitioning && !this.modal) this.pause(true);
     });
     this.canvas.addEventListener("click", () => {
-      if (this.stage?.gameplay && !this.paused) input.requestLock(this.canvas);
+      if (this.stage?.gameplay && !this.paused && !this.modal) input.requestLock(this.canvas);
     });
     if (new URLSearchParams(location.search).has("debug")) {
       this.debugEl = document.createElement("div");
@@ -83,7 +85,7 @@ export class Game {
     input.poll(dt);
     const st = this.stage;
     if (st) {
-      if (st.gameplay && !this.transitioning) this.handleGlobalKeys();
+      if (st.gameplay && !this.transitioning && !this.modal) this.handleGlobalKeys();
       if (!this.paused) {
         st.update(dt);
         if (st.gameplay) this.playSeconds += dt;

@@ -66,7 +66,7 @@ export class Physics {
     pairs.EnableCollision(L.MOVING, L.DEBRIS);
     pairs.EnableCollision(L.DEBRIS, L.DEBRIS);
     pairs.EnableCollision(L.DEBRIS, L.RAGDOLL);
-    pairs.EnableCollision(L.RAGDOLL, L.RAGDOLL);
+    // ragdoll parts don't collide with each other (joint limits keep them apart)
     const BP_STATIC = new J.BroadPhaseLayer(0), BP_MOVING = new J.BroadPhaseLayer(1);
     const bp = new J.BroadPhaseLayerInterfaceTable(NUM_LAYERS, 2);
     bp.MapObjectToBroadPhaseLayer(L.STATIC, BP_STATIC);
