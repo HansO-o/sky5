@@ -3,5 +3,3 @@ assets-src
 dist
 .cache
 *.part
-public/data
-public/manifest.json

@@ -18,6 +18,11 @@ export const PH_TEXTURES = {
   rusty_metal_02: { res: "1k", maps: ["Diffuse", "nor_gl", "arm"] },
   hessian_230: { res: "1k", maps: ["Diffuse", "nor_gl"] },
   brown_leather: { res: "1k", maps: ["Diffuse", "nor_gl"] },
+  castle_brick_07: { res: "1k", maps: ["Diffuse", "nor_gl", "arm"] },
+  castle_wall_slates: { res: "1k", maps: ["Diffuse", "nor_gl", "arm"] },
+  old_planks_02: { res: "1k", maps: ["Diffuse", "nor_gl", "arm"] },
+  rough_wood: { res: "1k", maps: ["Diffuse", "nor_gl", "arm"] },
+  burned_ground_01: { res: "1k", maps: ["Diffuse", "nor_gl"] },
 };
 
 /** Extra texture maps that live inside a model asset (fir twig cards). */
@@ -43,6 +48,8 @@ export const PH_MODELS = {
   fern_02: "1k",
   kite_shield: "1k",
   wicker_basket_01: "1k",
+  wooden_axe_03: "1k",
+  wooden_bucket_02: "1k",
 };
 
 export const PH_HDRIS = {

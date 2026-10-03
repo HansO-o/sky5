@@ -22,8 +22,21 @@ const KEEP_CLIPS = [
   "Jog_Fwd_Loop",
   "Death01",
   "Hit_Chest",
+  "Hit_Head",
+  "Sprint_Loop",
+  "Jump_Start",
+  "Jump_Loop",
+  "Jump_Land",
+  "Crouch_Idle_Loop",
+  "Crouch_Fwd_Loop",
+  "Interact",
+  "Fixing_Kneeling",
+  "Sitting_Exit",
+  "Spell_Simple_Idle_Loop",
+  "Sword_Idle",
+  "Idle_Torch_Loop",
 ];
-const KEEP_CLIPS_2 = ["Idle_FoldArms_Loop", "Idle_No_Loop", "Yes"];
+const KEEP_CLIPS_2 = ["Idle_FoldArms_Loop", "Idle_No_Loop", "Yes", "LayToIdle", "Hit_Knockback", "Idle_Shield_Loop", "Sword_Block", "Idle_Rail_Loop", "OverhandThrow"];
 
 function disposeAnimation(a) {
   for (const c of a.listChannels()) c.dispose();

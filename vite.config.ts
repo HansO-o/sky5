@@ -12,18 +12,23 @@ function serviceWorker(): Plugin {
   return {
     name: "northern-sw",
     apply: "build",
+    // only the browser bundle gets a service worker (not e.g. a Cloudflare worker environment)
+    applyToEnvironment: (env) => env.name === "client",
     generateBundle(_opts, bundle) {
       const files = Object.keys(bundle).filter((f) => !f.endsWith(".map"));
-      const pub = path.resolve(__dirname, "public");
+      const pub = path.resolve(import.meta.dirname, "public");
       const walk = (d: string): string[] =>
         fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => {
           const p = path.join(d, e.name);
           return e.isDirectory() ? walk(p) : [path.relative(pub, p).split(path.sep).join("/")];
         });
+      const manifestPath = path.join(pub, "manifest.json");
+      if (!fs.existsSync(manifestPath))
+        this.error("public/manifest.json is missing: run `npm run fetch-sources && npm run build-assets` first (or check that public/data and public/manifest.json are committed).");
       const extra = walk(path.join(pub, "decoders")).concat(["manifest.json"]);
       const shell = ["./", ...files, ...extra].filter((f) => f !== "sw.js");
-      const version = crypto.createHash("sha256").update(JSON.stringify(shell)).update(fs.readFileSync(path.join(pub, "manifest.json"))).digest("hex").slice(0, 12);
-      const src = fs.readFileSync(path.resolve(__dirname, "src/sw.template.js"), "utf8").replace("__VERSION__", version).replace("__SHELL__", JSON.stringify(shell));
+      const version = crypto.createHash("sha256").update(JSON.stringify(shell)).update(fs.readFileSync(manifestPath)).digest("hex").slice(0, 12);
+      const src = fs.readFileSync(path.resolve(import.meta.dirname, "src/sw.template.js"), "utf8").replace("__VERSION__", version).replace("__SHELL__", JSON.stringify(shell));
       this.emitFile({ type: "asset", fileName: "sw.js", source: src });
     },
   };
