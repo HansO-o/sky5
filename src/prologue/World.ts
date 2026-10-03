@@ -1,3 +1,4 @@
+import { Dragon } from "./dragon";
 import { Scene } from "@babylonjs/core/scene";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import type { AssetContainer } from "@babylonjs/core/assetContainer";
@@ -253,6 +254,13 @@ export class World {
       this.factory.female = c;
     });
     return this.femaleP;
+  }
+
+  private dragonP: Promise<Dragon> | null = null;
+  /** The dragon (loaded on first use; its assets stream with the "dragon" segment). */
+  ensureDragon() {
+    this.dragonP ??= Dragon.create(this);
+    return this.dragonP;
   }
 
   /** Get a named NPC, creating it on first use. */

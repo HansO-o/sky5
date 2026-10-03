@@ -16,8 +16,13 @@ export interface Chapter {
   id: SegmentId;
   /** shown in the load menu */
   label: string;
-  /** Build chapter content (may run while the menu is still up). Must not advance time. */
-  prepare(resume: Record<string, unknown> | null): Promise<void>;
+  /** continues straight from the previous chapter's last shot (no fade to black in between) */
+  seamless?: boolean;
+  /**
+   * Build chapter content (may run while the menu is still up). Must not advance time.
+   * `continued`: the previous chapter just ended in this session (actors are already in place).
+   */
+  prepare(resume: Record<string, unknown> | null, continued?: boolean): Promise<void>;
   /** Play the chapter; resolves when the next chapter should begin. */
   run(resume: Record<string, unknown> | null): Promise<void>;
   update?(dt: number): void;

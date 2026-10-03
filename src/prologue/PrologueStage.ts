@@ -21,6 +21,7 @@ import { PlayerController } from "./player";
 import { createPlayerBody } from "./playerBody";
 import { CartChapter } from "./chapters/cart";
 import { RoamChapter } from "./chapters/roam";
+import { ExecutionChapter } from "./chapters/execution";
 import { MusterChapter } from "./chapters/muster";
 
 type ChapterFactory = (ctx: ChapterContext) => Chapter;
@@ -29,6 +30,7 @@ type ChapterFactory = (ctx: ChapterContext) => Chapter;
 export const CHAPTERS: { id: SegmentId; make: ChapterFactory }[] = [
   { id: "cart", make: (c) => new CartChapter(c) },
   { id: "muster", make: (c) => new MusterChapter(c) },
+  { id: "execution", make: (c) => new ExecutionChapter(c) },
 ];
 const DEBUG = new URLSearchParams(location.search);
 if (DEBUG.has("debug") && DEBUG.has("roam")) CHAPTERS.splice(0, CHAPTERS.length, { id: "muster", make: (c) => new RoamChapter(c) });
@@ -193,9 +195,10 @@ export class PrologueStage implements Stage {
       for (let i = p.index; i < CHAPTERS.length; i++) {
         const ch = i === p.index ? p.chapter : CHAPTERS[i].make(this.ctx);
         if (i !== p.index) {
-          // chapters change behind a black screen; each chapter fades in when it is ready
-          await hud.fade(true, 1.0);
-          await ch.prepare(null);
+          // chapters change behind a black screen (unless one picks up mid-shot); each chapter
+          // fades in when it is ready
+          if (!ch.seamless) await hud.fade(true, 1.0);
+          await ch.prepare(null, true);
         }
         this.chapter = ch;
         this.segment = ch.id;

@@ -80,7 +80,8 @@ export class Game {
   private frameCount = 0;
   private frame() {
     const now = performance.now();
-    const dt = Math.min(0.1, (now - this.last) / 1000) * this.timeScale;
+    const real = Math.max(1e-4, (now - this.last) / 1000);
+    const dt = Math.min(0.1, real) * this.timeScale;
     this.last = now;
     input.poll(dt);
     const st = this.stage;
@@ -90,6 +91,8 @@ export class Game {
         st.update(dt);
         if (st.gameplay) this.playSeconds += dt;
       }
+      // skeletal animation runs on game time too (frozen while paused, follows the debug time scale)
+      st.scene.animationTimeScale = this.paused ? 0 : dt / real;
       st.scene.render();
     }
     input.endFrame();

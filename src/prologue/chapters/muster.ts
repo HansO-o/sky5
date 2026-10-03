@@ -228,9 +228,25 @@ export class MusterChapter implements Chapter {
 
   skip() {
     const { stage } = this.ctx;
+    const w = this.w;
     stage.appearance ??= { ...defaultAppearance(), name: "无名氏" };
     this.ctx.game.modal = false;
     document.getElementById("creator")?.remove();
+    // end state: prisoners wait before the platform, the captain beside them, the thief is gone
+    const square = { x: LAYOUT.platform.x, z: LAYOUT.platform.z };
+    (["leader", "brun", "p1", "p2"] as const).forEach((k, i) => {
+      const c = w.npcs.get(k);
+      if (c) stand(w, c, WAIT(i).x, WAIT(i).z, square);
+    });
+    if (!this.ragdolls.length) w.removeNpc("rowan");
+    const cap = w.npcs.get("captain");
+    if (cap) stand(w, cap, LAYOUT.square.x + 6, LAYOUT.square.z + 2, square);
+    const p = new Vector3(WAIT(4).x, w.heightAt(WAIT(4).x, WAIT(4).z) + 0.05, WAIT(4).z);
+    this.player.teleport(p, 0);
+    this.player.canMove = true;
+    this.player.enabled = true;
+    this.player.firstPerson = true;
+    w.rig.follow(this.player);
   }
 
   dispose() {

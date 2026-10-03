@@ -167,6 +167,13 @@ export class Character {
     return g;
   }
 
+  /** Length of a clip in seconds (at speed 1). */
+  clipLength(clip: string) {
+    const g = this.group(clip);
+    const fps = g.targetedAnimations[0]?.animation.framePerSecond ?? 60;
+    return (g.to - g.from) / fps;
+  }
+
   lookAt(p: Vector3 | null) {
     this.lookTarget = p;
   }

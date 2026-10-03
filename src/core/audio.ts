@@ -192,7 +192,7 @@ class AudioSystem {
   }
 
   /** Fire-and-forget sound, optionally positional. */
-  async playOneShot(id: string, volume = 1, pos?: { x: number; y: number; z: number }, bus: Bus = "sfx", rate = 1) {
+  async playOneShot(id: string, volume = 1, pos?: { x: number; y: number; z: number }, bus: Bus = "sfx", rate = 1, refDistance = 2) {
     if (!this.ctx) return;
     const buf = await this.load(id).catch(() => null);
     if (!buf || !this.ctx) return;
@@ -204,6 +204,8 @@ class AudioSystem {
     src.connect(g);
     if (pos) {
       const p = this.emitter(bus)!;
+      p.refDistance = refDistance;
+      p.maxDistance = Math.max(200, refDistance * 60);
       p.positionX.value = pos.x;
       p.positionY.value = pos.y;
       p.positionZ.value = pos.z;

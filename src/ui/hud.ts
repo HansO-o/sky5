@@ -45,6 +45,14 @@ export const hud = {
     f.classList.toggle("on", on);
     return new Promise<void>((r) => setTimeout(r, seconds * 1000));
   },
+  /** Brief white-out (a shockwave, a blow to the head). */
+  flash(strength = 0.8, seconds = 1.6) {
+    const f = document.createElement("div");
+    f.style.cssText = `position:fixed;inset:0;background:#fff;opacity:${strength};pointer-events:none;transition:opacity ${seconds}s ease-out;z-index:5`;
+    document.getElementById("ui")!.appendChild(f);
+    requestAnimationFrame(() => requestAnimationFrame(() => (f.style.opacity = "0")));
+    setTimeout(() => f.remove(), seconds * 1000 + 100);
+  },
   toast(text: string, ms = 4000) {
     const t = el("div", "toast");
     t.textContent = text;
