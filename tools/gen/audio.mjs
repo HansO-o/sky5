@@ -17,6 +17,26 @@ export const AUDIO = [
   { id: "audio/amb_forest", src: "fs_627064_13875907-hq.ogg", segment: "cart", priority: 93, kbps: 64, stereo: true, loop: 3 },
   { id: "audio/sfx_hooves", src: "fs_479790_2524442-hq.ogg", segment: "cart", priority: 93, kbps: 48, stereo: false, loop: 1.5 },
   { id: "audio/sfx_cart", src: "fs_538438_11519060-hq.ogg", segment: "cart", priority: 93, kbps: 48, stereo: false, loop: 1.5 },
+  // muster / execution
+  { id: "audio/sfx_bow", src: "fs_263675_4946670-hq.ogg", segment: "muster", priority: 70, kbps: 64, stereo: false },
+  { id: "audio/sfx_arrow", src: "fs_675821_2524442-hq.ogg", segment: "muster", priority: 70, kbps: 64, stereo: false, trim: [0, 1.4] },
+  { id: "audio/sfx_arrow_hit", src: "fs_464839_9159316-hq.ogg", segment: "muster", priority: 70, kbps: 64, stereo: false },
+  { id: "audio/music_tense", src: "km_Gathering_Darkness.mp3", segment: "execution", priority: 80, kbps: 80, stereo: true, fade: 3 },
+  // dragon attack
+  { id: "audio/roar_a", src: "fs_546391_6174371-hq.ogg", segment: "dragon", priority: 95, kbps: 80, stereo: false },
+  { id: "audio/roar_b", src: "fs_651817_12852018-hq.ogg", segment: "dragon", priority: 95, kbps: 80, stereo: false },
+  { id: "audio/roar_c", src: "fs_479380_9159316-hq.ogg", segment: "dragon", priority: 90, kbps: 80, stereo: false, trim: [0, 14] },
+  { id: "audio/wings", src: "fs_670509_621042-hq.ogg", segment: "dragon", priority: 92, kbps: 64, stereo: false },
+  { id: "audio/breath", src: "fs_867029_15638039-hq.ogg", segment: "dragon", priority: 92, kbps: 64, stereo: false, loop: 1 },
+  { id: "audio/fire_loop", src: "fs_564621_9250976-hq.ogg", segment: "dragon", priority: 90, kbps: 64, stereo: false, loop: 1 },
+  { id: "audio/burning", src: "fs_636178_4980667-hq.ogg", segment: "dragon", priority: 85, kbps: 64, stereo: true, trim: [10, 100], loop: 3 },
+  { id: "audio/collapse", src: "fs_487142_2524442-hq.ogg", segment: "dragon", priority: 88, kbps: 64, stereo: false },
+  { id: "audio/collapse_small", src: "fs_675900_2524442-hq.ogg", segment: "dragon", priority: 85, kbps: 64, stereo: false },
+  { id: "audio/rubble", src: "fs_569510_3248005-hq.ogg", segment: "dragon", priority: 85, kbps: 64, stereo: false },
+  { id: "audio/panic", src: "fs_435716_3140040-hq.ogg", segment: "dragon", priority: 84, kbps: 64, stereo: true, trim: [0, 70], loop: 3 },
+  { id: "audio/bell", src: "fs_770122_13973196-hq.ogg", segment: "execution", priority: 80, kbps: 64, stereo: false, trim: [0, 30] },
+  { id: "audio/wind", src: "fs_546871_4803028-hq.ogg", segment: "dragon", priority: 70, kbps: 48, stereo: true, loop: 3 },
+  { id: "audio/music_battle", src: "epic_boss_battle_loop.wav", segment: "dragon", priority: 93, kbps: 96, stereo: true },
 ];
 
 async function encode(srcFile, a, codec) {

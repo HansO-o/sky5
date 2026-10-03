@@ -208,6 +208,11 @@ export class Character {
     head.computeWorldMatrix(true);
   }
 
+  /** Skeleton bone (glTF joint node) by name. */
+  bone(name: string) {
+    return this.nodes.get(name);
+  }
+
   setEnabled(on: boolean) {
     this.root.setEnabled(on);
   }

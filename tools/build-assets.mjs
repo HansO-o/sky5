@@ -22,6 +22,7 @@ import { scatter, packScatter } from "./gen/scatter.mjs";
 import { buildAudio } from "./gen/audio.mjs";
 import { buildCharacters } from "./gen/characters.mjs";
 import { EXTRA_CREDITS } from "./credits-extra.mjs";
+import { buildDragon } from "./gen/dragon.mjs";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const SRC = path.join(ROOT, "assets-src");
@@ -322,6 +323,23 @@ for (const [id, o] of Object.entries(PH)) {
     await emit(`ph/${id}`, { segment: o.segment, priority: o.priority, type: "glb", ext: "glb", data: glb, pos: o.pos });
   });
 }
+
+// ------------------------------------------------------------------ dragon + effects
+await step("dragon/dragon", () => buildDragon({ emit, SRC }));
+await step("fx/", async () => {
+  const fx = path.join(SRC, "fx");
+  // sprite sheets / sprites with alpha; white masks are tinted at runtime
+  const list = [
+    ["fx/fire_sheet", "bab_Fire_SpriteSheet2_8x8.png", 1024],
+    ["fx/smoke_sheet", "bab_Smoke_SpriteSheet_8x8.png", 1024],
+    ["fx/flame", "flame_02.png", 256],
+    ["fx/smoke", "smoke_04.png", 256],
+    ["fx/spark", "spark_04.png", 128],
+    ["fx/scorch", "scorch_01.png", 512],
+  ];
+  for (const [id, file, size] of list)
+    await emit(id, { segment: "dragon", priority: 94, type: "ktx2", ext: "ktx2", data: await toKTX2(await fs.readFile(path.join(fx, file)), { preset: "colorHQ", maxSize: size }) });
+});
 
 // ------------------------------------------------------------------ characters + audio
 await step("chars/", () => buildCharacters({ emit, SRC }));

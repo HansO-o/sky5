@@ -81,6 +81,11 @@ export class Director {
     return Promise.all(ps);
   }
 
+  /** Allow new waits again after cancelAll (used when skipping a chapter). */
+  reset() {
+    this.cancelled = false;
+  }
+
   cancelAll() {
     this.cancelled = true;
     const ws = this.waits;

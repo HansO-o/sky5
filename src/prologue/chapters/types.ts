@@ -22,6 +22,8 @@ export interface Chapter {
   run(resume: Record<string, unknown> | null): Promise<void>;
   update?(dt: number): void;
   save(): Record<string, unknown>;
+  /** Jump to the chapter's end state (the player chose to skip it). */
+  skip?(): void;
   /** Remove content only this chapter needs. */
   dispose(): void;
 }

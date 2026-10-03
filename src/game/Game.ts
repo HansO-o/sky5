@@ -159,6 +159,12 @@ export class Game {
     p.innerHTML = `<h2>暂停</h2>`;
     const items: [string, () => void][] = [
       ["继续", () => this.pause(false)],
+      ...((this.stage as unknown as { canSkip?: boolean }).canSkip
+        ? ([["跳过本章", () => {
+            this.pause(false);
+            void (this.stage as unknown as { skipChapter: () => Promise<void> }).skipChapter();
+          }]] as [string, () => void][])
+        : []),
       ["存档", () => void this.save("manual").then(() => hud.toast("已存档"))],
       ["读取", () => void openLoad((s) => this.loadSave(s), () => {})],
       ["设置", () => openSettings()],

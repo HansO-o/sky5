@@ -4,6 +4,7 @@ import { Document, NodeIO } from "@gltf-transform/core";
 import { ALL_EXTENSIONS, KHRTextureBasisu, KHRMaterialsEmissiveStrength } from "@gltf-transform/extensions";
 import { dedup, prune, weld, meshopt, simplify, resample, flatten, join, instance, compactPrimitive } from "@gltf-transform/functions";
 import { MeshoptDecoder, MeshoptEncoder, MeshoptSimplifier } from "meshoptimizer";
+import draco3d from "draco3dgltf";
 import { toKTX2 } from "./ktx.mjs";
 
 await MeshoptDecoder.ready;
@@ -12,7 +13,7 @@ await MeshoptSimplifier.ready;
 
 export const io = new NodeIO()
   .registerExtensions(ALL_EXTENSIONS)
-  .registerDependencies({ "meshopt.decoder": MeshoptDecoder, "meshopt.encoder": MeshoptEncoder });
+  .registerDependencies({ "meshopt.decoder": MeshoptDecoder, "meshopt.encoder": MeshoptEncoder, "draco3d.decoder": await draco3d.createDecoderModule() });
 
 export { Document, MeshoptSimplifier };
 

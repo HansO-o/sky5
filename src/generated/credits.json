@@ -422,6 +422,7 @@
    "authors": [
     "Quaternius"
    ],
+   "note": "完整片段集经 Cinevva 托管",
    "source": "https://quaternius.com/packs/universalanimationlibrary.html",
    "license": "CC0 1.0",
    "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
@@ -490,6 +491,237 @@
     "bruno.auzet"
    ],
    "source": "https://freesound.org/s/538438/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "dragon",
+   "kind": "model",
+   "name": "European Dragon",
+   "authors": [
+    "Nonexistent 101"
+   ],
+   "source": "https://sketchfab.com/3d-models/european-dragon-82f393a2e6c048ad80c171ce3b3a7b87",
+   "license": "CC BY 4.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by/4.0/"
+  },
+  {
+   "id": "kenney-particles",
+   "kind": "texture",
+   "name": "Particle Pack",
+   "authors": [
+    "Kenney"
+   ],
+   "source": "https://kenney.nl/assets/particle-pack",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "bab-sprites",
+   "kind": "texture",
+   "name": "Fire & smoke sprite sheets (Babylon.js Assets)",
+   "authors": [
+    "Babylon.js contributors"
+   ],
+   "source": "https://github.com/BabylonJS/Assets",
+   "license": "CC BY 4.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by/4.0/"
+  },
+  {
+   "id": "music-battle",
+   "kind": "music",
+   "name": "Epic Boss Battle [Seamlessly Looping]",
+   "authors": [
+    "Juhani Junkala"
+   ],
+   "source": "https://opengameart.org/content/boss-battle-theme",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "music-gathering",
+   "kind": "music",
+   "name": "Gathering Darkness",
+   "authors": [
+    "Kevin MacLeod (incompetech.com)"
+   ],
+   "source": "https://incompetech.com",
+   "license": "CC BY 4.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by/4.0/"
+  },
+  {
+   "id": "fs-546391",
+   "kind": "sound",
+   "name": "dragon roar",
+   "authors": [
+    "Dreeme"
+   ],
+   "source": "https://freesound.org/s/546391/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-651817",
+   "kind": "sound",
+   "name": "roar",
+   "authors": [
+    "AMWD_Mortsel-Edegem-Kontich"
+   ],
+   "source": "https://freesound.org/s/651817/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-479380",
+   "kind": "sound",
+   "name": "monster roars",
+   "authors": [
+    "Breviceps"
+   ],
+   "source": "https://freesound.org/s/479380/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-670509",
+   "kind": "sound",
+   "name": "huge wing flaps",
+   "authors": [
+    "2create"
+   ],
+   "source": "https://freesound.org/s/670509/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-867029",
+   "kind": "sound",
+   "name": "flamethrower",
+   "authors": [
+    "raphavpires"
+   ],
+   "source": "https://freesound.org/s/867029/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-564621",
+   "kind": "sound",
+   "name": "fire crackling loop",
+   "authors": [
+    "Nox_Sound"
+   ],
+   "source": "https://freesound.org/s/564621/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-636178",
+   "kind": "sound",
+   "name": "fire: crackling, spitting, roaring",
+   "authors": [
+    "jamesdrake89"
+   ],
+   "source": "https://freesound.org/s/636178/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-487142",
+   "kind": "sound",
+   "name": "wood building collapse",
+   "authors": [
+    "craigsmith"
+   ],
+   "source": "https://freesound.org/s/487142/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-675900",
+   "kind": "sound",
+   "name": "wooden collapse",
+   "authors": [
+    "craigsmith"
+   ],
+   "source": "https://freesound.org/s/675900/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-569510",
+   "kind": "sound",
+   "name": "stone rubble",
+   "authors": [
+    "Sheyvan"
+   ],
+   "source": "https://freesound.org/s/569510/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-263675",
+   "kind": "sound",
+   "name": "bow release",
+   "authors": [
+    "PorkMuncher"
+   ],
+   "source": "https://freesound.org/s/263675/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-675821",
+   "kind": "sound",
+   "name": "arrows whoosh by",
+   "authors": [
+    "craigsmith"
+   ],
+   "source": "https://freesound.org/s/675821/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-464839",
+   "kind": "sound",
+   "name": "stab / pierce",
+   "authors": [
+    "Breviceps"
+   ],
+   "source": "https://freesound.org/s/464839/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-435716",
+   "kind": "sound",
+   "name": "crowd panic",
+   "authors": [
+    "belthazarus"
+   ],
+   "source": "https://freesound.org/s/435716/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-770122",
+   "kind": "sound",
+   "name": "bells – tocsin",
+   "authors": [
+    "Vrymaa"
+   ],
+   "source": "https://freesound.org/s/770122/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-546871",
+   "kind": "sound",
+   "name": "winter wind howl",
+   "authors": [
+    "Takkyi"
+   ],
+   "source": "https://freesound.org/s/546871/",
    "license": "CC0 1.0",
    "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
   },

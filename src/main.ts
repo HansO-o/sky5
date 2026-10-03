@@ -151,6 +151,9 @@ function preloadPrologue() {
 
 /** Saves from M1 stored the ride state directly. */
 function toPrologueSave(save: SaveGame | null): PrologueSaveT {
+  // debug: start a new game at any chapter (?debug&chapter=muster)
+  const q = new URLSearchParams(location.search);
+  if (!save && q.has("debug") && q.get("chapter")) return { chapter: q.get("chapter") as PrologueSaveT["chapter"], state: null };
   if (!save) return { chapter: "cart", state: null };
   const st = save.state as Record<string, unknown>;
   if (st && typeof st.chapter === "string") return st as unknown as PrologueSaveT;

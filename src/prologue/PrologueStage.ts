@@ -144,6 +144,17 @@ export class PrologueStage implements Stage {
   }
   breachBody: ReturnType<Physics["addStaticMesh"]> | null = null;
 
+  private skipResolve: (() => void) | null = null;
+  /** Skip the rest of the current chapter (pause menu / hold-to-skip). */
+  async skipChapter() {
+    if (!this.skipResolve || !this.chapter) return;
+    await hud.fade(true, 0.5);
+    this.skipResolve?.();
+  }
+  get canSkip() {
+    return !!this.skipResolve;
+  }
+
   /** Called by Game.setStage when this stage becomes active. */
   begin() {
     void this.play();
@@ -161,7 +172,20 @@ export class PrologueStage implements Stage {
         assets.setSegment(ch.id);
         // checkpoint at the start of every chapter (the ride saves its own progress on new game)
         if (i !== p.index) await this.game.save("auto");
-        await ch.run(i === p.index ? p.resume : null);
+        const run = ch.run(i === p.index ? p.resume : null);
+        run.catch((e) => !(e instanceof Cancelled) && console.error(e));
+        const skipped = new Promise<"skip">((r) => (this.skipResolve = () => r("skip")));
+        const how = await Promise.race([run.then(() => "done" as const), skipped]);
+        this.skipResolve = null;
+        if (how === "skip") {
+          // stop the chapter's scripts, then put the world into the chapter's end state
+          this.director.cancelAll();
+          this.director.reset();
+          hud.clearSubtitle();
+          hud.prompt(null);
+          ch.skip?.();
+          await hud.fade(false, 0.6);
+        }
         ch.dispose();
       }
       this.chapter = null;

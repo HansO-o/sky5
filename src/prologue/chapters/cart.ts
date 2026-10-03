@@ -32,6 +32,7 @@ export class CartChapter implements Chapter {
   private done: (() => void) | null = null;
   private stopAudio: (() => void)[] = [];
   private disposed = false;
+  private skipHold = 0;
 
   constructor(private ctx: ChapterContext) {}
 
@@ -172,7 +173,19 @@ export class CartChapter implements Chapter {
     this.speed += (target - this.speed) * Math.min(1, dt * 0.6);
     this.s = Math.min(this.world.route.length - 1.2, this.s + this.speed * dt);
     this.placeConvoy(dt);
-    hud.prompt(!input.locked && !input.usingPad && this.time > 4 && this.time < 60 ? "点击画面以环顾四周" : null);
+    // hold Space (A on a pad) to skip the ride
+    this.skipHold = input.down("jump") ? this.skipHold + dt : 0;
+    if (this.skipHold > 1.2) {
+      this.skipHold = 0;
+      void stage.skipChapter();
+    }
+    hud.prompt(
+      this.skipHold > 0.15
+        ? `继续按住以跳过乘车… ${Math.round((this.skipHold / 1.2) * 100)}%`
+        : !input.locked && !input.usingPad && this.time > 4 && this.time < 60
+          ? "点击画面以环顾四周 · 按住空格跳过"
+          : null,
+    );
     this.updateDialogue(remaining);
     if (remaining < 3 && this.lineIdx >= SCRIPT.length && this.time > this.lineEnd + 2) {
       hud.prompt(null);
@@ -221,6 +234,16 @@ export class CartChapter implements Chapter {
 
   save() {
     return { s: this.s, line: this.lineIdx, time: this.time };
+  }
+
+  skip() {
+    // wagons parked inside the gate; the town must exist for the next chapter
+    void this.ctx.stage.ensureTown();
+    this.s = this.world.route.length - 1.2;
+    this.speed = 0;
+    this.lineIdx = SCRIPT.length;
+    this.placeConvoy(0);
+    this.world.updateSets(true);
   }
 
   dispose() {
