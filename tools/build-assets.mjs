@@ -17,6 +17,7 @@ import { buildTerrainChunks } from "./gen/terrain.mjs";
 import { buildFirTextures, buildFirMesh, buildImpostor } from "./gen/fir.mjs";
 import { buildCart, SEATS, CART } from "./gen/cart.mjs";
 import { buildHouse, HOUSE_VARIANTS } from "./gen/houses.mjs";
+import { buildTower, buildInn, buildKeep, buildPlatform } from "./gen/townbuildings.mjs";
 import { scatter, packScatter } from "./gen/scatter.mjs";
 import { buildAudio } from "./gen/audio.mjs";
 import { buildCharacters } from "./gen/characters.mjs";
@@ -260,6 +261,37 @@ await step("cart/houses", async () => {
   await emit("cart/houses", { segment: "muster", priority: 90, type: "glb", ext: "glb", data: await finalize(doc), pos: [60, -560] });
 });
 
+await step("town/buildings", async () => {
+  const doc = new Document();
+  doc.createBuffer();
+  const scene = doc.createScene("buildings");
+  const mat = async (name, dir, size = 1024, extra = {}) => pbr(doc, name, { ...(await texSet(doc, name, dir, size)), ...extra });
+  const towerStone = await mat("tower_stone", "rough_block_wall");
+  const keepStone = await mat("keep_stone", "castle_wall_slates");
+  const floor = await mat("floor_planks", "old_planks_02");
+  const timber = await mat("inn_timber", "medieval_wood");
+  const thatch = await mat("inn_thatch", "thatch_roof_angled");
+  const footing = await mat("inn_footing", "plastered_stone_wall");
+  const dark = await mat("dark_wood", "rough_wood", 512);
+  const deck = await mat("deck_planks", "weathered_brown_planks", 1024);
+  const node = (name, parts) => {
+    const mesh = doc.createMesh(name);
+    for (const [mb, m] of parts) if (mb.i.length) mesh.addPrimitive(makePrimitive(doc, mb.toGeometry(), m));
+    scene.addChild(doc.createNode(name).setMesh(mesh));
+  };
+  const t = buildTower();
+  node("tower", [[t.stone, towerStone], [t.wood, floor]]);
+  node("tower_breach", [[t.breach, towerStone]]);
+  const i = buildInn();
+  node("inn", [[i.timber, timber], [i.stone, footing], [i.wood, floor], [i.thatch, thatch], [i.dark, dark]]);
+  const k = buildKeep();
+  node("keep", [[k.stone, keepStone], [k.dark, dark]]);
+  const p = buildPlatform();
+  node("platform", [[p.wood, deck], [p.dark, dark]]);
+  node("block", [[p.block, dark]]);
+  await emit("town/buildings", { segment: "muster", priority: 96, type: "glb", ext: "glb", data: await finalize(doc), pos: [70, -590] });
+});
+
 // ------------------------------------------------------------------ Poly Haven models
 const PH = {
   boulder_01: { ratio: 0.06, permissive: true, tex: 1024, segment: "cart", priority: 80 },
@@ -278,6 +310,8 @@ const PH = {
   wooden_bucket_01: { ratio: 1, tex: 512, segment: "muster", priority: 55, pos: [60, -540] },
   kite_shield: { ratio: 0.5, tex: 512, segment: "cart", priority: 72 },
   wicker_basket_01: { ratio: 0.3, tex: 512, segment: "muster", priority: 55, pos: [60, -540] },
+  wooden_axe_03: { ratio: 0.5, tex: 512, segment: "muster", priority: 80, pos: [60, -590] },
+  wooden_bucket_02: { ratio: 0.6, tex: 512, segment: "muster", priority: 50, pos: [60, -590] },
 };
 for (const [id, o] of Object.entries(PH)) {
   await step(`ph/${id}`, async () => {
@@ -332,7 +366,7 @@ console.log("manifest version", manifest.version);
 // credits page data (only assets that actually ship)
 const phIds = new Set(Object.keys(PH));
 for (const k of Object.keys(TERRAIN_LAYERS)) phIds.add(TERRAIN_LAYERS[k]);
-["pine_bark", "weathered_brown_planks", "rusty_metal_02", "plastered_stone_wall", "medieval_wood", "thatch_roof_angled", "fir_tree_01", "kloofendal_overcast_puresky"].forEach((x) => phIds.add(x));
+["pine_bark", "weathered_brown_planks", "rusty_metal_02", "plastered_stone_wall", "medieval_wood", "thatch_roof_angled", "fir_tree_01", "kloofendal_overcast_puresky", "rough_block_wall", "castle_wall_slates", "old_planks_02", "rough_wood"].forEach((x) => phIds.add(x));
 const ph = JSON.parse(await fs.readFile(path.join(SRC, "credits-polyhaven.json"), "utf8")).filter((c) => phIds.has(c.id));
 await fs.mkdir(path.join(ROOT, "src/generated"), { recursive: true });
 await fs.writeFile(path.join(ROOT, "src/generated/credits.json"), JSON.stringify({ polyhaven: ph, extra: EXTRA_CREDITS }, null, 1));

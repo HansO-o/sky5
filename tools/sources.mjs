@@ -18,7 +18,7 @@ export const PH_TEXTURES = {
   rusty_metal_02: { res: "1k", maps: ["Diffuse", "nor_gl", "arm"] },
   hessian_230: { res: "1k", maps: ["Diffuse", "nor_gl"] },
   brown_leather: { res: "1k", maps: ["Diffuse", "nor_gl"] },
-  castle_brick_07: { res: "1k", maps: ["Diffuse", "nor_gl", "arm"] },
+  rough_block_wall: { res: "1k", maps: ["Diffuse", "nor_gl", "arm"] },
   castle_wall_slates: { res: "1k", maps: ["Diffuse", "nor_gl", "arm"] },
   old_planks_02: { res: "1k", maps: ["Diffuse", "nor_gl", "arm"] },
   rough_wood: { res: "1k", maps: ["Diffuse", "nor_gl", "arm"] },

@@ -12,6 +12,17 @@
    "licenseUrl": "https://polyhaven.com/license"
   },
   {
+   "id": "castle_wall_slates",
+   "kind": "texture",
+   "name": "Castle Wall Slates",
+   "authors": [
+    "Rob Tuytel"
+   ],
+   "source": "https://polyhaven.com/a/castle_wall_slates",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
    "id": "dead_tree_trunk",
    "kind": "model",
    "name": "Dead Tree Trunk",
@@ -137,6 +148,17 @@
    "licenseUrl": "https://polyhaven.com/license"
   },
   {
+   "id": "old_planks_02",
+   "kind": "texture",
+   "name": "Old Planks 02",
+   "authors": [
+    "Rob Tuytel"
+   ],
+   "source": "https://polyhaven.com/a/old_planks_02",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
    "id": "pine_bark",
    "kind": "texture",
    "name": "Pine Bark",
@@ -214,6 +236,28 @@
    "licenseUrl": "https://polyhaven.com/license"
   },
   {
+   "id": "rough_block_wall",
+   "kind": "texture",
+   "name": "Rough Block Wall",
+   "authors": [
+    "Rob Tuytel"
+   ],
+   "source": "https://polyhaven.com/a/rough_block_wall",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
+   "id": "rough_wood",
+   "kind": "texture",
+   "name": "Rough Wood",
+   "authors": [
+    "Rob Tuytel"
+   ],
+   "source": "https://polyhaven.com/a/rough_wood",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
    "id": "rusty_metal_02",
    "kind": "texture",
    "name": "Rusty Metal 02",
@@ -282,6 +326,17 @@
    "licenseUrl": "https://polyhaven.com/license"
   },
   {
+   "id": "wooden_axe_03",
+   "kind": "model",
+   "name": "Wooden Axe 03",
+   "authors": [
+    "Ulan Cabanilla"
+   ],
+   "source": "https://polyhaven.com/a/wooden_axe_03",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
    "id": "wooden_barrels_01",
    "kind": "model",
    "name": "Wooden Barrels 01",
@@ -300,6 +355,17 @@
     "James Ray Cock"
    ],
    "source": "https://polyhaven.com/a/wooden_bucket_01",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
+   "id": "wooden_bucket_02",
+   "kind": "model",
+   "name": "Wooden Bucket 02",
+   "authors": [
+    "James Ray Cock"
+   ],
+   "source": "https://polyhaven.com/a/wooden_bucket_02",
    "license": "CC0 1.0",
    "licenseUrl": "https://polyhaven.com/license"
   },

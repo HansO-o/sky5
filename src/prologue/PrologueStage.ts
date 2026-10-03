@@ -6,17 +6,25 @@ import { audio } from "../core/audio";
 import { input } from "../core/input";
 import { settings, type Quality } from "../core/settings";
 import { hud } from "../ui/hud";
-import { buildTown } from "../world/town";
+import { buildTown, LAYOUT, type Town } from "../world/town";
+import { Physics } from "../physics/Physics";
+import { VertexBuffer } from "@babylonjs/core/Buffers/buffer";
+import { Vector3 } from "@babylonjs/core/Maths/math.vector";
+import type { AbstractMesh } from "@babylonjs/core/Meshes/abstractMesh";
+import { nextFrame } from "../game/loaders";
 import { Cancelled, Director } from "./Director";
 import { World } from "./World";
 import type { Wagon } from "./wagon";
 import type { Chapter, ChapterContext } from "./chapters/types";
 import { CartChapter } from "./chapters/cart";
+import { RoamChapter } from "./chapters/roam";
 
 type ChapterFactory = (ctx: ChapterContext) => Chapter;
 
 /** Chapters in play order. Later milestones append to this list. */
 export const CHAPTERS: { id: SegmentId; make: ChapterFactory }[] = [{ id: "cart", make: (c) => new CartChapter(c) }];
+const DEBUG = new URLSearchParams(location.search);
+if (DEBUG.has("debug") && DEBUG.has("roam")) CHAPTERS.splice(0, CHAPTERS.length, { id: "muster", make: (c) => new RoamChapter(c) });
 
 export interface PrologueSave {
   chapter: SegmentId;
@@ -35,7 +43,10 @@ export class PrologueStage implements Stage {
   chapter: Chapter | null = null;
   wagons: Wagon[] = [];
   townReady = false;
+  town: Town | null = null;
+  physics: Physics | null = null;
   private townP: Promise<void> | null = null;
+  private physicsP: Promise<Physics> | null = null;
   private prepared: { index: number; chapter: Chapter; resume: Record<string, unknown> | null } | null = null;
   private ctx: ChapterContext;
   private paused = false;
@@ -54,7 +65,7 @@ export class PrologueStage implements Stage {
     const lap = (what: string) => console.info(`[timing] world ${what} +${(performance.now() - T0).toFixed(0)} ms`);
     await this.world.init(lap);
     // most players start a new game: get the first chapter ready behind the menu
-    await this.prepareChapter({ chapter: "cart", state: null });
+    await this.prepareChapter({ chapter: CHAPTERS[0].id, state: null });
     lap("chapter prepared");
     this.applyQuality(settings.value.quality);
     await this.scene.whenReadyAsync();
@@ -78,9 +89,11 @@ export class PrologueStage implements Stage {
   ensureTown() {
     this.townP ??= (async () => {
       const t0 = performance.now();
-      const [fort, houses] = await Promise.all([loadGLB("ph/modular_fort_01", this.scene), loadGLB("cart/houses", this.scene).catch(() => null)]);
+      const opt = (id: string) => loadGLB(id, this.scene).catch((e) => (console.warn(id, e), null));
+      const [fort, houses, buildings, door] = await Promise.all([loadGLB("ph/modular_fort_01", this.scene), opt("cart/houses"), opt("town/buildings"), opt("ph/large_castle_door")]);
       if (this.world.disposed) return;
-      const town = await buildTown(this.scene, fort, houses, (x, z) => this.world.heightAt(x, z));
+      const town = await buildTown(this.scene, { fort, houses, buildings, door }, (x, z) => this.world.heightAt(x, z));
+      this.town = town;
       this.world.addShadowCasters(town.meshes);
       console.info(`[timing] town built +${(performance.now() - t0).toFixed(0)} ms`);
       this.townReady = true;
@@ -90,6 +103,46 @@ export class PrologueStage implements Stage {
     });
     return this.townP;
   }
+
+  /** Jolt world with the town's static colliders (lazy: only chapters on foot need it). */
+  ensurePhysics() {
+    this.physicsP ??= (async () => {
+      const [ph] = await Promise.all([Physics.create(), this.ensureTown()]);
+      if (this.world.disposed) {
+        ph.dispose();
+        throw new Error("disposed");
+      }
+      const w = this.world;
+      // terrain around the town (512 m square, ~2 m spacing)
+      const size = 512;
+      ph.addHeightField(LAYOUT.square.x - size / 2, LAYOUT.square.z - size / 2, size, 256, (x, z) => w.heightAt(x, z));
+      await nextFrame();
+      if (this.town) {
+        // one static mesh body per building, built over several frames
+        const groups = new Map<unknown, AbstractMesh[]>();
+        for (const m of this.town.colliders) {
+          let top: unknown = m;
+          while ((top as AbstractMesh).parent && (top as AbstractMesh).parent !== this.town.root) top = (top as AbstractMesh).parent;
+          if (!groups.has(top)) groups.set(top, []);
+          groups.get(top)!.push(m);
+        }
+        for (const list of groups.values()) {
+          const pos: number[] = [], idx: number[] = [];
+          for (const m of list) appendWorldGeometry(m, pos, idx);
+          if (idx.length) ph.addStaticMesh(pos, idx);
+          await nextFrame();
+        }
+        const b: number[] = [], bi: number[] = [];
+        for (const m of this.town.breach.meshes) appendWorldGeometry(m, b, bi);
+        if (bi.length) this.breachBody = ph.addStaticMesh(b, bi);
+      }
+      this.physics = ph;
+      this.world.physics = ph;
+      return ph;
+    })();
+    return this.physicsP;
+  }
+  breachBody: ReturnType<Physics["addStaticMesh"]> | null = null;
 
   /** Called by Game.setStage when this stage becomes active. */
   begin() {
@@ -165,8 +218,27 @@ export class PrologueStage implements Stage {
     for (const w of this.wagons) w.dispose();
     audio.stopAllBeds(1);
     this.world.dispose();
+    this.physics?.dispose();
     hud.clearSubtitle();
     hud.loading(false);
     hud.prompt(null);
   }
+}
+
+/** Append a mesh's triangles in world space (for static colliders). */
+function appendWorldGeometry(m: AbstractMesh, pos: number[], idx: number[]) {
+  const p = m.getVerticesData(VertexBuffer.PositionKind);
+  const ind = m.getIndices();
+  if (!p || !ind) return;
+  m.computeWorldMatrix(true);
+  const W = m.getWorldMatrix();
+  const base = pos.length / 3;
+  const v = new Vector3();
+  for (let i = 0; i < p.length; i += 3) {
+    Vector3.TransformCoordinatesFromFloatsToRef(p[i], p[i + 1], p[i + 2], W, v);
+    pos.push(v.x, v.y, v.z);
+  }
+  // a mirrored transform (negative scale) flips winding; Jolt mesh shapes are double-sided for
+  // the character anyway, so winding does not matter here
+  for (let i = 0; i < ind.length; i++) idx.push(base + ind[i]);
 }

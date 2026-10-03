@@ -9,10 +9,47 @@ import { instantiateSubset, nextFrame } from "../game/loaders";
 /** Gate position, town plateau height and wall line (must match tools/gen/world.mjs). */
 export const GATE = { x: 60, z: -500, y: 38 };
 
+/**
+ * Layout of 雾门镇 (world coordinates). Story beats reference these anchors.
+ * Dimensions of the procedural buildings are in tools/gen/townbuildings.mjs.
+ */
+export const LAYOUT = {
+  /** where the wagons stop, just inside the gate */
+  unload: { x: 60, z: -528 },
+  square: { x: 60, z: -592 },
+  platform: { x: 60, z: -604, yaw: 0 },
+  tower: { x: 90, z: -584, yaw: 0, w: 7, floor2: 6.4 },
+  inn: { x: 101, z: -584, yaw: 0, w: 10, d: 8, floor: 3.4 },
+  keep: { x: 60, z: -662, yaw: 0, d: 18 },
+  /** street the player escapes along after leaving the inn */
+  escape: [
+    { x: 103, z: -570 },
+    { x: 84, z: -566 },
+    { x: 68, z: -574 },
+    { x: 62, z: -610 },
+    { x: 60, z: -636 },
+    { x: 60, z: -650 },
+  ],
+};
+
+/** House placements: [variant, x, z, yaw]. Doors face the street. */
+const HOUSES: [number, number, number, number][] = [
+  [0, 42, -526, Math.PI / 2],
+  [1, 78, -522, -Math.PI / 2],
+  [2, 40, -552, Math.PI / 2],
+  [3, 79, -546, -Math.PI / 2],
+  [1, 36, -588, Math.PI / 2],
+  [0, 34, -615, Math.PI / 2],
+  [2, 84, -622, -Math.PI / 2],
+  [0, 100, -556, Math.PI],
+  [1, 86, -553, Math.PI],
+  [3, 36, -640, Math.PI / 2],
+];
+
 const KIT_PART = /^modular_fort_01_/;
 
-function piece(container: AssetContainer, name: string, scene: Scene) {
-  const inst = instantiateSubset(container, (n) => n === name, (n) => KIT_PART.test(n));
+function piece(container: AssetContainer, name: string, scene: Scene, isPart: (n: string) => boolean) {
+  const inst = instantiateSubset(container, (n) => n === name, isPart);
   const holder = new TransformNode(`town_${name}`, scene);
   holder.rotationQuaternion = Quaternion.Identity();
   const keep: AbstractMesh[] = [];
@@ -20,7 +57,7 @@ function piece(container: AssetContainer, name: string, scene: Scene) {
     r.parent = holder;
     keep.push(...(r as TransformNode).getChildMeshes(false));
     const target = (r as TransformNode).getDescendants(false, (n: Node) => n.name === name)[0] as TransformNode | undefined;
-    // move the kit piece to the holder origin (pieces are laid out side by side in the source file)
+    // move the piece to the holder origin (kit pieces are laid out side by side in the source file)
     if (target) {
       target.computeWorldMatrix(true);
       const c = target.getAbsolutePosition();
@@ -38,83 +75,138 @@ function piece(container: AssetContainer, name: string, scene: Scene) {
   return { holder, meshes: keep, min, max };
 }
 
+export interface Town {
+  root: TransformNode;
+  meshes: AbstractMesh[];
+  /** static collision geometry (everything solid except the breach wall) */
+  colliders: AbstractMesh[];
+  tower: TransformNode;
+  breach: { node: TransformNode; meshes: AbstractMesh[] };
+  inn: TransformNode;
+  keep: TransformNode;
+  platform: TransformNode;
+  block: TransformNode;
+  houses: { node: TransformNode; variant: number }[];
+  keepDoors: TransformNode[];
+  heightAt: (x: number, z: number) => number;
+}
+
 /**
- * Lays out the border town seen at the end of the ride: a stone curtain wall across the valley with
- * the gate on the road, round towers, and timber houses behind it.
+ * Builds 雾门镇: the curtain wall and gate seen at the end of the ride, the story buildings (watch
+ * tower, inn, keep, execution platform) and timber houses. Work is spread over frames, and nothing
+ * becomes visible until its shaders are compiled.
  */
-export async function buildTown(scene: Scene, fort: AssetContainer, houses: AssetContainer | null, heightAt: (x: number, z: number) => number) {
+export async function buildTown(
+  scene: Scene,
+  c: { fort: AssetContainer; houses: AssetContainer | null; buildings: AssetContainer | null; door: AssetContainer | null },
+  heightAt: (x: number, z: number) => number,
+): Promise<Town> {
   const meshes: AbstractMesh[] = [];
+  const colliders: AbstractMesh[] = [];
   const root = new TransformNode("town", scene);
-  const slow = (what: string, t: number) => {
-    const d = performance.now() - t;
-    if (d > 16) console.info(`[timing] town ${what} blocked ${d.toFixed(0)} ms`);
-  };
-  const place = (name: string, x: number, z: number, yaw: number, y?: number) => {
-    const t = performance.now();
-    const p = piece(fort, name, scene);
-    slow(`piece ${name}`, t);
+  const place = (container: AssetContainer, name: string, isPart: (n: string) => boolean, x: number, z: number, yaw: number, y?: number, solid = true) => {
+    const p = piece(container, name, scene, isPart);
     p.holder.parent = root;
     p.holder.position.set(x, y ?? heightAt(x, z) - 0.3, z);
     Quaternion.RotationYawPitchRollToRef(yaw, 0, 0, p.holder.rotationQuaternion!);
     meshes.push(...p.meshes);
+    if (solid) colliders.push(...p.meshes);
     for (const m of p.meshes) m.setEnabled(false);
     return p;
   };
-  // gate first, to learn the kit's wall orientation and segment length
-  const probe = piece(fort, "modular_fort_01_wall_thin_straight_01", scene);
+  const kit = (n: string) => KIT_PART.test(n);
+
+  // ---- curtain wall across the valley with the gate on the road
+  const probe = piece(c.fort, "modular_fort_01_wall_thin_straight_01", scene, kit);
   const ext = probe.max.subtract(probe.min);
   probe.holder.dispose(false, false);
-  // wall runs along the axis with the larger horizontal extent
   const alongX = ext.x >= ext.z;
   const segLen = Math.max(ext.x, ext.z);
   const baseYaw = alongX ? 0 : Math.PI / 2;
-  place("modular_fort_01_wall_thin_gate_01", GATE.x, GATE.z, baseYaw, GATE.y - 0.3);
-  const gateProbe = piece(fort, "modular_fort_01_wall_thin_gate_01", scene);
-  const gExt = gateProbe.max.subtract(gateProbe.min);
-  gateProbe.holder.dispose(false, false);
+  const gate = place(c.fort, "modular_fort_01_wall_thin_gate_01", kit, GATE.x, GATE.z, baseYaw, GATE.y - 0.3);
+  const gExt = gate.max.subtract(gate.min);
   const gateLen = Math.max(gExt.x, gExt.z);
   for (const side of [-1, 1]) {
     let x = GATE.x + side * (gateLen / 2 + segLen / 2);
     for (let i = 0; i < 6; i++) {
-      place(i % 3 === 2 ? "modular_fort_01_wall_thin_straight_02" : "modular_fort_01_wall_thin_straight_01", x, GATE.z, baseYaw);
+      place(c.fort, i % 3 === 2 ? "modular_fort_01_wall_thin_straight_02" : "modular_fort_01_wall_thin_straight_01", kit, x, GATE.z, baseYaw);
       x += side * segLen;
       await nextFrame();
     }
-    place("modular_fort_01_tower_round", GATE.x + side * (gateLen / 2 + segLen * 2.5), GATE.z - 2, 0);
-    place("modular_fort_01_tower_round", x, GATE.z - 2, 0);
+    place(c.fort, "modular_fort_01_tower_round", kit, GATE.x + side * (gateLen / 2 + segLen * 2.5), GATE.z - 2, 0);
+    place(c.fort, "modular_fort_01_tower_round", kit, x, GATE.z - 2, 0);
   }
-  // houses inside the walls along the street
-  if (houses) {
-    const layout: [number, number, number, number][] = [
-      // variant, x, z, yaw
-      [0, GATE.x - 16, GATE.z - 30, Math.PI / 2],
-      [1, GATE.x + 15, GATE.z - 26, -Math.PI / 2],
-      [2, GATE.x - 18, GATE.z - 52, Math.PI / 2],
-      [3, GATE.x + 14, GATE.z - 48, -Math.PI / 2],
-      [1, GATE.x - 30, GATE.z - 70, Math.PI / 2.3],
-      [0, GATE.x + 20, GATE.z - 74, -Math.PI / 2],
-      [2, GATE.x - 5, GATE.z - 95, 0],
-      [3, GATE.x + 34, GATE.z - 40, -Math.PI / 1.8],
-    ];
-    for (const [v, x, z, yaw] of layout) {
-      const inst = instantiateSubset(houses, (n) => n === `house_${v}`, (n) => /^house_\d$/.test(n));
+
+  // ---- story buildings
+  const story = (n: string) => ["tower", "tower_breach", "inn", "keep", "platform", "block"].includes(n);
+  const L = LAYOUT;
+  let tower = root, inn = root, keep = root, platform = root, block = root;
+  let breach: Town["breach"] = { node: root, meshes: [] };
+  if (c.buildings) {
+    const ty = heightAt(L.tower.x, L.tower.z);
+    tower = place(c.buildings, "tower", story, L.tower.x, L.tower.z, L.tower.yaw, ty).holder;
+    const b = place(c.buildings, "tower_breach", story, L.tower.x, L.tower.z, L.tower.yaw, ty, false);
+    breach = { node: b.holder, meshes: b.meshes };
+    await nextFrame();
+    inn = place(c.buildings, "inn", story, L.inn.x, L.inn.z, L.inn.yaw, heightAt(L.inn.x, L.inn.z)).holder;
+    keep = place(c.buildings, "keep", story, L.keep.x, L.keep.z, L.keep.yaw, heightAt(L.keep.x, L.keep.z) - 0.2).holder;
+    await nextFrame();
+    const py = heightAt(L.platform.x, L.platform.z);
+    platform = place(c.buildings, "platform", story, L.platform.x, L.platform.z, L.platform.yaw, py).holder;
+    block = place(c.buildings, "block", story, L.platform.x, L.platform.z, L.platform.yaw, py).holder;
+  }
+
+  // ---- keep doors: two leaves of the castle door, stretched to fill the 4 x 5 m gate
+  const keepDoors: TransformNode[] = [];
+  if (c.door) {
+    for (const side of [-1, 1]) {
+      const inst = c.door.instantiateModelsToScene((n) => n, false);
+      const leaf = new TransformNode(`keep_door_${side}`, scene);
+      leaf.parent = root;
+      // hinge at the outer edge of the opening
+      const hinge = new TransformNode(`keep_door_hinge_${side}`, scene);
+      hinge.parent = leaf;
+      for (const r of inst.rootNodes as TransformNode[]) {
+        r.parent = hinge;
+        r.position.set(-side * 1.0, 0, 0);
+        r.scaling.set(side < 0 ? 1 : -1, 1.68, 1);
+        for (const m of r.getChildMeshes()) {
+          meshes.push(m);
+          colliders.push(m);
+          m.setEnabled(false);
+        }
+      }
+      leaf.position.set(L.keep.x + side * 2.0, heightAt(L.keep.x, L.keep.z + L.keep.d / 2) - 0.2, L.keep.z + L.keep.d / 2 - 0.65);
+      keepDoors.push(hinge);
+    }
+  }
+
+  // ---- houses
+  const houses: Town["houses"] = [];
+  if (c.houses) {
+    for (const [v, x, z, yaw] of HOUSES) {
+      const inst = instantiateSubset(c.houses, (n) => n === `house_${v}`, (n) => /^house_\d$/.test(n));
       const h = new TransformNode(`house_${v}`, scene);
       h.rotationQuaternion = Quaternion.Identity();
       for (const r of inst.rootNodes) {
         r.parent = h;
         for (const m of (r as TransformNode).getChildMeshes(false)) {
           meshes.push(m);
+          colliders.push(m);
           m.setEnabled(false);
         }
       }
       h.parent = root;
       h.position.set(x, heightAt(x, z), z);
       Quaternion.RotationYawPitchRollToRef(yaw, 0, 0, h.rotationQuaternion!);
+      houses.push({ node: h, variant: v });
       await nextFrame();
     }
   }
+
   for (const m of meshes) {
     m.receiveShadows = true;
+    m.isPickable = false;
     m.computeWorldMatrix(true);
     m.freezeWorldMatrix();
   }
@@ -122,13 +214,8 @@ export async function buildTown(scene: Scene, fort: AssetContainer, houses: Asse
   const mats = new Set(meshes.map((m) => m.material).filter((x) => !!x));
   for (const mat of mats) {
     const m = meshes.find((x) => x.material === mat)!;
-    const t = performance.now();
     await mat!.forceCompilationAsync(m).catch(() => {});
-    slow(`compile ${mat!.name}`, t);
   }
-  const t = performance.now();
   for (const m of meshes) m.setEnabled(true);
-  slow("enable", t);
-  scene.onAfterRenderObservable.addOnce(() => slow("first frame after enable", t));
-  return { root, meshes };
+  return { root, meshes, colliders, tower, breach, inn, keep, platform, block, houses, keepDoors, heightAt };
 }

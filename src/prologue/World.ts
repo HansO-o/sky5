@@ -16,6 +16,7 @@ import { createTerrainMaterial, LAYERS, WindPlugin, type TerrainSplatPlugin } fr
 import { InstancedSet, prepareForInstancing, type LodLevel } from "../world/instancing";
 import { CharacterFactory, type Character, type CharacterSpec } from "../world/characters";
 import { CameraRig } from "./camera";
+import type { Physics } from "../physics/Physics";
 
 interface ScatterHeader {
   types: { name: string; count: number; offset: number }[];
@@ -52,6 +53,7 @@ export class World {
   private emitters: { panner: PannerNode; pos: () => Vector3 }[] = [];
   private updaters = new Set<(dt: number) => void>();
   disposed = false;
+  physics: Physics | null = null;
   /** seconds of world time (pauses with the game) */
   time = 0;
 
@@ -297,6 +299,7 @@ export class World {
   update(dt: number) {
     this.time += dt;
     WindPlugin.time += dt;
+    this.physics?.update(dt);
     for (const fn of this.updaters) fn(dt);
     this.rig.update(dt);
     this.updateSets(false);
