@@ -70,6 +70,8 @@ export class Ragdoll {
     stopWalk(ch);
     ch.stopAnimations();
     const byName = new Map<string, Part>();
+    // the character's side-to-side axis (knees and elbows hinge about it, whatever the heading)
+    const side = Vector3.TransformNormal(Vector3.Right(), ch.root.computeWorldMatrix(true)).normalize();
     for (const [boneName, endName, radius, parentName] of PARTS) {
       const bone = ch.bone(boneName);
       if (!bone) continue;
@@ -125,8 +127,13 @@ export class Ragdoll {
         const tw = new J.Vec3(dir.x, dir.y, dir.z);
         c.mTwistAxis1 = tw;
         c.mTwistAxis2 = tw;
-        // any axis perpendicular to the bone works as the plane axis
-        const perp = Math.abs(dir.y) < 0.9 ? Vector3.Cross(dir, Vector3.Up()).normalize() : Vector3.Cross(dir, Vector3.Right()).normalize();
+        // Jolt limits the swing about the plane axis by the normal half cone and the swing about the
+        // normal axis (plane x twist) by the plane half cone. LIMITS give flexion the normal half
+        // cone, so the plane axis is the body's side axis made perpendicular to the bone; a bone
+        // lying along that axis (an arm held out sideways) hinges about the vertical instead.
+        let perp = side.subtract(dir.scale(Vector3.Dot(side, dir)));
+        if (perp.lengthSquared() < 0.04) perp = Vector3.Up().subtract(dir.scale(dir.y));
+        perp.normalize();
         const pa = new J.Vec3(perp.x, perp.y, perp.z);
         c.mPlaneAxis1 = pa;
         c.mPlaneAxis2 = pa;

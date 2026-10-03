@@ -24,13 +24,25 @@ interface Meta {
 const NEAR_RADIUS = 160; // metres: "close to the player" tier
 const BACKGROUND_SLOTS_WHEN_URGENT = 2;
 const MAX_RETRIES = 3;
+// After MAX_RETRIES a download is parked but still probed now and then (30 s, doubling up to 2 min):
+// connectivity can come back without an 'online' event (server errors, captive portal, lost upstream).
+const PARKED_RETRY_MS = 30_000;
+const PARKED_RETRY_MAX_MS = 120_000;
+const DB_OPEN_TIMEOUT_MS = 8000;
 
-let db: IDBDatabase;
+/** null when IndexedDB is unavailable: assets are then downloaded on demand and not cached. */
+let db: IDBDatabase | null = null;
 let entries = new Map<string, ResolvedEntry>();
 const cached = new Set<string>(); // hashes present in IDB
 const inflight = new Map<string, { ctrl: AbortController; urgent: boolean; received: number }>();
 const demands = new Map<string, number[]>(); // id -> request ids waiting for data
 const failures = new Map<string, number>();
+const retryAt = new Map<string, number>(); // id -> performance.now() before which a failed download is not retried
+// Ids the cache could not keep (write failed, or evicted to make room). They are only fetched on demand
+// until their segment is current or next again, so they are not downloaded over and over.
+const unwanted = new Set<string>();
+let writeFailures = 0; // consecutive failed cache writes; at MAX_RETRIES background prefetching stops
+let tight = false; // the cache had to evict for room: later and passed segments are no longer prefetched
 let segment: SegmentId = "menu";
 let player: { x: number; z: number } | null = null;
 let concurrency = 6;
@@ -46,12 +58,30 @@ function post(msg: FromWorker, transfer: Transferable[] = []) {
 }
 
 async function initDB() {
-  db = await openDB("northern-assets", 1, (d) => {
+  const d = await openDB("northern-assets", 1, (d) => {
     d.createObjectStore("blobs");
     d.createObjectStore("meta");
   });
-  const keys = (await reqP(db.transaction("meta").objectStore("meta").getAllKeys())) as string[];
+  const keys = (await reqP(d.transaction("meta").objectStore("meta").getAllKeys())) as string[];
   for (const k of keys) cached.add(k);
+  // e.g. site data cleared while the game runs: carry on without the cache
+  d.onclose = () => {
+    db = null;
+    cached.clear();
+    post({ t: "log", message: "IndexedDB connection closed; assets are no longer cached" });
+  };
+  db = d;
+  // opened after the timeout below, with the worker already running network-only: start caching now
+  if (entries.size) {
+    post({ t: "log", message: "IndexedDB opened late; assets are cached from now on" });
+    unwanted.clear(); // so far only downloads that had nowhere to go
+    pump();
+  }
+}
+
+/** Background downloads only make sense while they can be persisted. */
+function caching() {
+  return !!db && writeFailures < MAX_RETRIES;
 }
 
 // ---------------------------------------------------------------- priorities
@@ -84,13 +114,18 @@ function isUrgent(e: ResolvedEntry) {
 }
 
 function pump() {
-  if (!db) return;
+  const now = performance.now();
+  const prefetch = caching();
   const candidates: { e: ResolvedEntry; r: number[] }[] = [];
   for (const e of entries.values()) {
     if (cached.has(e.hash) || inflight.has(e.id)) continue;
-    if ((failures.get(e.id) ?? 0) >= MAX_RETRIES && !demands.has(e.id)) continue;
-    if (paused && !demands.has(e.id)) continue;
-    candidates.push({ e, r: rank(e) });
+    if ((retryAt.get(e.id) ?? 0) > now) continue; // backing off (or parked); a timer pumps again
+    const demanded = demands.has(e.id);
+    if ((paused || !prefetch || unwanted.has(e.id)) && !demanded) continue;
+    const r = rank(e);
+    // short on space: don't fetch what would only push out the current and next segments' data
+    if (tight && r[0] >= 4 && !demanded) continue;
+    candidates.push({ e, r });
   }
   candidates.sort((a, b) => cmp(a.r, b.r));
 
@@ -154,9 +189,15 @@ async function download(e: ResolvedEntry, urgent: boolean) {
     const h = await sha256Hex(buf);
     if (h !== e.hash) throw new Error(`hash mismatch for ${e.id}`);
     // Hand the data to waiting callers first (cloning for all but the last), then persist.
-    await store(e, buf);
+    // Not persisted: kept out of the background queue, or pump() would download it again at once.
+    if (!(await store(e, buf))) unwanted.add(e.id);
     inflight.delete(e.id);
     deliver(e, buf, false);
+    // It had failed before and works now: the connection is back, give everything waiting a chance at once.
+    if (failures.has(e.id)) {
+      failures.clear();
+      retryAt.clear();
+    }
   } catch (err) {
     if (inflight.get(e.id) === rec) inflight.delete(e.id);
     if (ctrl.signal.aborted) {
@@ -164,36 +205,48 @@ async function download(e: ResolvedEntry, urgent: boolean) {
     } else {
       const n = (failures.get(e.id) ?? 0) + 1;
       failures.set(e.id, n);
-      post({ t: "log", message: `download failed ${e.id} (${n}/${MAX_RETRIES}): ${String(err)}` });
       if (n >= MAX_RETRIES) failDemands(e.id, String(err));
-      else await new Promise((r) => setTimeout(r, 500 * 2 ** n));
+      // pump() skips the entry until then, whoever calls it
+      const base = n < MAX_RETRIES ? 500 * 2 ** n : Math.min(PARKED_RETRY_MS * 2 ** (n - MAX_RETRIES), PARKED_RETRY_MAX_MS);
+      const delay = base * (0.75 + Math.random() * 0.5);
+      retryAt.set(e.id, performance.now() + delay);
+      setTimeout(pump, delay + 5);
+      post({ t: "log", message: `download failed ${e.id} (${n}x, retry in ${(delay / 1000).toFixed(1)} s): ${String(err)}` });
     }
   } finally {
     pump();
   }
 }
 
-async function store(e: ResolvedEntry, buf: ArrayBuffer) {
+/** Returns false if the data could not be persisted. */
+async function store(e: ResolvedEntry, buf: ArrayBuffer): Promise<boolean> {
   const meta: Meta = { hash: e.hash, id: e.id, size: e.size, segment: e.segment, lastUsed: Date.now() };
+  // The cache has stopped taking writes: each on-demand download makes one plain put() as a probe, without
+  // evicting anything (on a full disk deleting rows frees no quota, it would only empty the cache).
+  const probe = writeFailures >= MAX_RETRIES;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      await ensureRoom(e.size);
+      if (!db) return false;
+      if (!probe) await ensureRoom(e.size);
       const tx = db.transaction(["blobs", "meta"], "readwrite");
       tx.objectStore("blobs").put(buf, e.hash);
       tx.objectStore("meta").put(meta, e.hash);
       await txDone(tx);
       cached.add(e.hash);
-      return;
+      writeFailures = 0;
+      return true;
     } catch (err) {
-      if (attempt === 0 && (err as DOMException)?.name === "QuotaExceededError") {
-        await evict(e.size * 2 + 32 * 1024 * 1024, true);
+      if (attempt === 0 && !probe && (err as DOMException)?.name === "QuotaExceededError") {
+        await evict(e.size * 2 + 32 * 1024 * 1024, true).catch(() => {});
         continue;
       }
       // Could not persist: the data is still delivered from memory to whoever asked for it.
+      writeFailures++;
       post({ t: "log", message: `cache write failed for ${e.id}: ${String(err)}` });
-      return;
+      return false;
     }
   }
+  return false;
 }
 
 function deliver(e: ResolvedEntry, buf: ArrayBuffer, fromCache: boolean) {
@@ -214,6 +267,7 @@ function failDemands(id: string, message: string) {
 }
 
 async function readCached(e: ResolvedEntry): Promise<ArrayBuffer | undefined> {
+  if (!db) return undefined;
   const tx = db.transaction(["blobs", "meta"], "readwrite");
   const buf = (await reqP(tx.objectStore("blobs").get(e.hash))) as ArrayBuffer | undefined;
   if (buf) {
@@ -253,7 +307,9 @@ async function handleGet(req: number, id: string) {
     }
     cached.delete(e.hash); // stale index; fall through to network
   }
-  failures.delete(id);
+  // a fresh round of attempts; 0 (not deleted) so that a success still counts as "the connection is back"
+  if (failures.has(id)) failures.set(id, 0);
+  retryAt.delete(id);
   // Already downloading in the background: upgrade it to urgent, data arrives via deliver().
   const f = inflight.get(id);
   if (f) f.urgent = true;
@@ -270,6 +326,8 @@ async function ensureRoom(bytes: number) {
 
 /** Least-recently-used eviction of assets outside the current/next segment. */
 async function evict(bytes: number, aggressive: boolean) {
+  if (!db) return;
+  tight = true;
   const all = (await reqP(db.transaction("meta").objectStore("meta").getAll())) as Meta[];
   const cur = segmentIndex(segment);
   const protectedSeg = (s: SegmentId) => {
@@ -287,6 +345,8 @@ async function evict(bytes: number, aggressive: boolean) {
     tx.objectStore("blobs").delete(v.hash);
     tx.objectStore("meta").delete(v.hash);
     cached.delete(v.hash);
+    // don't fetch it straight back in the background (it would evict something else in turn)
+    if (entries.get(v.id)?.hash === v.hash) unwanted.add(v.id);
     freed += v.size;
   }
   await txDone(tx);
@@ -297,7 +357,7 @@ async function evict(bytes: number, aggressive: boolean) {
 async function dropStale() {
   const live = new Set([...entries.values()].map((e) => e.hash));
   const stale = [...cached].filter((h) => !live.has(h));
-  if (!stale.length) return;
+  if (!stale.length || !db) return;
   const tx = db.transaction(["blobs", "meta"], "readwrite");
   for (const h of stale) {
     tx.objectStore("blobs").delete(h);
@@ -347,20 +407,42 @@ function sendProgress() {
     if (!e.optional) p.startBytesDone += done;
   }
   const queued = [...entries.values()].filter((e) => !cached.has(e.hash) && !inflight.has(e.id)).length;
-  post({ t: "progress", segments: [...segs.values()], bps, active: inflight.size, queued });
+  post({ t: "progress", segments: [...segs.values()], bps, active: inflight.size, queued, caching: caching() });
   if (inflight.size) scheduleProgress();
 }
 
 // ---------------------------------------------------------------- messages
 
-const ready = initDB();
+// Without IndexedDB (storage blocked, some private modes, a broken profile) the worker still serves
+// assets from the network, it just can't cache them. The open can also hang without ever failing
+// (seen in WebKit, or an upgrade stuck behind another connection), so it is given a deadline.
+const ready = Promise.race([
+  initDB(),
+  new Promise<never>((_, reject) => setTimeout(() => reject(new Error("IndexedDB open timed out")), DB_OPEN_TIMEOUT_MS)),
+]).catch((err) => post({ t: "log", message: `IndexedDB unavailable, assets will not be cached: ${String(err)}` }));
+
+// Connectivity is back: entries that failed while offline get another chance.
+self.addEventListener("online", () => {
+  failures.clear();
+  retryAt.clear();
+  if (entries.size) pump();
+});
 
 self.onmessage = async (ev: MessageEvent<ToWorker>) => {
   const m = ev.data;
-  if (m.t !== "init") await ready;
+  await ready;
+  try {
+    await handle(m);
+  } catch (err) {
+    // answer the caller instead of leaving it waiting
+    post({ t: "log", message: `${m.t} failed: ${String(err)}` });
+    if ("req" in m) post({ t: "error", req: m.req, id: m.t === "get" ? m.id : "", message: String(err) });
+  }
+};
+
+async function handle(m: ToWorker) {
   switch (m.t) {
     case "init": {
-      await ready;
       entries = new Map(m.entries.map((e) => [e.id, e]));
       segment = m.segment;
       concurrency = m.concurrency;
@@ -375,8 +457,16 @@ self.onmessage = async (ev: MessageEvent<ToWorker>) => {
       break;
     case "segment": {
       segment = m.segment;
-      // Cancel background downloads for segments the player has left behind.
       const cur = segmentIndex(segment);
+      // Failed downloads get another round; entries the cache dropped are prefetched again once their
+      // segment is current or next.
+      failures.clear();
+      retryAt.clear();
+      for (const id of unwanted) {
+        const si = segmentIndex(entries.get(id)!.segment);
+        if (si === cur || si === cur + 1) unwanted.delete(id);
+      }
+      // Cancel background downloads for segments the player has left behind.
       for (const [id, f] of inflight) {
         const e = entries.get(id)!;
         if (segmentIndex(e.segment) < cur && !demands.has(id)) {
@@ -406,7 +496,7 @@ self.onmessage = async (ev: MessageEvent<ToWorker>) => {
       pump();
       break;
     case "stats": {
-      const all = (await reqP(db.transaction("meta").objectStore("meta").getAll())) as Meta[];
+      const all = db ? ((await reqP(db.transaction("meta").objectStore("meta").getAll())) as Meta[]) : [];
       const est = navigator.storage?.estimate ? await navigator.storage.estimate() : { usage: 0, quota: 0 };
       post({
         t: "stats",
@@ -424,14 +514,16 @@ self.onmessage = async (ev: MessageEvent<ToWorker>) => {
       paused = true;
       for (const f of inflight.values()) f.ctrl.abort("cleared");
       inflight.clear();
-      const tx = db.transaction(["blobs", "meta"], "readwrite");
-      tx.objectStore("blobs").clear();
-      tx.objectStore("meta").clear();
-      await txDone(tx);
+      if (db) {
+        const tx = db.transaction(["blobs", "meta"], "readwrite");
+        tx.objectStore("blobs").clear();
+        tx.objectStore("meta").clear();
+        await txDone(tx);
+      }
       cached.clear();
       post({ t: "cleared", req: m.req });
       sendProgress();
       break;
     }
   }
-};
+}

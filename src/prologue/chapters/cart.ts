@@ -5,7 +5,7 @@ import { audio } from "../../core/audio";
 import { input } from "../../core/input";
 import { hud } from "../../ui/hud";
 import { OUTFITS, type Character } from "../../world/characters";
-import { Wagon } from "../wagon";
+import { HORSE_AHEAD, Wagon } from "../wagon";
 import { SCRIPT, SPEAKER_NAMES, lineDuration, type Line, type Speaker } from "./cartScript";
 import type { Chapter, ChapterContext } from "./types";
 
@@ -13,6 +13,11 @@ import type { Chapter, ChapterContext } from "./types";
 export const START_S = 300;
 const CRUISE = 2.9; // m/s
 const LEAD_GAP = 22; // metres between the wagons
+/** the lead wagon parks this far short of the road's end, its horse still on the road (Route clamps beyond it) */
+const LEAD_PARK = HORSE_AHEAD + 2.5;
+/** the ride ends (`remaining` reaches 0) this far short of the road's end: the player's wagon parks with
+ * its horse just behind the parked lead */
+const RIDE_END = LEAD_PARK + 8;
 
 /** Segment 2: the prisoner wagon ride from the forest to the gates of 雾门镇. */
 export class CartChapter implements Chapter {
@@ -43,6 +48,8 @@ export class CartChapter implements Chapter {
   async prepare(resume: Record<string, unknown> | null) {
     const w = this.world;
     const [wagonC, horseC] = await Promise.all([loadGLB("cart/wagon", w.scene), loadGLB("chars/horse", w.scene)]);
+    // a ride prepared earlier (behind the menu) leaves its convoy: replaced once the cast has moved over
+    const old = this.ctx.stage.wagons;
     this.wagon = new Wagon(w.scene, wagonC, horseC, "playerWagon");
     this.lead = new Wagon(w.scene, wagonC, horseC, "leadWagon");
     this.world.addShadowCasters([...this.wagon.meshes, ...this.lead.meshes]);
@@ -79,11 +86,13 @@ export class CartChapter implements Chapter {
     }
     this.streamProps();
     this.applyResume(resume);
+    // the camera and every passenger now sit in the new wagons (disposing a wagon disposes its seats' children)
+    for (const o of old) o.dispose();
   }
 
   private applyResume(resume: Record<string, unknown> | null) {
     const r = (resume ?? {}) as { s?: number; line?: number; time?: number };
-    this.s = r.s ?? START_S;
+    this.s = Math.min(r.s ?? START_S, this.end - 1.2);
     this.lineIdx = r.line ?? 0;
     this.time = r.time ?? 0;
     this.nextAllowed = this.time;
@@ -132,13 +141,24 @@ export class CartChapter implements Chapter {
     return new Promise<void>((resolve) => (this.done = resolve));
   }
 
+  /** route distance where the ride ends (`remaining` counts down to it) */
+  private get end() {
+    return this.world.route.length - RIDE_END;
+  }
+
   private tmp = new Vector3();
   private placeConvoy(dt: number) {
     const r = this.world.route;
     this.wagon.place(r, this.s, this.speed, dt, this.time);
-    this.lead.place(r, this.s + LEAD_GAP, this.speed, dt, this.time);
+    // the lead closes up as it nears the end of the road and eases to a stop there
+    const park = r.length - LEAD_PARK;
+    const over = this.s + LEAD_GAP - (park - 4);
+    const k = over > 0 ? Math.exp(-over / 4) : 1;
+    const leadS = over > 0 ? park - 4 * k : this.s + LEAD_GAP;
+    const leadSpeed = this.speed * k;
+    this.lead.place(r, leadS, leadSpeed, dt, this.time);
     this.walkers.forEach((w, i) => {
-      const s = this.s + LEAD_GAP + 1 - i * 3;
+      const s = leadS + 1 - i * 3;
       const p = r.pos(s, this.tmp);
       const d = r.dir(s);
       const side = i === 0 ? 1.7 : -1.7;
@@ -146,14 +166,14 @@ export class CartChapter implements Chapter {
       w.root.position.set(x, this.world.heightAt(x, z), z);
       const yaw = r.yaw(s) + Math.PI;
       w.root.rotationQuaternion!.copyFromFloats(0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2));
-      w.play(this.speed > 0.3 ? "Walk_Loop" : "Idle_Loop", { speed: Math.max(0.6, this.speed / 1.8) });
+      w.play(leadSpeed > 0.3 ? "Walk_Loop" : "Idle_Loop", { speed: Math.max(0.6, leadSpeed / 1.8) });
     });
   }
 
   update(dt: number) {
     if (!this.done) return;
     this.time += dt;
-    const remaining = this.world.route.length - this.s;
+    const remaining = this.end - this.s;
     const stage = this.ctx.stage;
     if (remaining < 520) void stage.ensureTown();
     let target = CRUISE;
@@ -171,7 +191,7 @@ export class CartChapter implements Chapter {
       hud.loading(false);
     }
     this.speed += (target - this.speed) * Math.min(1, dt * 0.6);
-    this.s = Math.min(this.world.route.length - 1.2, this.s + this.speed * dt);
+    this.s = Math.min(this.end - 1.2, this.s + this.speed * dt);
     this.placeConvoy(dt);
     // hold Space (A on a pad) to skip the ride
     this.skipHold = input.down("jump") ? this.skipHold + dt : 0;
@@ -233,22 +253,32 @@ export class CartChapter implements Chapter {
   }
 
   save() {
-    return { s: this.s, line: this.lineIdx, time: this.time };
+    // a line still on screen is saved as not yet spoken: it plays again on load
+    return { s: this.s, line: this.speaking ? this.lineIdx - 1 : this.lineIdx, time: this.time };
   }
 
   skip() {
     // wagons parked inside the gate; the town must exist for the next chapter
     void this.ctx.stage.ensureTown();
-    this.s = this.world.route.length - 1.2;
+    this.s = this.end - 1.2;
     this.speed = 0;
     this.lineIdx = SCRIPT.length;
+    // the ride is over: update() must not touch the cast or the HUD again
+    this.done = null;
+    this.speaking = null;
     this.placeConvoy(0);
     this.world.updateSets(true);
   }
 
   dispose() {
     this.disposed = true;
+    this.done = null;
+    this.speaking = null;
     this.stopAudio.forEach((f) => f());
+    if (this.waitingForTown) {
+      this.waitingForTown = false;
+      hud.loading(false);
+    }
     hud.prompt(null);
   }
 }

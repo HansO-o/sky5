@@ -13,7 +13,7 @@ import { audio } from "../core/audio";
 import type { Quality } from "../core/settings";
 import { Route } from "../world/route";
 import { createEnvironment, type Environment } from "../world/environment";
-import { createTerrainMaterial, LAYERS, WindPlugin, type TerrainSplatPlugin } from "../world/materials";
+import { createTerrainMaterial, LAYERS, swayShadows, WindPlugin, type TerrainSplatPlugin } from "../world/materials";
 import { InstancedSet, prepareForInstancing, type LodLevel } from "../world/instancing";
 import { CharacterFactory, type Character, type CharacterSpec } from "../world/characters";
 import { CameraRig } from "./camera";
@@ -174,7 +174,7 @@ export class World {
   private setupTrees(c: AssetContainer) {
     c.addAllToScene();
     const heights = [17, 21, 14];
-    const impostor = meshesUnder(c, "fir_impostor").map(prepareForInstancing);
+    const impostor = meshesUnder(c, "fir_impostor").map((m) => prepareForInstancing(m));
     for (const mat of c.materials) {
       if (!(mat instanceof PBRMaterial)) continue;
       if (mat.name === "needles" || mat.name === "fir_impostor") {
@@ -183,11 +183,15 @@ export class World {
         mat.twoSidedLighting = true;
         mat.environmentIntensity = 0.8;
       }
-      if (mat.name === "needles") mat.albedoColor.set(0.82, 0.86, 0.78);
+      if (mat.name === "needles") {
+        mat.albedoColor.set(0.82, 0.86, 0.78);
+        // LOD0 needles cast shadows: sway them in the shadow pass too
+        swayShadows(mat);
+      }
     }
     for (let v = 0; v < 3; v++) {
-      const lod0 = meshesUnder(c, `fir${v}_lod0`).map(prepareForInstancing);
-      const lod1 = meshesUnder(c, `fir${v}_lod1`).map(prepareForInstancing);
+      const lod0 = meshesUnder(c, `fir${v}_lod0`).map((m) => prepareForInstancing(m));
+      const lod1 = meshesUnder(c, `fir${v}_lod1`).map((m) => prepareForInstancing(m));
       // impostors are shared across variants: give each variant its own clone so instance buffers differ
       const imp = v === 0 ? impostor : impostor.map((m) => m.clone(`${m.name}_${v}`, null, true) as Mesh);
       const lods: LodLevel[] = [
@@ -215,7 +219,12 @@ export class World {
       }
     }
     types.forEach((type, k) => {
-      const meshes = meshesUnder(c, nodeFor ? nodeFor(k) : undefined).map(prepareForInstancing);
+      const name = nodeFor?.(k);
+      // a kit piece is drawn around its own origin, not at its layout offset in the source file
+      const piece = name === undefined ? undefined : [...c.transformNodes, ...c.meshes].find((n) => n.name === name);
+      piece?.computeWorldMatrix(true);
+      const origin = piece?.getAbsolutePosition().clone();
+      const meshes = meshesUnder(c, name).map((m) => prepareForInstancing(m, origin));
       if (!meshes.length) return;
       const set = new InstancedSet(this.scatterData(type), [{ meshes, maxDistance: maxDist }], { revealDistance: reveal });
       this.sets.push({ set, kind: foliage ? "foliage" : "rock" });
@@ -248,18 +257,26 @@ export class World {
   // ------------------------------------------------------------------ NPCs
 
   private femaleP: Promise<void> | null = null;
-  /** Load the female body (muster segment) once. */
+  /** Load the female body (muster segment) once; a failed load is retried on the next call. */
   ensureFemale() {
-    this.femaleP ??= loadGLB("chars/female", this.scene).then((c) => {
-      this.factory.female = c;
-    });
+    this.femaleP ??= loadGLB("chars/female", this.scene)
+      .then((c) => {
+        this.factory.female = c;
+      })
+      .catch((e) => {
+        this.femaleP = null;
+        throw e;
+      });
     return this.femaleP;
   }
 
   private dragonP: Promise<Dragon> | null = null;
-  /** The dragon (loaded on first use; its assets stream with the "dragon" segment). */
+  /** The dragon (loaded on first use; its assets stream with the "dragon" segment). A failed load is retried. */
   ensureDragon() {
-    this.dragonP ??= Dragon.create(this);
+    this.dragonP ??= Dragon.create(this).catch((e) => {
+      this.dragonP = null;
+      throw e;
+    });
     return this.dragonP;
   }
 
@@ -335,8 +352,12 @@ export class World {
     assets.setPlayerPosition(p.x, p.z);
   }
 
+  private quality: Quality | null = null;
   applyQuality(q: Quality) {
-    this.env?.applyQuality(q);
+    // settings changes (every slider tick) re-apply the tier: only a new tier has work to do
+    if (!this.env || q === this.quality) return;
+    this.quality = q;
+    this.env.applyQuality(q);
     if (this.terrainPlugin) {
       this.terrainPlugin.useNormals = q !== "low";
       this.terrainPlugin.markAllDefinesAsDirty();

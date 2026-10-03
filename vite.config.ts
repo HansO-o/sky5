@@ -3,6 +3,15 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 
+/** public/manifest.json's version, compiled into the bundle so main.ts can reject a manifest from another release. */
+function manifestVersion() {
+  try {
+    return String(JSON.parse(fs.readFileSync(path.resolve(import.meta.dirname, "public/manifest.json"), "utf8")).version);
+  } catch {
+    return ""; // missing manifest: the build fails in serviceWorker() below
+  }
+}
+
 /**
  * Emits sw.js: precaches the app shell (HTML, JS/CSS chunks, decoders, manifest) so a second visit
  * and offline play start without the network. Game data under data/ is cached by the asset worker in
@@ -27,7 +36,9 @@ function serviceWorker(): Plugin {
         this.error("public/manifest.json is missing: run `npm run fetch-sources && npm run build-assets` first (or check that public/data and public/manifest.json are committed).");
       const extra = walk(path.join(pub, "decoders")).concat(["manifest.json"]);
       const shell = ["./", ...files, ...extra].filter((f) => f !== "sw.js");
-      const version = crypto.createHash("sha256").update(JSON.stringify(shell)).update(fs.readFileSync(manifestPath)).digest("hex").slice(0, 12);
+      // index.html too: the worker never rewrites its cached "./", so a page-only change needs a new worker
+      const html = fs.readFileSync(path.resolve(import.meta.dirname, "index.html"));
+      const version = crypto.createHash("sha256").update(JSON.stringify(shell)).update(fs.readFileSync(manifestPath)).update(html).digest("hex").slice(0, 12);
       const src = fs.readFileSync(path.resolve(import.meta.dirname, "src/sw.template.js"), "utf8").replace("__VERSION__", version).replace("__SHELL__", JSON.stringify(shell));
       this.emitFile({ type: "asset", fileName: "sw.js", source: src });
     },
@@ -37,6 +48,7 @@ function serviceWorker(): Plugin {
 export default defineConfig({
   base: "./",
   plugins: [serviceWorker()],
+  define: { __MANIFEST_VERSION__: JSON.stringify(manifestVersion()) },
   build: {
     target: "es2022",
     assetsDir: "app",

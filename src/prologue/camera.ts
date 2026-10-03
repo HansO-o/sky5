@@ -20,6 +20,8 @@ export interface CameraTarget {
 }
 
 const ease = (t: number) => t * t * (3 - 2 * t);
+/** third-person over-the-shoulder offset to the right (m) */
+const SHOULDER = 0.45;
 
 /**
  * One camera, three behaviours: seated head-look (parented to a seat), scripted cinematics with
@@ -44,6 +46,8 @@ export class CameraRig {
   private time = 0;
   /** extra pitch/roll for seat sway */
   sway = true;
+  private offSettings: () => void;
+  private failed = false;
 
   constructor(scene: Scene) {
     this.camera = new FreeCamera("eye", new Vector3(0, 0, 0), scene);
@@ -52,12 +56,17 @@ export class CameraRig {
     this.camera.fovMode = Camera.FOVMODE_HORIZONTAL_FIXED;
     this.camera.inertia = 0;
     this.applyFov();
-    settings.on(() => this.applyFov());
-    window.addEventListener("wheel", (e) => {
-      if (this.mode !== "player" || !this.target || this.target.firstPerson) return;
-      this.distance = Math.max(1.2, Math.min(9, this.distance * (e.deltaY > 0 ? 1.12 : 0.89)));
-    });
+    this.offSettings = settings.on(() => this.applyFov());
+    window.addEventListener("wheel", this.onWheel);
+    // the global listeners would otherwise keep every disposed world alive
+    scene.onDisposeObservable.add(() => this.dispose());
   }
+
+  /** Wheel zoom in third person; only in play (pointer locked), not while scrolling a menu panel. */
+  private onWheel = (e: WheelEvent) => {
+    if (!input.locked || this.mode !== "player" || !this.target || this.target.firstPerson) return;
+    this.distance = Math.max(1.2, Math.min(9, this.distance * (e.deltaY > 0 ? 1.12 : 0.89)));
+  };
 
   private fovOverride: number | null = null;
   private applyFov() {
@@ -76,6 +85,7 @@ export class CameraRig {
   /** Sit: the camera is parented to a node (e.g. a wagon seat) and the player can only turn the head. */
   seat(node: TransformNode, offset: Vector3, yawLimit = 1.9) {
     this.mode = "seat";
+    this.steer = null;
     this.camera.parent = node;
     this.camera.position.copyFrom(offset);
     this.yawLimit = yawLimit;
@@ -86,6 +96,7 @@ export class CameraRig {
   cut(pos: Vector3, look: Vector3) {
     this.mode = "cine";
     this.move = null;
+    this.steer = null;
     this.camera.parent = null;
     this.camera.position.copyFrom(pos);
     this.lookAt.copyFrom(look);
@@ -106,12 +117,20 @@ export class CameraRig {
     this.target = target;
     this.camera.parent = null;
     this.move = null;
+    this.steer = null;
   }
 
-  private steer: { pos: () => Vector3; t: number; dur: number } | null = null;
-  /** Player mode: ease the view toward a point for `seconds` (the player can still look around). */
-  lookToward(pos: Vector3 | (() => Vector3), seconds = 0.8) {
+  private steer: { pos: () => Vector3 | null; t: number; dur: number } | null = null;
+  /**
+   * Player mode: ease the view toward a point for `seconds` (the player can still look around).
+   * The steer ends early when `pos` returns null or throws (its target is gone).
+   */
+  lookToward(pos: Vector3 | (() => Vector3 | null), seconds = 0.8) {
     this.steer = { pos: typeof pos === "function" ? pos : () => pos, t: 0, dur: seconds };
+  }
+  /** Drop a running lookToward (e.g. when a chapter is skipped). */
+  clearSteer() {
+    this.steer = null;
   }
 
   shake(amplitude: number, seconds: number) {
@@ -121,7 +140,19 @@ export class CameraRig {
 
   private tmp = new Vector3();
   private tmp2 = new Vector3();
+  private tmp3 = new Vector3();
+  /** Per frame. Never throws: an exception here would escape the render loop and stop the game for good. */
   update(dt: number) {
+    try {
+      this.tick(dt);
+    } catch (e) {
+      this.steer = null;
+      if (!this.failed) console.error("camera rig", e);
+      this.failed = true;
+    }
+  }
+
+  private tick(dt: number) {
     this.time += dt;
     const [dx, dy] = this.lookEnabled ? input.consumeLook() : (input.consumeLook(), [0, 0]);
     let sx = 0, sy = 0;
@@ -157,33 +188,52 @@ export class CameraRig {
       return;
     }
     // player
-    const t = this.target!;
+    const t = this.target;
+    if (!t) return;
     this.yaw -= dx;
     this.pitch = Math.max(-1.35, Math.min(1.35, this.pitch - dy));
     if (this.steer) {
       const st = this.steer;
       st.t += dt;
       const from = t.firstPerson ? t.eye(this.tmp2) : t.pivot(this.tmp2);
-      const to = st.pos();
-      const ty = Math.atan2(-(to.x - from.x), -(to.z - from.z));
-      const tp = Math.atan2(to.y - from.y, Math.hypot(to.x - from.x, to.z - from.z));
-      const k = Math.min(1, dt * 5);
-      this.yaw += Math.atan2(Math.sin(ty - this.yaw), Math.cos(ty - this.yaw)) * k;
-      this.pitch += (Math.max(-1.35, Math.min(1.35, tp)) - this.pitch) * k;
-      if (st.t >= st.dur) this.steer = null;
+      let to: Vector3 | null = null;
+      try {
+        to = st.pos();
+      } catch {
+        // the target was removed (e.g. a chapter skip disposed the NPC): drop the steer
+      }
+      if (!to) this.steer = null;
+      else {
+        const ty = Math.atan2(-(to.x - from.x), -(to.z - from.z));
+        const tp = Math.atan2(to.y - from.y, Math.hypot(to.x - from.x, to.z - from.z));
+        const k = Math.min(1, dt * 5);
+        this.yaw += Math.atan2(Math.sin(ty - this.yaw), Math.cos(ty - this.yaw)) * k;
+        this.pitch += (Math.max(-1.35, Math.min(1.35, tp)) - this.pitch) * k;
+        if (st.t >= st.dur) this.steer = null;
+      }
     }
     const dir = this.tmp.set(-Math.sin(this.yaw) * Math.cos(this.pitch), Math.sin(this.pitch), -Math.cos(this.yaw) * Math.cos(this.pitch));
     if (t.firstPerson) {
       t.eye(this.camera.position);
     } else {
       const piv = t.pivot(this.tmp2);
-      // over-the-shoulder offset to the right
-      const right = new Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw)).scaleInPlace(0.45);
-      piv.addInPlace(right);
+      // over-the-shoulder offset to the right, shortened by a wall there (the pivot must stay in
+      // the open, or the back ray below starts inside the wall and finds nothing)
+      const right = this.tmp3.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
+      piv.addInPlace(right.scaleInPlace(t.clip ? t.clip(piv, right, SHOULDER) : SHOULDER));
       const back = dir.scale(-1);
       const d = t.clip ? t.clip(piv, back, this.distance) : this.distance;
       this.camera.position.copyFrom(piv).addInPlace(back.scaleInPlace(d));
     }
     this.camera.rotation.set(this.pitch + sy, this.yaw + sx, 0);
+  }
+
+  /** Remove the global listeners (settings, wheel) and drop the follow target. Runs with the scene's disposal. */
+  dispose() {
+    this.offSettings();
+    window.removeEventListener("wheel", this.onWheel);
+    this.target = null;
+    this.move = null;
+    this.steer = null;
   }
 }

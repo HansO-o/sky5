@@ -9,10 +9,10 @@ export class Cancelled extends Error {
 }
 
 interface Wait {
+  scope: ScriptScope;
   until?: number;
   pred?: () => boolean;
   resolve: () => void;
-  reject: (e: Error) => void;
 }
 
 export interface SayOptions {
@@ -32,11 +32,14 @@ export interface SayOptions {
 /**
  * Coroutine-style cutscene scripting. Scripts are async functions that `await` world time
  * (which pauses with the game and honours the debug time scale) instead of wall-clock timers.
+ * The Director is the clock; scripts run in a {@link ScriptScope} (one per chapter run), so
+ * cancelling stops exactly that scope's scripts.
  */
 export class Director {
   time = 0;
   private waits: Wait[] = [];
-  private cancelled = false;
+  private scopes = new Set<ScriptScope>();
+  private closed = false;
 
   update(dt: number) {
     this.time += dt;
@@ -46,22 +49,84 @@ export class Director {
     for (const w of ready) w.resolve();
   }
 
-  private add(w: Omit<Wait, "resolve" | "reject">) {
-    if (this.cancelled) return Promise.reject(new Cancelled());
-    return new Promise<void>((resolve, reject) => this.waits.push({ ...w, resolve, reject }));
+  /** A new script scope on this clock (born cancelled once the Director is closed). */
+  scope() {
+    const s = new ScriptScope(this);
+    if (this.closed) s.cancel();
+    else this.scopes.add(s);
+    return s;
+  }
+
+  /** @internal queue a world-time wait for a scope */
+  add(w: Wait) {
+    this.waits.push(w);
+  }
+
+  /** @internal forget a cancelled scope and its waits */
+  drop(s: ScriptScope) {
+    this.waits = this.waits.filter((w) => w.scope !== s);
+    this.scopes.delete(s);
+  }
+
+  /** Cancel every scope, including any created later (the stage is going away). */
+  cancelAll() {
+    this.closed = true;
+    for (const s of [...this.scopes]) s.cancel();
+  }
+}
+
+/**
+ * The scripting API of one chapter run. Every wait it hands out rejects with {@link Cancelled}
+ * once the scope is cancelled, and a cancelled scope never starts another, so the script of a
+ * skipped chapter cannot run on into the next one. Promises from outside the Director (flights,
+ * camera glides, fades) must be awaited through `wait()` for the same guarantee.
+ */
+export class ScriptScope {
+  cancelled = false;
+  private pending = new Set<() => void>();
+
+  constructor(private readonly clock: Director) {}
+
+  get time() {
+    return this.clock.time;
   }
 
   sleep(seconds: number) {
-    return this.add({ until: this.time + seconds });
+    return this.tick({ until: this.time + seconds });
   }
 
   until(pred: () => boolean, timeout = Infinity) {
     const end = this.time + timeout;
-    return this.add({ pred: () => pred() || this.time >= end });
+    return this.tick({ pred: () => pred() || this.time >= end });
+  }
+
+  /** Await any other promise under this scope: settles like `p`, or rejects when the scope is cancelled first. */
+  wait<T>(p: PromiseLike<T>): Promise<T> {
+    if (this.cancelled) return Promise.reject(new Cancelled());
+    return new Promise<T>((resolve, reject) => {
+      const cancel = () => reject(new Cancelled());
+      this.pending.add(cancel);
+      // cancelled while `p` was settling (e.g. a skip resolves the flight it stops): still reject
+      const settle = (f: () => void) => {
+        this.pending.delete(cancel);
+        if (this.cancelled) cancel();
+        else f();
+      };
+      p.then(
+        (v) => settle(() => resolve(v)),
+        (e) => settle(() => reject(e)),
+      );
+    });
+  }
+
+  private tick(w: { until?: number; pred?: () => boolean }) {
+    if (this.cancelled) return Promise.reject(new Cancelled());
+    return this.wait(new Promise<void>((resolve) => this.clock.add({ ...w, scope: this, resolve })));
   }
 
   /** One line of dialogue with subtitles; resolves after the reading time (+ gap). */
   async say(name: string, text: string, o: SayOptions = {}) {
+    if (this.cancelled) throw new Cancelled();
     const dur = o.duration ?? Math.max(2.4, text.length * 0.19 + 0.8);
     hud.subtitle(name, text, true);
     const npc = o.npc;
@@ -81,15 +146,13 @@ export class Director {
     return Promise.all(ps);
   }
 
-  /** Allow new waits again after cancelAll (used when skipping a chapter). */
-  reset() {
-    this.cancelled = false;
-  }
-
-  cancelAll() {
+  /** Reject every pending wait and refuse new ones, for good (skip, chapter end, stage dispose). */
+  cancel() {
+    if (this.cancelled) return;
     this.cancelled = true;
-    const ws = this.waits;
-    this.waits = [];
-    for (const w of ws) w.reject(new Cancelled());
+    this.clock.drop(this);
+    const ps = [...this.pending];
+    this.pending.clear();
+    for (const c of ps) c();
   }
 }

@@ -3,13 +3,11 @@ const VERSION = "__VERSION__";
 const SHELL = __SHELL__;
 const CACHE = `shell-${VERSION}`;
 
+// No skipWaiting(): a page still running the previous release lazy-loads chunks (Jolt, appearance,
+// Babylon extensions) that only the previous shell cache holds, and activate deletes that cache. The new
+// worker takes over once no tab of the old release is open.
 self.addEventListener("install", (e) => {
-  e.waitUntil(
-    caches
-      .open(CACHE)
-      .then((c) => c.addAll(SHELL))
-      .then(() => self.skipWaiting()),
-  );
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)));
 });
 
 self.addEventListener("activate", (e) => {
@@ -21,6 +19,9 @@ self.addEventListener("activate", (e) => {
   );
 });
 
+// The network copy is not written back: it may belong to a newer release than this worker's cache, and
+// each shell cache must hold exactly one release (VERSION covers index.html and manifest.json, so a
+// release that changes either installs a new worker with a fresh cache).
 function networkFirst(req, timeoutMs) {
   return new Promise((resolve) => {
     let done = false;
@@ -36,7 +37,6 @@ function networkFirst(req, timeoutMs) {
     fetch(req)
       .then((res) => {
         clearTimeout(timer);
-        if (res.ok) caches.open(CACHE).then((c) => c.put(req, res.clone()));
         if (!done) {
           done = true;
           resolve(res);
@@ -59,6 +59,8 @@ self.addEventListener("fetch", (e) => {
   if (e.request.method !== "GET" || url.origin !== self.location.origin) return;
   // content-addressed game data: handled by the asset worker + IndexedDB
   if (/\/data\/[0-9a-f]{16}\.\w+$/.test(url.pathname)) return;
+  // main.ts re-checking its manifest against the network (cache: "reload"): no timeout, no cached copy
+  if (url.pathname.endsWith("/manifest.json") && e.request.cache === "reload") return;
   if (e.request.mode === "navigate" || url.pathname.endsWith("/manifest.json")) {
     // fresh when online (new releases), instant from cache when offline or slow
     e.respondWith(networkFirst(e.request, e.request.mode === "navigate" ? 1500 : 2500));
@@ -69,7 +71,10 @@ self.addEventListener("fetch", (e) => {
       (hit) =>
         hit ||
         fetch(e.request).then((res) => {
-          if (res.ok && SHELL.some((s) => url.pathname.endsWith(s.replace(/^\.\//, "/")))) caches.open(CACHE).then((c) => c.put(e.request, res.clone()));
+          if (res.ok && SHELL.some((s) => url.pathname.endsWith(s.replace(/^\.\//, "/")))) {
+            const copy = res.clone(); // now: once res is handed to the page its body is in use
+            caches.open(CACHE).then((c) => c.put(e.request, copy)).catch(() => {});
+          }
           return res;
         }),
     ),

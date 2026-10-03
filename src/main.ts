@@ -3,8 +3,9 @@
 import { assets } from "./core/assets/AssetClient";
 import type { Manifest } from "./core/assets/manifest";
 import { audio } from "./core/audio";
-import { latestSave, listSaves, type SaveGame } from "./core/saves";
-import { closePanel, openCredits, openLoad, openSettings, panelOpen } from "./ui/panels";
+import { latestSave, listSaves, writeSave, type SaveGame } from "./core/saves";
+import { input } from "./core/input";
+import { closePanel, openCredits, openLoad, openSettings, panelOpen, reloading } from "./ui/panels";
 import { hud } from "./ui/hud";
 import type { Game } from "./game/Game";
 
@@ -29,6 +30,11 @@ function select(i: number) {
   buttons.forEach((b, k) => b.classList.toggle("sel", k === sel));
   next.focus({ preventScroll: true });
 }
+/** The default choice: the first enabled button (继续 once there is a save). */
+function selectFirst() {
+  sel = buttons.findIndex((b) => !b.disabled);
+  select(0);
+}
 buttons.forEach((b, k) =>
   b.addEventListener("mouseenter", () => {
     if (b.disabled || k === sel) return;
@@ -39,13 +45,17 @@ buttons.forEach((b, k) =>
 );
 select(0);
 
+/** Whether the main menu takes input: not under a panel, and not while it fades out for a starting game. */
 function menuVisible() {
-  return !menuEl.classList.contains("hidden") && !panelOpen();
+  return !menuEl.classList.contains("hidden") && !menuEl.classList.contains("fade") && !panelOpen();
 }
 
 window.addEventListener("keydown", (e) => {
   audio.unlock();
-  if (!menuEl.classList.contains("hidden") && panelOpen() && e.code === "Escape") {
+  // the main menu's panels (in play Game closes the pause menu's in its frame: handling the same Esc
+  // here too would close the panel and then resume the game); a pending rebind takes its Esc first
+  // through input.keyHook
+  if (panelOpen() && e.code === "Escape" && !menuEl.classList.contains("hidden")) {
     closePanel();
     return;
   }
@@ -77,7 +87,9 @@ function padLoop() {
       buttons[sel].click();
     }
     padPrev = now;
-  } else if (pad && panelOpen() && pad.buttons[1]?.pressed) {
+  } else if (pad && !menuEl.classList.contains("hidden") && panelOpen() && pad.buttons[1]?.pressed) {
+    // B closes the main menu's panels; in play Game owns B (this loop runs first in every frame:
+    // closing the pause menu's panel here would make Game's B resume the game)
     closePanel();
   }
   requestAnimationFrame(padLoop);
@@ -85,10 +97,61 @@ function padLoop() {
 requestAnimationFrame(padLoop);
 
 // ---------------------------------------------------------------- boot
-const manifestP: Promise<Manifest> = fetch("./manifest.json", { cache: "no-cache" }).then((r) => {
+/** public/manifest.json's version when this bundle was built (vite.config.ts `define`). */
+declare const __MANIFEST_VERSION__: string;
+
+async function fetchManifest(init: RequestInit): Promise<Manifest> {
+  const r = await fetch("./manifest.json", init);
   if (!r.ok) throw new Error(`manifest ${r.status}`);
   return r.json();
-});
+}
+
+/**
+ * The service worker answers the page and manifest.json separately (network first, cache after a
+ * timeout), so right after a deploy one can come from the new release and the other from the old one.
+ * Only run against the manifest this bundle was built with.
+ */
+async function loadManifest(): Promise<Manifest> {
+  const m = await fetchManifest({ cache: "no-cache" });
+  if (!import.meta.env.PROD || m.version === __MANIFEST_VERSION__) return m;
+  console.warn(`[assets] manifest ${m.version} is not from this build (${__MANIFEST_VERSION__})`);
+  // a stale cached manifest: the network has ours ("reload" requests skip the service worker's cache)
+  const net = await fetchManifest({ cache: "reload", signal: AbortSignal.timeout(10_000) }).catch(() => null);
+  if (net?.version === __MANIFEST_VERSION__) return net;
+  // the server has moved on and this page is the stale part: reload once so everything matches
+  if (net && reloadOnce(`manifest-${net.version}`)) return new Promise<never>(() => {});
+  // offline, or reloading didn't help: this build's own manifest is precached in its shell cache
+  return (await cachedManifest(__MANIFEST_VERSION__)) ?? m;
+}
+
+function reloadOnce(key: string) {
+  try {
+    if (sessionStorage.getItem("northern.reload") === key) return false;
+    sessionStorage.setItem("northern.reload", key);
+  } catch {
+    return false;
+  }
+  location.reload();
+  return true;
+}
+
+async function cachedManifest(version: string): Promise<Manifest | null> {
+  try {
+    for (const k of await caches.keys()) {
+      if (!k.startsWith("shell-")) continue;
+      const r = await (await caches.open(k)).match("./manifest.json", { ignoreSearch: true });
+      const m = r ? ((await r.json()) as Manifest) : null;
+      if (m?.version === version) return m;
+    }
+  } catch {
+    // no Cache Storage (insecure context) or an unreadable entry
+  }
+  return null;
+}
+
+const manifestP = loadManifest();
+// get(), startPack() and setSegment() need the manifest in the worker first
+const assetsReady = manifestP.then((m) => assets.init(m, "menu"));
 
 let gameP: Promise<Game> | null = null;
 function getGame() {
@@ -97,32 +160,79 @@ function getGame() {
     const g = new Game(canvas);
     await g.init();
     mark("engine-ready");
-    g.onExitToMenu = () => void showMenu();
+    // Ctrl+W and friends close the tab before the page sees them: ask first while a game is running
+    window.addEventListener("beforeunload", (e) => {
+      if (reloading || !g.stage?.gameplay) return;
+      e.preventDefault();
+      e.returnValue = "";
+    });
+    g.onExitToMenu = () => {
+      // back on the menu the cursor starts on 继续 again, not on the 新游戏 the last game came from
+      selectFirst();
+      void showMenu().catch((e) => {
+        console.error(e);
+        // the menu scene didn't come up and the game is still there: back to its pause menu (after
+        // the end card, the plain menu over it)
+        if (g.stage?.gameplay) {
+          hud.toast("无法返回主菜单", 4000);
+          g.pause(true);
+        } else {
+          void hud.fade(false, 0.3);
+          menuEl.classList.remove("hidden", "fade");
+        }
+      });
+    };
     if (new URLSearchParams(location.search).has("debug")) (window as unknown as { __game: Game }).__game = g;
-    g.loadSave = (s) => void startFromSave(s);
+    g.loadSave = (s) => startFromSave(s);
     return g;
   })();
   return gameP;
 }
 
 async function showMenu() {
+  // 新游戏 works on the DOM menu before the engine is up: once a game is starting it owns the screen
+  // (the menu, the asset segment, the music), so every step after an await gives way to it
   const game = await getGame();
+  if (starting) return;
   assets.setSegment("menu");
   const { MenuStage } = await import("./scenes/MenuStage");
-  await game.setStage(async () => new MenuStage(game.engine).init());
+  if (starting) return;
+  // after a failed start the menu scene is usually still up
+  if (!(game.stage instanceof MenuStage)) await game.setStage(async () => new MenuStage(game.engine).init());
+  if (starting) return;
   menuEl.classList.remove("hidden", "fade");
+  // back from a game left on a black screen (a chapter change, a skip): nothing clears it on the menu
+  void hud.fade(false, 0.3);
   document.getElementById("smoke")!.classList.add("off");
   await refreshSaves();
-  void audio.playMusic("audio/music_menu", { fade: 4, volume: 0.8 }).catch(() => {});
+  if (starting) return;
+  // playMusic waits for the track first and stopMusic can't cancel that wait: only start the theme
+  // once it's loaded, if no game has started meanwhile (no AudioContext yet: no gesture, no music)
+  if (audio.ctx)
+    void audio
+      .load("audio/music_menu")
+      .then(() => {
+        if (!starting && !menuEl.classList.contains("hidden") && !menuEl.classList.contains("fade"))
+          return audio.playMusic("audio/music_menu", { fade: 4, volume: 0.8 });
+      })
+      .catch(() => {});
   // build the ride behind the menu straight away (downloads overlap with parsing/compiling)
   void preloadPrologue();
 }
 
 async function refreshSaves() {
-  const has = !!(await latestSave());
-  buttons.find((b) => b.dataset.act === "continue")!.disabled = !has;
+  // without the saves DB (storage blocked, private mode) 继续/读取 stay disabled and 新游戏 still works
+  const has = !!(await latestSave().catch((e) => {
+    console.warn("saves unavailable", e);
+    return undefined;
+  }));
+  const cont = buttons.find((b) => b.dataset.act === "continue")!;
+  // with a save 继续 is the default (Enter on 新游戏 starts over and replaces the autosave), unless
+  // the player has already moved the cursor
+  const toCont = has && cont.disabled && buttons[sel].dataset.act === "new";
+  cont.disabled = !has;
   buttons.find((b) => b.dataset.act === "load")!.disabled = !has;
-  if (buttons[sel].disabled) select(0);
+  if (toCont || buttons[sel].disabled) selectFirst();
 }
 
 // ---------------------------------------------------------------- prologue preloading
@@ -134,6 +244,7 @@ let preload: Promise<PrologueStageT> | null = null;
 function preloadPrologue() {
   preload ??= (async () => {
     const game = await getGame();
+    await assetsReady;
     const tw = performance.now();
     // request the ride's start pack now (it jumps the queue); init() consumes each asset as it lands
     void Promise.all(assets.startPack("cart").map((id) => assets.get(id))).then(() =>
@@ -141,7 +252,13 @@ function preloadPrologue() {
     );
     const { PrologueStage } = await import("./prologue/PrologueStage");
     const st = new PrologueStage(game);
-    await st.init();
+    try {
+      await st.init();
+    } catch (e) {
+      // a half-built world still holds its scene, textures and models
+      st.dispose();
+      throw e;
+    }
     mark("cart-preloaded");
     return st;
   })();
@@ -160,49 +277,82 @@ function toPrologueSave(save: SaveGame | null): PrologueSaveT {
   return { chapter: "cart", state: st };
 }
 
+/**
+ * There is one autosave slot and every chapter checkpoint goes there: a new game keeps the save it
+ * replaces as a second autosave in 读取 instead of losing it. Not when that save is still on the ride
+ * (say the last new game's own start): then auto-prev keeps the real checkpoint from before it.
+ */
+async function newGameAutosave(game: Game) {
+  const prev = (await listSaves()).find((s) => s.id === "auto");
+  if (prev && toPrologueSave(prev).chapter !== "cart") await writeSave({ ...prev, id: "auto-prev" });
+  await game.save("auto");
+}
+
 let starting = false;
 async function startFromSave(save: SaveGame | null) {
   if (starting) return;
   starting = true;
   audio.unlock();
   audio.uiTick("select");
+  // the menu stops taking input right away, not after the engine comes up (seconds on a first visit)
+  menuEl.classList.add("fade");
+  hud.loading(true, "正在准备");
+  let game: Game | undefined;
+  // what a failed start has to take down again: the stage it built and its progress listener
+  let built: PrologueStageT | undefined;
+  let off: (() => void) | undefined;
   try {
-    const game = await getGame();
+    game = await getGame();
     const ps = toPrologueSave(save);
     assets.setSegment(ps.chapter);
     let ready = false;
-    const off = assets.onProgress(() => {
+    off = assets.onProgress(() => {
       if (!ready) hud.loading(true, `正在准备 ${Math.round(assets.startPackProgress(ps.chapter) * 100)}%`);
     });
-    hud.loading(true, "正在准备");
-    menuEl.classList.add("fade");
     audio.stopMusic(2.5);
     const st = await preloadPrologue();
+    built = st;
     preload = null; // a later "new game" builds a fresh stage
     await st.prepareChapter(ps);
     ready = true;
-    off();
     hud.loading(false);
     await hud.fade(true, 1.0);
     menuEl.classList.add("hidden");
+    // the CSS smoke is still up if the game was started before the 3D menu was
+    document.getElementById("smoke")!.classList.add("off");
+    // a sneak toggled on in the last game (exit to menu, or 读取 from the pause menu) doesn't carry over
+    input.resetLatches();
     await game.setStage(async () => st);
-    if (!save) await game.save("auto");
+    // the game is running now: a failed autosave must not throw the player back to the menu
+    if (!save) await newGameAutosave(game).catch((err) => console.warn("autosave failed", err));
     mark("cart-started");
     console.info(`[timing] cart started ${(performance.now() - t0).toFixed(0)} ms after boot`);
     await hud.fade(false, 2.5);
   } catch (e) {
     console.error(e);
+    // a stage that never reached the screen still holds a whole world (scene, GPU resources, physics)
+    if (built && game?.stage !== built) built.dispose();
     hud.loading(false);
     void hud.fade(false, 0.3);
-    menuEl.classList.remove("hidden", "fade");
-    alert("无法开始游戏：" + (e as Error).message);
+    // the menu scene, its music and the preload behind it: this start stopped or used them up, or
+    // began before the 3D menu was up (showMenu gives way to a start, so clear the flag first)
+    starting = false;
+    // 读取 from the pause menu: that game is still on and Game reopens its pause menu
+    if (!game?.stage?.gameplay) {
+      menuEl.classList.remove("hidden", "fade");
+      if (game) void showMenu().catch((err) => console.error(err));
+    }
+    alert("无法开始游戏：" + (e instanceof Error ? e.message : String(e)));
   } finally {
+    off?.();
     starting = false;
   }
 }
 
 for (const b of buttons) {
   b.addEventListener("click", async () => {
+    // the focused button still answers Enter/Space by itself while the menu fades out for a start
+    if (!menuVisible()) return;
     audio.unlock();
     switch (b.dataset.act) {
       case "new":
@@ -243,19 +393,21 @@ assets.onProgress((p) => {
   const done = p.segments.reduce((s, x) => s + x.bytesDone, 0);
   if (!total) return;
   if (done >= total) hud.downloadStatus(menuEl.classList.contains("hidden") ? "" : "全部资源已缓存，可离线游玩");
+  else if (!p.caching) hud.downloadStatus(menuEl.classList.contains("hidden") ? "" : "无法使用本地缓存，资源将在需要时下载");
   else if (!menuEl.classList.contains("hidden"))
     hud.downloadStatus(`后台下载资源 ${Math.round((done / total) * 100)}%${p.bps > 0 ? ` · ${(p.bps / 1e6).toFixed(1)} MB/s` : ""}`);
   else hud.downloadStatus("");
 });
 
+// saves live in their own DB: 继续 and 读取 don't wait for the manifest and the asset worker
+void refreshSaves();
+
 (async () => {
   try {
-    const manifest = await manifestP;
-    await assets.init(manifest, "menu");
+    await assetsReady;
     mark("assets-ready");
     void navigator.storage?.persist?.().catch(() => {});
-    void refreshSaves();
-    void listSaves();
+    void listSaves().catch(() => {});
     await showMenu();
     mark("menu-3d-ready");
     const mi = performance.getEntriesByName("menu-interactive")[0]?.startTime ?? 0;

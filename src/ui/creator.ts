@@ -37,8 +37,12 @@ export interface CreatorCallbacks {
   onRotate(delta: number): void;
 }
 
-/** Character creation panel. Resolves with the final appearance when the player confirms. */
-export function openCreator(initial: Appearance, cb: CreatorCallbacks): Promise<Appearance> {
+/**
+ * Character creation panel. Resolves with the final appearance when the player confirms. `close()`
+ * takes the panel and its listeners down without an answer (a skip, the stage going away): the
+ * promise then never settles, so await it through the chapter scope's `wait()`.
+ */
+export function openCreator(initial: Appearance, cb: CreatorCallbacks): Promise<Appearance> & { close(): void } {
   if (!document.getElementById("creator-css")) {
     const st = document.createElement("style");
     st.id = "creator-css";
@@ -51,7 +55,8 @@ export function openCreator(initial: Appearance, cb: CreatorCallbacks): Promise<
   document.getElementById("ui")!.appendChild(root);
   input.releaseLock();
 
-  return new Promise((resolve) => {
+  let close = () => {};
+  const result = new Promise<Appearance>((resolve) => {
     let dragging = false, lastX = 0;
     const canvas = document.getElementById("scene")!;
     const down = (e: PointerEvent) => {
@@ -73,9 +78,21 @@ export function openCreator(initial: Appearance, cb: CreatorCallbacks): Promise<
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
     window.addEventListener("keydown", key);
+    close = () => {
+      canvas.removeEventListener("pointerdown", down);
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("keydown", key);
+      root.remove();
+    };
 
     const emit = (sexChanged = false) => cb.onChange({ ...a }, sexChanged);
     const render = () => {
+      // the rebuild replaces every control: keep the keyboard focus on the one that was activated
+      const f = document.activeElement instanceof HTMLElement && root.contains(document.activeElement) ? document.activeElement : null;
+      const attr = f && [...f.attributes].find((x) => x.name.startsWith("data-"));
+      const sel = attr ? `[${attr.name}="${attr.value}"]` : f?.matches("input[type=text]") ? "input[type=text]" : null;
+      const nth = sel ? [...root.querySelectorAll(sel)].indexOf(f!) : -1;
       const race = RACES.find((r) => r.id === a.race)!;
       const styles = HAIR_STYLES[a.sex];
       root.innerHTML = `
@@ -83,12 +100,12 @@ export function openCreator(initial: Appearance, cb: CreatorCallbacks): Promise<
         <h3>种族</h3>
         <div class="list">${RACES.map((r) => `<button class="${r.id === a.race ? "on" : ""}" data-race="${r.id}">${r.name}</button>`).join("")}</div>
         <div class="desc">${race.desc}</div>
-        <div class="row"><label>性别</label><div class="stepper"><button data-sex-step="-1">◀</button><span>${a.sex === "m" ? "男" : "女"}</span><button data-sex-step="1">▶</button></div><output></output></div>
+        <div class="row"><label>性别</label><div class="stepper"><button data-sex-step="-1" aria-label="上一个">◀</button><span>${a.sex === "m" ? "男" : "女"}</span><button data-sex-step="1" aria-label="下一个">▶</button></div><output></output></div>
         <h3>外貌</h3>
         ${slider("height", "身高", a.height)}${slider("build", "体格", a.build)}${slider("head", "头部", a.head)}${slider("skin", "肤色", a.skin * 2 - 1)}
         <h3>头发</h3>
-        <div class="row"><label>发型</label><div class="stepper"><button data-hair-step="-1">◀</button><span>${styles[a.hair % styles.length].name}</span><button data-hair-step="1">▶</button></div><output></output></div>
-        ${a.sex === "m" ? `<div class="row"><label>胡须</label><div class="stepper"><button data-beard>◀</button><span>${a.beard ? "有" : "无"}</span><button data-beard>▶</button></div><output></output></div>` : ""}
+        <div class="row"><label>发型</label><div class="stepper"><button data-hair-step="-1" aria-label="上一个">◀</button><span>${styles[a.hair % styles.length].name}</span><button data-hair-step="1" aria-label="下一个">▶</button></div><output></output></div>
+        ${a.sex === "m" ? `<div class="row"><label>胡须</label><div class="stepper"><button data-beard aria-label="上一个">◀</button><span>${a.beard ? "有" : "无"}</span><button data-beard aria-label="下一个">▶</button></div><output></output></div>` : ""}
         <div class="row"><label>发色</label><div class="swatches">${HAIR_COLORS.map((h, i) => `<button class="sw ${i === a.hairColor ? "on" : ""}" title="${h.name}" data-hc="${i}" style="background:rgb(${h.c.map((v) => Math.min(255, v * 200)).join(",")})"></button>`).join("")}</div><output></output></div>
         <h3>名字</h3>
         <input type="text" maxlength="12" placeholder="输入你的名字" value="${a.name.replace(/"/g, "&quot;")}">
@@ -177,16 +194,14 @@ export function openCreator(initial: Appearance, cb: CreatorCallbacks): Promise<
           return;
         }
         audio.uiTick("select");
-        canvas.removeEventListener("pointerdown", down);
-        window.removeEventListener("pointermove", move);
-        window.removeEventListener("pointerup", up);
-        window.removeEventListener("keydown", key);
-        root.remove();
+        close();
         resolve({ ...a });
       });
+      if (sel) root.querySelectorAll<HTMLElement>(sel)[nth]?.focus({ preventScroll: true });
     };
     render();
   });
+  return Object.assign(result, { close: () => close() });
 }
 
 function slider(k: string, label: string, v: number) {

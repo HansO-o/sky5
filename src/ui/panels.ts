@@ -7,23 +7,54 @@ import { heading, styleRange } from "./widgets";
 
 const fmtMB = (b: number) => (b / 1024 / 1024).toFixed(1) + " MB";
 
+/** The game reloads the page itself (清除缓存): main.ts's beforeunload guard doesn't ask then. */
+export let reloading = false;
+
 function panel(title: string) {
   closePanel();
   const p = document.createElement("section");
   p.className = "panel";
   p.id = "panel";
   p.setAttribute("role", "dialog");
+  p.setAttribute("aria-modal", "true");
+  p.setAttribute("aria-label", title);
+  p.tabIndex = -1;
   p.appendChild(heading(title));
+  // keyboard focus moves into the dialog and Tab cycles through its controls
+  p.addEventListener("keydown", (e) => {
+    if (e.code !== "Tab") return;
+    const f = [...p.querySelectorAll<HTMLElement>("button, input, a[href]")];
+    if (!f.length) return;
+    const at = document.activeElement;
+    if (e.shiftKey && (at === f[0] || at === p)) f[f.length - 1].focus();
+    else if (!e.shiftKey && at === f[f.length - 1]) f[0].focus();
+    else return;
+    e.preventDefault();
+  });
+  returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   document.getElementById("ui")!.appendChild(p);
+  p.focus({ preventScroll: true });
+  // the rest of the page is out of reach (Tab, clicks) while the dialog is open: the dimmed main menu
+  // under it would otherwise still take Tab + Enter (新游戏 behind the settings)
+  behind = ["menu", "pause", "scene"].flatMap((id) => document.getElementById(id) ?? []);
+  behind.forEach((el) => el.setAttribute("inert", ""));
   return p;
 }
 
 let onClose: (() => void) | null = null;
+/** Where the focus was before the panel opened (a menu button); it goes back there on close. */
+let returnFocus: HTMLElement | null = null;
+/** The page behind the open panel, made inert. */
+let behind: HTMLElement[] = [];
 export function closePanel() {
   const p = document.getElementById("panel");
   if (!p) return false;
   p.remove();
   input.keyHook = null;
+  behind.forEach((el) => el.removeAttribute("inert"));
+  behind = [];
+  if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
+  returnFocus = null;
   const cb = onClose;
   onClose = null;
   cb?.();
@@ -125,6 +156,7 @@ export function openSettings(close?: () => void) {
   h3("控制");
   slider(p, "鼠标灵敏度", 0.2, 3, 0.05, () => s.value.sensitivity, (v) => s.set("sensitivity", v), (v) => v.toFixed(2));
   checkbox(p, "反转 Y 轴", () => s.value.invertY, (v) => s.set("invertY", v));
+  row(p, "潜行方式", stepper<boolean>([[false, "按住"], [true, "切换"]], () => s.value.sneakToggle, (v) => s.set("sneakToggle", v)));
   h3("声音");
   const pct = (v: number) => `${Math.round(v * 100)}%`;
   slider(p, "主音量", 0, 1, 0.01, () => s.value.master, (v) => s.set("master", v), pct);
@@ -136,21 +168,45 @@ export function openSettings(close?: () => void) {
   h3("按键");
   const keys = document.createElement("div");
   keys.className = "keys";
+  let stopWaiting = () => {};
   for (const a of Object.keys(DEFAULT_KEYS) as Action[]) {
     const b = document.createElement("button");
     b.className = "btn";
     b.textContent = keyLabel(s.value.keys[a]);
+    let waiting = false, mouseBound = false;
+    const stop = (code?: string) => {
+      if (code) s.set("keys", { ...s.value.keys, [a]: code });
+      waiting = false;
+      b.classList.remove("wait");
+      b.textContent = keyLabel(s.value.keys[a]);
+      input.keyHook = null;
+      stopWaiting = () => {};
+    };
     b.onclick = () => {
+      if (mouseBound) return void (mouseBound = false); // the click that ends a left-button binding
+      stopWaiting();
+      waiting = true;
+      stopWaiting = stop;
       b.classList.add("wait");
       b.textContent = "按下新按键…";
       input.keyHook = (e) => {
-        if (e.code !== "Escape") s.set("keys", { ...s.value.keys, [a]: e.code });
-        b.classList.remove("wait");
-        b.textContent = keyLabel(s.value.keys[a]);
-        input.keyHook = null;
+        if (e.code === "Escape") stop();
+        // modifiers start browser shortcuts (Ctrl+W closes the tab); F11/F12 are the browser's
+        else if (!e.code || /^(Control|Meta|Alt|OS)|^F1[12]$/.test(e.code)) b.textContent = "该键不可用";
+        else stop(e.code);
         return true;
       };
     };
+    // a mouse button is bound by pressing it on the waiting button
+    b.onmousedown = (e) => {
+      mouseBound = false;
+      // e.detail > 1: the second press of a double-click on the button isn't a left-button binding
+      if (!waiting || e.button > 2 || e.detail > 1) return;
+      e.preventDefault();
+      mouseBound = e.button === 0;
+      stop(`Mouse${e.button}`);
+    };
+    b.oncontextmenu = (e) => e.preventDefault();
     row(keys, ACTION_LABELS[a], b);
   }
   p.appendChild(keys);
@@ -173,6 +229,7 @@ export function openSettings(close?: () => void) {
   clear.onclick = async () => {
     if (!confirm("清除全部已下载的游戏资源？清除后将重新加载页面，资源需要重新下载。存档不受影响。")) return;
     await assets.clear();
+    reloading = true;
     location.reload();
   };
   row(p, "缓存占用", usage, clear);

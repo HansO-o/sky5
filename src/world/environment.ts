@@ -147,6 +147,8 @@ export async function createEnvironment(scene: Scene, camera: Camera): Promise<E
   pipeline.bloomScale = 0.5;
 
   let mood = 0, baseFog = 0.0024;
+  /** tier last applied: re-applying the same one is a no-op (it would rebuild the shadow maps) */
+  let tier: Quality | null = null;
   const sunBase = { c: sun.diffuse.clone(), i: sun.intensity }, envBase = scene.environmentIntensity;
   const SMOKE = new Color3(0.36, 0.29, 0.25), FIRE_SUN = new Color3(1, 0.6, 0.38);
   const applyMood = () => {
@@ -170,6 +172,8 @@ export async function createEnvironment(scene: Scene, camera: Camera): Promise<E
       shadows?.addShadowCaster(m, false);
     },
     applyQuality(q) {
+      if (q === tier) return;
+      tier = q;
       if (q === "low") {
         shadows?.dispose();
         shadows = null;
