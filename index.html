@@ -162,6 +162,27 @@
       #toast.on { opacity: 1; transform: none; }
       #toast.on::after { width: 120%; }
       #dlstatus { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); font-size: 11px; color: var(--ink-faint); pointer-events: none; letter-spacing: .2em; }
+      /* objective line under the toast, and the compass with the quest marker (hidden while the screen is black, paused or in menus) */
+      #objective { position: fixed; left: 34px; top: 66px; font-family: var(--display); font-size: 14px; letter-spacing: .16em; color: #cfc8b8; text-shadow: 0 0 6px #000, 0 0 2px #000; pointer-events: none; opacity: 0; transition: opacity .6s; max-width: min(440px, 70vw); padding-left: 18px; }
+      #objective::before { content: ""; position: absolute; left: 2px; top: .55em; width: 6px; height: 6px; background: #e6d39a; transform: rotate(45deg); }
+      #objective.on { opacity: 1; }
+      #compass { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); width: min(520px, 62vw); height: 26px; pointer-events: none; opacity: 0; transition: opacity .4s;
+        background: linear-gradient(90deg, transparent, var(--line-strong) 18%, var(--line-strong) 82%, transparent) left bottom / 100% 1px no-repeat,
+                    radial-gradient(ellipse 50% 100% at 50% 100%, rgba(0,0,0,.35), transparent 75%); }
+      #compass.on { opacity: 1; }
+      body:has(#fade.on) #compass, body:has(#fade.on) #objective, body:has(#pause) #compass, body:has(#pause) #objective,
+      body:has(#menu:not(.hidden)) #compass, body:has(#menu:not(.hidden)) #objective, body:has(#endcard) #compass, body:has(#endcard) #objective { opacity: 0 !important; transition: none; }
+      #compass i { position: absolute; bottom: 0; width: 1px; height: 5px; background: var(--ink-dim); transform: translateX(-50%); }
+      #compass i.major { height: 8px; }
+      #compass i.card { width: auto; height: auto; background: none; bottom: 6px; font: 400 13px/1 var(--display); color: var(--ink); text-shadow: 0 0 4px #000; font-style: normal; }
+      #compass .mark { position: absolute; bottom: -5px; width: 0; height: 0; transform: translateX(-50%); display: none; }
+      #compass .mark.on { display: block; }
+      #compass .mark::before { content: ""; position: absolute; left: -5px; top: -2px; width: 9px; height: 9px; background: #e6d39a; border: 1px solid #3a3322; transform: rotate(45deg); box-shadow: 0 0 6px rgba(230,211,154,.6); }
+      #compass .mark.left::after, #compass .mark.right::after { content: ""; position: absolute; top: -1px; width: 0; height: 0; border-top: 5px solid transparent; border-bottom: 5px solid transparent; }
+      #compass .mark.left::after { left: 9px; border-right: 7px solid #e6d39a; }
+      #compass .mark.right::after { right: 9px; border-left: 7px solid #e6d39a; }
+      #compass .dist { position: absolute; top: 12px; left: 0; transform: translateX(-50%); font-size: 11px; letter-spacing: .1em; color: #cfc8b8; white-space: nowrap; text-shadow: 0 0 3px #000, 0 0 2px #000; }
+      @media (max-width: 1150px) { #toast { top: 58px; } #objective { top: 94px; } }
       #prompt { position: fixed; left: 50%; bottom: 26vh; transform: translateX(-50%); font-size: 14px; letter-spacing: .2em; color: var(--ink-dim); text-shadow: 0 0 4px #000; pointer-events: none; }
       #endcard { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; font-family: var(--display); pointer-events: auto; background: radial-gradient(ellipse at center, rgba(0,0,0,.2), #000 75%); }
       #endcard .heading { width: min(560px, 88vw); margin: 0; }

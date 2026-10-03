@@ -7,6 +7,7 @@ import { input } from "../core/input";
 import { settings, type Quality } from "../core/settings";
 import { hud } from "../ui/hud";
 import { heading } from "../ui/widgets";
+import { objective, updateCompass } from "../ui/compass";
 import { buildTown, GATE, LAYOUT, type Town } from "../world/town";
 import { L, Physics } from "../physics/Physics";
 import { VertexBuffer } from "@babylonjs/core/Buffers/buffer";
@@ -320,6 +321,8 @@ export class PrologueStage implements Stage {
         // also ends what a finished chapter left running (detached script branches)
         cur.scope.cancel();
         ch.dispose();
+        // a chapter's objective never outlives it
+        objective.clear();
         // every chapter starts with no music states (it registers its own tracks)
         audio.resetMusicState();
         this.running = null;
@@ -393,13 +396,15 @@ export class PrologueStage implements Stage {
     while (this.paused && !this.disposed) await nextFrame();
     if (this.disposed) return;
     hud.clearSubtitle();
+    objective.clear();
+    updateCompass(null, false);
     audio.stopAllBeds(2);
     audio.stopMusic(3);
     audio.resetMusicState();
     const card = document.createElement("section");
     card.id = "endcard";
     card.appendChild(heading("雾门镇"));
-    card.insertAdjacentHTML("beforeend", `<p>序章 · 未完待续</p><p style="font-size:13px;letter-spacing:.2em">阵营选择、要塞与出洞将在之后的版本中开放</p><button>返回主菜单</button>`);
+    card.insertAdjacentHTML("beforeend", `<p>序章 · 未完待续</p><p style="font-size:13px;letter-spacing:.2em">要塞与出洞两章正在制作中，完成后会从这里接着往下走</p><button>返回主菜单</button>`);
     card.querySelector("button")!.addEventListener("click", () => {
       card.remove();
       void hud.fade(false, 0.5);
@@ -418,6 +423,8 @@ export class PrologueStage implements Stage {
     this.player?.update(dt);
     this.chapter?.update?.(dt);
     this.world.update(dt);
+    // the compass shows whenever the player is in control of the body
+    updateCompass(this.world.rig.camera, this.gameplay && !!this.player?.enabled && this.world.rig.mode === "player", this.player?.position);
   }
 
   applyQuality(q: Quality) {
@@ -451,6 +458,8 @@ export class PrologueStage implements Stage {
     // a stage that never reached the screen (a failed load from the pause menu) owns none of the
     // global audio/HUD state: that still belongs to the game being played
     if (this.begun) {
+      objective.clear();
+      updateCompass(null, false);
       audio.stopAllBeds(1);
       hud.clearSubtitle();
       hideSubtitle(false);
