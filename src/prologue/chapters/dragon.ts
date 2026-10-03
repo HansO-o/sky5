@@ -79,7 +79,8 @@ export class DragonChapter implements Chapter {
       if (!w.npcs.has(k) && this.step === 0) {
         const female = k === "priestess";
         if (female) await w.ensureFemale();
-        w.npc(k, { sex: female ? "f" : "m", outfit: k === "p1" ? OUTFITS.peasant : OUTFITS.soldier, hair: female ? ["hair_buns"] : ["hair_buzzed"] });
+        const c = w.npc(k, { sex: female ? "f" : "m", outfit: k === "p1" ? OUTFITS.peasant : OUTFITS.soldier, hair: female ? ["hair_buns"] : ["hair_buzzed"] });
+        stand(w, c, rand(50, 68), rand(-598, -590), PL);
       }
     }
     const deck = w.heightAt(PL.x, PL.z) + 0.8;
