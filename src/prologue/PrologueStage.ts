@@ -6,6 +6,7 @@ import { audio } from "../core/audio";
 import { input } from "../core/input";
 import { settings, type Quality } from "../core/settings";
 import { hud } from "../ui/hud";
+import { heading } from "../ui/widgets";
 import { buildTown, LAYOUT, type Town } from "../world/town";
 import { L, Physics } from "../physics/Physics";
 import { VertexBuffer } from "@babylonjs/core/Buffers/buffer";
@@ -280,7 +281,8 @@ export class PrologueStage implements Stage {
     audio.stopMusic(3);
     const card = document.createElement("section");
     card.id = "endcard";
-    card.innerHTML = `<h2>雾 门 镇</h2><p>序章 · 未完待续</p><p style="font-size:13px">阵营选择、要塞与出洞将在之后的版本中开放</p><button>返回主菜单</button>`;
+    card.appendChild(heading("雾门镇"));
+    card.insertAdjacentHTML("beforeend", `<p>序章 · 未完待续</p><p style="font-size:13px;letter-spacing:.2em">阵营选择、要塞与出洞将在之后的版本中开放</p><button>返回主菜单</button>`);
     card.querySelector("button")!.addEventListener("click", () => {
       card.remove();
       void hud.fade(false, 0.5);

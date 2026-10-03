@@ -15,6 +15,7 @@ npm run build           # 类型检查 + Vite 打包到 dist/（含 Service Work
 npm run preview         # 本地静态服务器 http://localhost:4173（brotli，可加 --mbps 20 模拟带宽）
 ```
 
+- 界面字体：Noto Serif SC（SIL OFL）。`node tools/fetch-fonts.mjs` 只取界面用到的字符做子集，两个字重共约 150 KB。改了界面文字后要重新运行。
 - 源资源来自 Poly Haven（贴图、模型、HDRI）、Quaternius 的 itch.io 免费包（人物、服装、动画）、0 A.D.（马）、OpenGameArt 和 Freesound（音乐、音效）。授权见 `tools/credits-extra.mjs` 和各目录里保留的原始授权文件。
 - `assets-src/` 是生成物，不入库。`public/data/` 和 `public/manifest.json` 也是生成物，但为了让 Cloudflare 构建直接可用而提交进仓库。
 - 开发时用 `npm run dev`（不启用 Service Worker）。
@@ -102,6 +103,7 @@ CH=execution TS=4 node tests/chapter.mjs     # 单独跑一段，每句台词截
 node tests/muster.mjs           # 点名 + 捏人
 node tests/dragon.mjs           # 巨龙段，自动把玩家送到各个目标点
 node tests/jump.mjs             # 用真实按键和物理：从塔楼缺口跳进旅店，再从门口出去
+node tests/ui.mjs               # 各菜单界面截图（主菜单、设置、制作人员、捏人、暂停、读取）
 ```
 
 最近一次验收（M2，容器内无头 Chromium，**纯软件渲染 SwiftShader**，约 1 fps）：

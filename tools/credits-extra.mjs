@@ -1,5 +1,6 @@
 // Non-Poly-Haven third-party assets and libraries, shown on the credits page.
 export const EXTRA_CREDITS = [
+  {id: "font-noto-serif-sc", kind: "font", name: "Noto Serif SC（界面所用字符子集）", authors: ["Google", "Adobe"], source: "https://fonts.google.com/noto/specimen/Noto+Serif+SC", license: "SIL OFL 1.1", licenseUrl: "https://openfontlicense.org/"},
   { id: "quaternius-ubc", kind: "model", name: "Universal Base Characters", authors: ["Quaternius"], source: "https://quaternius.com/packs/universalbasecharacters.html", license: "CC0 1.0", licenseUrl: "https://creativecommons.org/publicdomain/zero/1.0/" },
   { id: "quaternius-outfits", kind: "model", name: "Modular Character Outfits – Fantasy", authors: ["Quaternius"], source: "https://quaternius.com/packs/modularcharacteroutfitsfantasy.html", license: "CC0 1.0", licenseUrl: "https://creativecommons.org/publicdomain/zero/1.0/" },
   { id: "quaternius-ual", kind: "animation", name: "Universal Animation Library 1 & 2", authors: ["Quaternius"], note: "完整片段集经 Cinevva 托管", source: "https://quaternius.com/packs/universalanimationlibrary.html", license: "CC0 1.0", licenseUrl: "https://creativecommons.org/publicdomain/zero/1.0/" },

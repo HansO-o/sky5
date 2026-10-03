@@ -3,6 +3,7 @@ import { audio } from "../core/audio";
 import { input } from "../core/input";
 import { ACTION_LABELS, DEFAULT_KEYS, keyLabel, settings, type Action, type Quality } from "../core/settings";
 import { listSaves, type SaveGame } from "../core/saves";
+import { heading, styleRange } from "./widgets";
 
 const fmtMB = (b: number) => (b / 1024 / 1024).toFixed(1) + " MB";
 
@@ -12,9 +13,7 @@ function panel(title: string) {
   p.className = "panel";
   p.id = "panel";
   p.setAttribute("role", "dialog");
-  const h = document.createElement("h2");
-  h.textContent = title;
-  p.appendChild(h);
+  p.appendChild(heading(title));
   document.getElementById("ui")!.appendChild(p);
   return p;
 }
@@ -67,6 +66,7 @@ function slider(p: HTMLElement, label: string, min: number, max: number, step: n
   i.max = String(max);
   i.step = String(step);
   i.value = String(get());
+  styleRange(i);
   const o = document.createElement("output");
   o.textContent = fmt(get());
   i.oninput = () => {
@@ -76,25 +76,37 @@ function slider(p: HTMLElement, label: string, min: number, max: number, step: n
   row(p, label, i, o);
 }
 
+/** Option picker in the style of a console menu: ‹ value › (click the arrows or the value). */
+function stepper<T>(options: [T, string][], get: () => T, set: (v: T) => void) {
+  const w = document.createElement("div");
+  w.className = "stepper";
+  const prev = document.createElement("button"), next = document.createElement("button"), v = document.createElement("span");
+  prev.textContent = "◀";
+  next.textContent = "▶";
+  prev.setAttribute("aria-label", "上一个");
+  next.setAttribute("aria-label", "下一个");
+  const show = () => (v.textContent = options.find(([x]) => x === get())?.[1] ?? "");
+  const step = (d: number) => {
+    const k = options.findIndex(([x]) => x === get());
+    set(options[(k + d + options.length) % options.length][0]);
+    audio.uiTick("move");
+    show();
+  };
+  prev.onclick = () => step(-1);
+  next.onclick = () => step(1);
+  v.onclick = () => step(1);
+  v.style.cursor = "pointer";
+  show();
+  w.append(prev, v, next);
+  return w;
+}
+
 function select<T extends string>(p: HTMLElement, label: string, options: [T, string][], get: () => T, set: (v: T) => void) {
-  const s = document.createElement("select");
-  for (const [v, t] of options) {
-    const o = document.createElement("option");
-    o.value = v;
-    o.textContent = t;
-    s.appendChild(o);
-  }
-  s.value = get();
-  s.onchange = () => set(s.value as T);
-  row(p, label, s);
+  row(p, label, stepper(options, get, set));
 }
 
 function checkbox(p: HTMLElement, label: string, get: () => boolean, set: (v: boolean) => void) {
-  const c = document.createElement("input");
-  c.type = "checkbox";
-  c.checked = get();
-  c.onchange = () => set(c.checked);
-  row(p, label, c);
+  row(p, label, stepper<boolean>([[true, "开"], [false, "关"]], get, set));
 }
 
 export function openSettings(close?: () => void) {
@@ -186,7 +198,7 @@ export async function openCredits(close?: () => void) {
   const { default: data } = await import("../generated/credits.json");
   const list = c.querySelector("#credit-list")!;
   list.innerHTML = "";
-  const kinds: Record<string, string> = { model: "模型", texture: "贴图", hdri: "天空", animation: "动画", music: "音乐", sound: "音效", library: "程序库" };
+  const kinds: Record<string, string> = { font: "字体", model: "模型", texture: "贴图", hdri: "天空", animation: "动画", music: "音乐", sound: "音效", library: "程序库" };
   const add = (x: { name: string; authors: string[]; source: string; license: string; licenseUrl: string; kind: string; note?: string }) => {
     const d = document.createElement("div");
     const a = document.createElement("a");
@@ -216,23 +228,29 @@ export async function openLoad(onPick: (s: SaveGame) => void, close?: () => void
   const saves = await listSaves();
   if (!saves.length) {
     const e = document.createElement("p");
-    e.textContent = "没有存档。";
-    e.style.textAlign = "center";
+    e.className = "empty";
+    e.textContent = "没有存档";
     p.appendChild(e);
   }
+  const list = document.createElement("div");
+  list.className = "saves";
   for (const s of saves) {
     const b = document.createElement("button");
-    b.className = "btn";
-    b.style.width = "100%";
-    b.style.margin = "4px 0";
-    b.style.textAlign = "left";
     const kind = { auto: "自动存档", quick: "快速存档", manual: "存档" }[s.kind];
-    b.textContent = `${kind} · ${s.label} · ${new Date(s.createdAt).toLocaleString("zh-CN")}`;
+    const cells = [kind, s.label, new Date(s.createdAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })];
+    cells.forEach((t, i) => {
+      const c = document.createElement("span");
+      c.textContent = t;
+      if (i === 2) c.className = "when";
+      b.appendChild(c);
+    });
     b.onclick = () => {
+      audio.uiTick("select");
       closePanel();
       onPick(s);
     };
-    p.appendChild(b);
+    list.appendChild(b);
   }
+  p.appendChild(list);
   actions(p, [["返回", () => closePanel()]]);
 }

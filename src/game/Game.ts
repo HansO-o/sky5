@@ -1,3 +1,4 @@
+import { heading, menuList, orn } from "../ui/widgets";
 import type { AbstractEngine } from "@babylonjs/core/Engines/abstractEngine";
 import type { Scene } from "@babylonjs/core/scene";
 import { assets } from "../core/assets/AssetClient";
@@ -160,8 +161,8 @@ export class Game {
     document.getElementById("pause")?.remove();
     const p = document.createElement("section");
     p.id = "pause";
-    p.className = "panel";
-    p.innerHTML = `<h2>暂停</h2>`;
+    p.setAttribute("role", "dialog");
+    p.appendChild(heading("暂停"));
     const items: [string, () => void][] = [
       ["继续", () => this.pause(false)],
       ...((this.stage as unknown as { canSkip?: boolean }).canSkip
@@ -175,20 +176,12 @@ export class Game {
       ["设置", () => openSettings()],
       ["返回主菜单", () => this.exitToMenu()],
     ];
-    const nav = document.createElement("div");
-    nav.style.cssText = "display:flex;flex-direction:column;align-items:center;gap:10px";
-    for (const [label, fn] of items) {
-      const b = document.createElement("button");
-      b.className = "btn";
-      b.style.minWidth = "12em";
-      b.textContent = label;
-      b.onclick = () => {
-        audio.uiTick("select");
-        fn();
-      };
-      nav.appendChild(b);
-    }
-    p.appendChild(nav);
+    p.appendChild(menuList(items, { blocked: () => panelOpen() }));
+    const tail = document.createElement("div");
+    tail.className = "tail";
+    tail.appendChild(orn("mid"));
+    tail.style.display = "flex";
+    p.appendChild(tail);
     document.getElementById("ui")!.appendChild(p);
   }
 
