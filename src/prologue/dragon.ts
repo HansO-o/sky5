@@ -50,6 +50,8 @@ export class Dragon {
   private pivot: TransformNode;
   private offset = new Vector3();
   private offsetTarget = new Vector3();
+  /** cross-fade in progress: its per-frame observer and the clip it is fading out */
+  private fade: { obs: Observer<Scene>; out: AnimationGroup } | null = null;
 
   static async create(world: World) {
     const c = await loadGLB("dragon/dragon", world.scene);
@@ -103,13 +105,26 @@ export class Dragon {
   play(name: string, { loop = true, speed = 1, blend = 0.4 } = {}) {
     const g = this.groups.get(name);
     if (!g) return;
-    if (this.current === g) {
+    // a clip stopped by an interrupted cross-fade is started again
+    if (this.current === g && g.isStarted) {
       g.speedRatio = speed;
       return;
     }
-    const prev = this.current;
+    const prev = this.current === g ? null : this.current;
     this.current = g;
-    g.start(loop, speed, g.from, g.to, false);
+    const scene = this.world.scene;
+    // settle a cross-fade still in progress: the clip it was fading out stops unless it is wanted again
+    if (this.fade) {
+      if (this.fade.out !== g) this.fade.out.stop();
+      scene.onBeforeAnimationsObservable.remove(this.fade.obs);
+      this.fade = null;
+    }
+    // X->Y->X within the blend: X is still playing (fading out), so pick it up where it is
+    const g0 = g.isStarted ? g.weight : 0;
+    if (g.isStarted) {
+      g.loopAnimation = loop;
+      g.speedRatio = speed;
+    } else g.start(loop, speed, g.from, g.to, false);
     this.offsetTarget.fromArray(CLIP_OFFSET[name] ?? [0, 0, 0]);
     if (!prev) this.offset.copyFrom(this.offsetTarget);
     if (!prev || blend <= 0) {
@@ -117,20 +132,22 @@ export class Dragon {
       g.weight = 1;
       return;
     }
-    g.weight = 0;
+    const p0 = prev.weight;
+    g.weight = g0;
     let t = 0;
-    const scene = this.world.scene;
-    const o = scene.onBeforeAnimationsObservable.add(() => {
+    const obs = scene.onBeforeAnimationsObservable.add(() => {
       t += scene.getEngine().getDeltaTime() / 1000;
       const k = Math.min(1, t / blend);
-      g.weight = k;
-      prev.weight = 1 - k;
+      g.weight = g0 + (1 - g0) * k;
+      prev.weight = p0 * (1 - k);
       if (k >= 1) {
         prev.stop();
         prev.weight = 1;
-        scene.onBeforeAnimationsObservable.remove(o);
+        scene.onBeforeAnimationsObservable.remove(obs);
+        this.fade = null;
       }
     });
+    this.fade = { obs, out: prev };
   }
 
   /** World position of the mouth. */
@@ -265,6 +282,8 @@ export class Dragon {
     this.stopFlight();
     this.world.scene.onBeforeRenderObservable.remove(this.obs);
     this.world.scene.onBeforeAnimationsObservable.remove(this.obsRestore);
+    if (this.fade) this.world.scene.onBeforeAnimationsObservable.remove(this.fade.obs);
+    this.fade = null;
     for (const g of this.groups.values()) g.dispose();
     this.root.dispose(false, false);
   }

@@ -17,6 +17,8 @@ npm run preview         # 本地静态服务器 http://localhost:4173（brotli�
 
 - 界面字体：Noto Serif SC（SIL OFL）。`node tools/fetch-fonts.mjs` 只取界面用到的字符做子集，两个字重共约 150 KB。改了界面文字后要重新运行。
 - 源资源来自 Poly Haven（贴图、模型、HDRI）、Quaternius 的 itch.io 免费包（人物、服装、动画）、0 A.D.（马）、OpenGameArt 和 Freesound（音乐、音效）。授权见 `tools/credits-extra.mjs` 和各目录里保留的原始授权文件。
+- 托管在别人 Git 仓库里的镜像（巨龙、马）固定到具体提交，并校验 sha256。巨龙由 `fetch-sources` 用 Blender 4.2.3 从镜像重新导出，结果必须与锁定的哈希一致（运行时的缩放和枢轴按这个文件调好）。Linux x64 会自动下载 Blender（约 350 MB，放在 `.cache/`）；其他平台请用 `BLENDER=<Blender 4.2.3 可执行文件>` 指定。
+- `build-assets --only=<前缀>` 只重建匹配的资源，其余沿用 `public/manifest.json` 里的条目，所以要求它存在、可解析，且引用的文件都在。
 - `assets-src/` 是生成物，不入库。`public/data/` 和 `public/manifest.json` 也是生成物，但为了让 Cloudflare 构建直接可用而提交进仓库。
 - 开发时用 `npm run dev`（不启用 Service Worker）。
 - 调试参数（拼在 URL 后）：
@@ -84,7 +86,7 @@ AssetClient.get(id) ──postMessage──▶ 优先级队列（并发 6）
 
 ## M2 内容
 
-- **点名**：下车列队、点名、偷马贼逃跑被弓箭手射倒（布娃娃），书记官问“你是谁？”。
+- **点名**：下车列队、点名、偷马贼逃跑被弓箭手射倒（布娃娃），书记官发现名单上找不到你，把你的名字添上。
 - **捏人**：五个种族、男女、身高、体格、头部、肤色、发型、发色、胡须、名字。可以拖动或按 Q/E 旋转。外貌存进存档。
 - **处决**：将军宣判、女祭司、第一个犯人上断头台（镜头移开）、远处两声龙吼、玩家跪到断头台前，看见巨龙落在塔楼上。
 - **巨龙袭城**：

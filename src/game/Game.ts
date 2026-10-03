@@ -92,7 +92,10 @@ export class Game {
   }
 
   private frameCount = 0;
+  /** the frame in which the pause menu last opened (see handleGlobalKeys) */
+  private pauseFrame = -1;
   private frame() {
+    this.frameCount++;
     const now = performance.now();
     const real = Math.max(1e-4, (now - this.last) / 1000);
     const dt = Math.min(0.1, real) * this.timeScale;
@@ -100,7 +103,8 @@ export class Game {
     input.poll(dt);
     const st = this.stage;
     if (st) {
-      if (st.gameplay && !this.transitioning && !this.modal && !this.loadingSave) this.handleGlobalKeys();
+      // a pause menu that opened before a modal UI (its chapter went on during a fade) still closes
+      if (st.gameplay && !this.transitioning && (!this.modal || this.paused) && !this.loadingSave) this.handleGlobalKeys();
       if (!this.paused) {
         st.update(dt);
         if (st.gameplay) this.playSeconds += dt;
@@ -115,7 +119,7 @@ export class Game {
       this.instr = new SceneInstrumentation(st.scene);
       this.instr.captureFrameTime = true;
     }
-    if (this.debugEl && ++this.frameCount % 15 === 0 && st) {
+    if (this.debugEl && this.frameCount % 15 === 0 && st) {
       const s = st.scene;
       const dc = this.instr?.drawCallsCounter.current;
       (window as unknown as { __stats: unknown }).__stats = { draws: dc, tris: (s.getActiveIndices() / 3) | 0, meshes: s.getActiveMeshes().length, fps: this.engine.getFps() };
@@ -129,9 +133,10 @@ export class Game {
   private handleGlobalKeys() {
     if (this.paused) {
       // back: the panel over the pause menu first, then the game. In play Game owns this (main.ts only
-      // on the main menu); the Esc that releases the pointer lock never reaches the page, so an Esc
-      // here was pressed in the pause menu
-      if (input.pressed("menu") || input.pressedCode("Escape") || input.padPressed(9) || input.padPressed(1)) {
+      // on the main menu). Not the Esc that released the pointer lock and so opened this menu: Chrome
+      // and Firefox keep it from the page, a browser that passes it on has it in the menu's first frame
+      const esc = input.pressedCode("Escape") && this.frameCount > this.pauseFrame + 1;
+      if (input.pressed("menu") || esc || input.padPressed(9) || input.padPressed(1)) {
         if (!closePanel()) this.pause(false);
       }
       return;
@@ -180,6 +185,7 @@ export class Game {
     this.paused = on;
     this.stage.setPaused(on);
     if (on) {
+      this.pauseFrame = this.frameCount;
       input.releaseLock();
       audio.suspend();
       this.openPauseMenu();
@@ -247,7 +253,9 @@ export class Game {
     try {
       await this.loadSave(s);
     } finally {
-      this.loadingSave = false;
+      // only after a failed load: a loaded game has had its keys since setStage, and may be loading
+      // another save from its own pause menu by the time this one's fade-in ends
+      if (this.stage === old) this.loadingSave = false;
     }
     // the load failed and the old game is still on: back to its pause menu
     if (this.stage === old && this.paused && !document.getElementById("pause")) {

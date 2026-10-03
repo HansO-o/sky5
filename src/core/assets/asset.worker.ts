@@ -41,7 +41,14 @@ const retryAt = new Map<string, number>(); // id -> performance.now() before whi
 // Ids the cache could not keep (write failed, or evicted to make room). They are only fetched on demand
 // until their segment is current or next again, so they are not downloaded over and over.
 const unwanted = new Set<string>();
+// Ids whose served data is wrong (hash or size mismatch, HTTP 4xx): another try cannot help before a new
+// deploy, so after MAX_RETRIES they are not probed like network failures. Only a get, a segment change or
+// 'online' gives them another round.
+const badData = new Set<string>();
 let writeFailures = 0; // consecutive failed cache writes; at MAX_RETRIES background prefetching stops
+// set by a segment change: the next store may evict again even while the cache only takes probes
+// (the segment just left is no longer protected, so evicting can free room now)
+let fullStoreOnce = false;
 let tight = false; // the cache had to evict for room: later and passed segments are no longer prefetched
 let segment: SegmentId = "menu";
 let player: { x: number; z: number } | null = null;
@@ -121,7 +128,7 @@ function pump() {
     if (cached.has(e.hash) || inflight.has(e.id)) continue;
     if ((retryAt.get(e.id) ?? 0) > now) continue; // backing off (or parked); a timer pumps again
     const demanded = demands.has(e.id);
-    if ((paused || !prefetch || unwanted.has(e.id)) && !demanded) continue;
+    if ((paused || !prefetch || unwanted.has(e.id) || badData.has(e.id)) && !demanded) continue;
     const r = rank(e);
     // short on space: don't fetch what would only push out the current and next segments' data
     if (tight && r[0] >= 4 && !demanded) continue;
@@ -157,6 +164,9 @@ function pump() {
 
 // ---------------------------------------------------------------- download
 
+/** The server answered, but with data that cannot be right (see badData). */
+class BadData extends Error {}
+
 async function sha256Hex(buf: ArrayBuffer) {
   const d = new Uint8Array(await crypto.subtle.digest("SHA-256", buf));
   let s = "";
@@ -170,6 +180,8 @@ async function download(e: ResolvedEntry, urgent: boolean) {
   inflight.set(e.id, rec);
   try {
     const res = await fetch(e.url, { signal: ctrl.signal });
+    // 4xx won't change on a retry (except a timeout or rate limit); 5xx and the like are transient
+    if (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) throw new BadData(`HTTP ${res.status}`);
     if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
     const out = new Uint8Array(e.size);
     const reader = res.body.getReader();
@@ -177,7 +189,7 @@ async function download(e: ResolvedEntry, urgent: boolean) {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      if (off + value.length > out.length) throw new Error("size mismatch");
+      if (off + value.length > out.length) throw new BadData("size mismatch");
       out.set(value, off);
       off += value.length;
       rec.received = off;
@@ -187,7 +199,7 @@ async function download(e: ResolvedEntry, urgent: boolean) {
     if (off !== e.size) throw new Error(`short read ${off}/${e.size}`);
     const buf = out.buffer;
     const h = await sha256Hex(buf);
-    if (h !== e.hash) throw new Error(`hash mismatch for ${e.id}`);
+    if (h !== e.hash) throw new BadData(`hash mismatch for ${e.id}`);
     // Hand the data to waiting callers first (cloning for all but the last), then persist.
     // Not persisted: kept out of the background queue, or pump() would download it again at once.
     if (!(await store(e, buf))) unwanted.add(e.id);
@@ -206,6 +218,13 @@ async function download(e: ResolvedEntry, urgent: boolean) {
       const n = (failures.get(e.id) ?? 0) + 1;
       failures.set(e.id, n);
       if (n >= MAX_RETRIES) failDemands(e.id, String(err));
+      if (n >= MAX_RETRIES && err instanceof BadData) {
+        // parked without probes: downloading (and hashing) it again would only fail the same way
+        badData.add(e.id);
+        retryAt.delete(e.id);
+        post({ t: "log", message: `download failed ${e.id} (${n}x, parked): ${String(err)}` });
+        return;
+      }
       // pump() skips the entry until then, whoever calls it
       const base = n < MAX_RETRIES ? 500 * 2 ** n : Math.min(PARKED_RETRY_MS * 2 ** (n - MAX_RETRIES), PARKED_RETRY_MAX_MS);
       const delay = base * (0.75 + Math.random() * 0.5);
@@ -222,8 +241,13 @@ async function download(e: ResolvedEntry, urgent: boolean) {
 async function store(e: ResolvedEntry, buf: ArrayBuffer): Promise<boolean> {
   const meta: Meta = { hash: e.hash, id: e.id, size: e.size, segment: e.segment, lastUsed: Date.now() };
   // The cache has stopped taking writes: each on-demand download makes one plain put() as a probe, without
-  // evicting anything (on a full disk deleting rows frees no quota, it would only empty the cache).
-  const probe = writeFailures >= MAX_RETRIES;
+  // evicting anything (on a full disk deleting rows frees no quota, it would only empty the cache). The first
+  // store after a segment change still makes a full attempt: an exhausted origin quota may have room now.
+  let probe = writeFailures >= MAX_RETRIES;
+  if (probe && fullStoreOnce) {
+    fullStoreOnce = false;
+    probe = false;
+  }
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       if (!db) return false;
@@ -425,6 +449,7 @@ const ready = Promise.race([
 self.addEventListener("online", () => {
   failures.clear();
   retryAt.clear();
+  badData.clear();
   if (entries.size) pump();
 });
 
@@ -462,6 +487,8 @@ async function handle(m: ToWorker) {
       // segment is current or next.
       failures.clear();
       retryAt.clear();
+      badData.clear();
+      fullStoreOnce = true;
       for (const id of unwanted) {
         const si = segmentIndex(entries.get(id)!.segment);
         if (si === cur || si === cur + 1) unwanted.delete(id);

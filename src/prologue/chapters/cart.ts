@@ -38,6 +38,8 @@ export class CartChapter implements Chapter {
   private stopAudio: (() => void)[] = [];
   private disposed = false;
   private skipHold = 0;
+  /** run() has started: only then does the ride own the global prompt */
+  private started = false;
 
   constructor(private ctx: ChapterContext) {}
 
@@ -132,6 +134,7 @@ export class CartChapter implements Chapter {
   }
 
   run() {
+    this.started = true;
     const w = this.world;
     audio.musicTracks = { calm: "audio/music_cart" };
     void audio.startBed("forest", "audio/amb_forest", 0.7, 4);
@@ -279,6 +282,6 @@ export class CartChapter implements Chapter {
       this.waitingForTown = false;
       hud.loading(false);
     }
-    hud.prompt(null);
+    if (this.started) hud.prompt(null);
   }
 }

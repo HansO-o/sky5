@@ -7,7 +7,7 @@
     "fetch-sources": "node tools/fetch-sources.mjs && node tools/fetch-extra.mjs",
     "build-assets": "node tools/build-assets.mjs",
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && node tools/check-lines.mjs && vite build",
     "preview": "node tools/serve.mjs",
     "typecheck": "tsc --noEmit",
     "test:e2e": "node tests/e2e.mjs"

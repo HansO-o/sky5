@@ -216,14 +216,15 @@ export class PlayerController implements CameraTarget {
       else if (sp < 5) this.body.play("Jog_Fwd_Loop", { blend: 0.25, speed: sp / 3.6 });
       else this.body.play("Sprint_Loop", { blend: 0.25, speed: sp / 6 });
     }
-    // hide the body in first person (the camera sits inside the head)
-    const show = !this.firstPerson;
-    for (const m of this.body.meshes) m.isVisible = show;
   }
 
-  /** Body position: render time (scene.onBeforeRenderObservable), see the constructor. */
+  /** Body position and visibility: render time (scene.onBeforeRenderObservable), see the constructor. */
   private placeBody = () => {
     this.body.root.position.copyFrom(this.renderPosition);
+    // hide the body in first person (the camera sits inside the head), and in third person when
+    // walls have pushed the camera into it; decided here, after this frame's rig.update placed it
+    const show = !this.firstPerson && !this.rig.closeUp;
+    for (const m of this.body.meshes) m.isVisible = show;
   };
 
   /** Body heading: per frame in update(), before chapter scripts that may override it (the creator's turntable). */
@@ -256,6 +257,10 @@ export class PlayerController implements CameraTarget {
     const hit = this.physics.rayCast(from, dir, maxDist + 0.3);
     // keep 0.3 m off the surface; closer than that allows, come in to 0.1 m off it (never past it)
     return Math.max(0, Math.min(maxDist, Math.max(hit - 0.3, Math.min(0.4, hit - 0.1))));
+  }
+
+  rayDist(from: Vector3, dir: Vector3, maxDist: number) {
+    return this.physics.rayCast(from, dir, maxDist);
   }
 
   setEyeHeight(h: number) {

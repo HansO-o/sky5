@@ -1,56 +1,78 @@
 // Can the player physically make the jump from the tower breach into the inn and get out to the street?
+// Exits 1 on a page or console error, a timeout, a jump that falls short of the inn or no way out of it.
 import { chromium } from "playwright-core";
 const browser = await chromium.launch({ executablePath: "/opt/pw-browsers/chromium-1194/chrome-linux/chrome", args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"] });
 const page = await (await browser.newContext({ viewport: { width: 480, height: 270 } })).newPage();
 const logs = [];
+page.on("console", (m) => m.type() === "error" && logs.push(`[error] ${m.text()}`));
 page.on("pageerror", (e) => logs.push(`[pageerror] ${e.message}`));
-await page.goto(`http://localhost:4173/?webgl&debug&chapter=dragon&from=breach&timescale=1`);
-await page.waitForFunction(() => performance.getEntriesByName("menu-3d-ready").length > 0, null, { timeout: 60000 });
-await page.click("text=新游戏");
-await page.waitForFunction(() => performance.getEntriesByName("cart-started").length > 0, null, { timeout: 120000 });
-await page.waitForFunction(() => document.getElementById("toast")?.textContent.includes("跳进旅店"), null, { timeout: 300000 });
-const pos = () => page.evaluate(() => window.__game.stage.player.position.asArray().map((v) => +v.toFixed(2)));
-await page.evaluate(() => { const s = window.__game.stage; const V = s.world.rig.camera.position.constructor; s.player.teleport(new V(90.6, s.world.heightAt(90, -584) + 6.45, -584), -Math.PI / 2); s.world.rig.pitch = 0; });
-await page.waitForTimeout(3000);
-console.log("start", await pos());
-await page.keyboard.down("KeyW");
-await page.keyboard.down("ShiftLeft");
-let jumped = false;
-const t0 = Date.now();
-while (Date.now() - t0 < 120000) {
-  const p = await pos();
-  console.log(((Date.now() - t0) / 1000).toFixed(0), p);
-  if (!jumped && p[0] > 92.3) { await page.keyboard.press("Space"); jumped = true; }
-  if (jumped && p[0] > 97.5) { await page.keyboard.up("KeyW"); await page.keyboard.up("ShiftLeft"); }
-  if (jumped && p[0] > 97.5 && Date.now() - t0 > 20000) break;
-  await page.waitForTimeout(700);
-}
-await page.waitForTimeout(4000);
-console.log("landed", await pos(), "base", await page.evaluate(() => window.__game.stage.world.heightAt(101, -584)));
-await page.screenshot({ path: "/tmp/claude-0/shots/jump.png" });
-// walk east over the floor hole, then north out of the door, then to the street
-const walkTo = async (x, z, limit = 60000) => {
-  const t = Date.now();
+let ok = true;
+try {
+  await page.goto(`http://localhost:4173/?webgl&debug&chapter=dragon&from=breach&timescale=1`);
+  await page.waitForFunction(() => performance.getEntriesByName("menu-3d-ready").length > 0, null, { timeout: 60000 });
+  await page.click("text=新游戏");
+  await page.waitForFunction(() => performance.getEntriesByName("cart-started").length > 0, null, { timeout: 120000 });
+  await page.waitForFunction(() => document.getElementById("toast")?.textContent.includes("跳进旅店"), null, { timeout: 300000 });
+  const pos = () => page.evaluate(() => window.__game.stage.player.position.asArray().map((v) => +v.toFixed(2)));
+  await page.evaluate(() => { const s = window.__game.stage; const V = s.world.rig.camera.position.constructor; s.player.teleport(new V(90.6, s.world.heightAt(90, -584) + 6.45, -584), -Math.PI / 2); s.world.rig.pitch = 0; });
+  await page.waitForTimeout(3000);
+  console.log("start", await pos());
   await page.keyboard.down("KeyW");
-  while (Date.now() - t < limit) {
+  await page.keyboard.down("ShiftLeft");
+  let jumped = false, crossed = false;
+  const t0 = Date.now();
+  while (Date.now() - t0 < 120000) {
     const p = await pos();
-    if (Math.hypot(p[0] - x, p[2] - z) < 0.6) break;
-    await page.evaluate(([x, z]) => { const s = window.__game.stage; const p = s.player.position; s.world.rig.yaw = Math.atan2(-(x - p.x), -(z - p.z)); }, [x, z]);
-    await page.waitForTimeout(300);
+    console.log(((Date.now() - t0) / 1000).toFixed(0), p);
+    if (!jumped && p[0] > 92.3) { await page.keyboard.press("Space"); jumped = true; }
+    if (jumped && p[0] > 97.5) { await page.keyboard.up("KeyW"); await page.keyboard.up("ShiftLeft"); crossed = true; }
+    if (jumped && p[0] > 97.5 && Date.now() - t0 > 20000) break;
+    await page.waitForTimeout(700);
   }
-  await page.keyboard.up("KeyW");
-  const p = await pos();
-  console.log("walk", x, z, "->", p);
-  return p;
-};
-await walkTo(103.6, -584);
-await page.waitForTimeout(3000);
-console.log("after hole", await pos());
-await walkTo(102.9, -581.5);
-await walkTo(102.9, -578);
-await walkTo(103, -571);
-await page.waitForTimeout(3000);
-console.log("step", await page.evaluate(() => window.__game.stage.chapter?.step), await page.evaluate(() => document.getElementById("subtitle")?.textContent));
-await page.screenshot({ path: "/tmp/claude-0/shots/jump2.png" });
+  if (!crossed) throw new Error(`never made it across the breach (jumped: ${jumped}): ${JSON.stringify(await pos())}`);
+  await page.waitForTimeout(4000);
+  console.log("landed", await pos(), "base", await page.evaluate(() => window.__game.stage.world.heightAt(101, -584)));
+  await page.screenshot({ path: "/tmp/claude-0/shots/jump.png" });
+  // the chapter gives this hint only for a landing inside the inn (anywhere else past the wall moves it on too)
+  const hint = await page.evaluate(() => document.getElementById("toast")?.textContent ?? "");
+  if (!hint.includes("破洞")) throw new Error(`did not land in the inn: ${JSON.stringify(await pos())}, last hint "${hint}"`);
+  // walk east over the floor hole, then north out of the door, then to the street
+  const walkTo = async (x, z, limit = 60000) => {
+    const t = Date.now();
+    await page.keyboard.down("KeyW");
+    while (Date.now() - t < limit) {
+      const p = await pos();
+      if (Math.hypot(p[0] - x, p[2] - z) < 0.6) break;
+      await page.evaluate(([x, z]) => { const s = window.__game.stage; const p = s.player.position; s.world.rig.yaw = Math.atan2(-(x - p.x), -(z - p.z)); }, [x, z]);
+      await page.waitForTimeout(300);
+    }
+    await page.keyboard.up("KeyW");
+    const p = await pos();
+    console.log("walk", x, z, "->", p);
+    return p;
+  };
+  await walkTo(103.6, -584);
+  await page.waitForTimeout(3000);
+  console.log("after hole", await pos());
+  await walkTo(102.9, -581.5);
+  await walkTo(102.9, -578);
+  await walkTo(103, -571);
+  await page.waitForTimeout(3000);
+  // out of the inn: the chapter has moved on to the street (step 3)
+  const end = await page.evaluate(() => ({ ch: window.__game.stage.chapter?.id ?? null, step: window.__game.stage.chapter?.step ?? null, sub: document.getElementById("subtitle")?.textContent ?? "" }));
+  console.log("step", end.step, end.sub);
+  await page.screenshot({ path: "/tmp/claude-0/shots/jump2.png" });
+  if (end.ch !== "dragon" || !(end.step >= 3)) throw new Error(`did not get out of the inn: ${JSON.stringify({ ...end, pos: await pos() })}`);
+} catch (e) {
+  ok = false;
+  console.log("FAIL", String(e));
+} finally {
+  await browser.close();
+}
 console.log(logs.join("\n"));
-await browser.close();
+if (logs.length) {
+  ok = false;
+  console.log(`FAIL ${logs.length} page/console errors`);
+}
+console.log(ok ? "PASS" : "FAIL");
+process.exit(ok ? 0 : 1);

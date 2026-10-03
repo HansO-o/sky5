@@ -52,9 +52,9 @@ class Input {
 
   attach(canvas: HTMLCanvasElement) {
     window.addEventListener("keydown", (e) => {
-      // Tab is the menu key, but in an open dialog (settings, saves, character creation) it moves the
-      // focus, also in the pause menu's settings (where the menu key would close the panel)
-      if (e.code === "Tab" && !this.locked && document.querySelector("#panel, #creator")) return;
+      // Tab is the menu key, but in an open dialog (settings, saves, character creation, the prologue's
+      // end card) it moves the focus, also in the pause menu's settings (where the menu key would close the panel)
+      if (e.code === "Tab" && !this.locked && document.querySelector("#panel, #creator, #endcard")) return;
       if (this.blocksDefault(e)) e.preventDefault();
       if (!e.repeat) this.pressedThisFrame.add(e.code);
       this.keys.add(e.code);

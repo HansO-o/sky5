@@ -14,9 +14,22 @@ export interface SaveGame {
   thumb?: string;
 }
 
+const DB_OPEN_TIMEOUT_MS = 8000;
+
 let dbP: Promise<IDBDatabase> | null = null;
 function db() {
-  dbP ??= openDB("northern-saves", 1, (d) => d.createObjectStore("saves", { keyPath: "id" }));
+  if (!dbP) {
+    // The open can hang without ever failing (seen in WebKit), so it gets a deadline like the asset worker's.
+    // A failure is not cached: a later call opens again.
+    const p = Promise.race([
+      openDB("northern-saves", 1, (d) => d.createObjectStore("saves", { keyPath: "id" })),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("saves DB open timed out")), DB_OPEN_TIMEOUT_MS)),
+    ]);
+    p.catch(() => {
+      if (dbP === p) dbP = null;
+    });
+    dbP = p;
+  }
   return dbP;
 }
 

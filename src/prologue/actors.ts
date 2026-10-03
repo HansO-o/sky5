@@ -28,16 +28,17 @@ export function setYaw(ch: Character, forwardYaw: number) {
 
 /**
  * Walk a character along a polyline on world time (pauses with the game). Points are world
- * positions; with `ground` the y comes from the terrain. Resolves on arrival.
+ * positions; with `ground` the y comes from the terrain. Resolves with true on arrival, false when
+ * the walk was stopped first (stopWalk, stand, a new walk, the character removed from the world).
  */
 const walking = new WeakMap<Character, () => void>();
 
-/** Stop a walk in progress (e.g. the character was shot); its promise resolves. */
+/** Stop a walk in progress (e.g. the character was shot); its promise resolves (with false). */
 export function stopWalk(ch: Character) {
   walking.get(ch)?.();
 }
 
-export function walkPath(world: World, ch: Character, points: Vector3[], o: PathOptions = {}) {
+export function walkPath(world: World, ch: Character, points: Vector3[], o: PathOptions = {}): Promise<boolean> {
   stopWalk(ch);
   const speed = o.speed ?? 1.5;
   ch.root.parent = null;
@@ -46,14 +47,16 @@ export function walkPath(world: World, ch: Character, points: Vector3[], o: Path
   if (o.ground) for (const p of pts) p.y = world.heightAt(p.x, p.z);
   let i = 0;
   let yaw: number | null = null;
-  return new Promise<void>((resolve) => {
-    const finish = () => {
+  return new Promise<boolean>((resolve) => {
+    const finish = (arrived: boolean) => {
       off();
       walking.delete(ch);
-      resolve();
+      resolve(arrived);
     };
-    walking.set(ch, finish);
+    walking.set(ch, () => finish(false));
     const off = world.onUpdate((dt) => {
+      // removed meanwhile (World.removeNpc disposes the character): nothing left to move
+      if (ch.root.isDisposed()) return finish(false);
       const pos = ch.root.position;
       let step = speed * dt;
       while (step > 0 && i < pts.length) {
@@ -79,14 +82,16 @@ export function walkPath(world: World, ch: Character, points: Vector3[], o: Path
       }
       if (i >= pts.length) {
         ch.play(o.arrive ?? "Idle_Loop", { blend: 0.3 });
-        finish();
+        finish(true);
       }
     });
   });
 }
 
-/** Place a character on the ground at (x, z) facing a world point. */
+/** Place a character on the ground at (x, z) facing a world point (ends any walk in progress). */
 export function stand(world: World, ch: Character, x: number, z: number, look?: { x: number; z: number }, clip = "Idle_Loop") {
+  // a walk left running would carry the character off again, sliding in the idle pose
+  stopWalk(ch);
   ch.root.parent = null;
   ch.root.position.set(x, world.heightAt(x, z), z);
   if (look) faceTo(ch, look);

@@ -33,6 +33,14 @@ const browser = await chromium.launch({
 // one persistent profile so the second visit sees IndexedDB + the service worker
 const ctx = await browser.newContext({ viewport: { width: 1280, height: 720 } });
 const errors = [];
+// page errors and console errors from every visit fail the run
+const watch = (page) => {
+  page.on("pageerror", (e) => errors.push(e.message));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+    if (m.text().includes("[timing]")) console.log("    " + m.text());
+  });
+};
 const mark = (page, name, timeout) => page.waitForFunction((n) => performance.getEntriesByName(n).length > 0, name, { timeout });
 const markTime = (page, name) => page.evaluate((n) => performance.getEntriesByName(n)[0]?.startTime ?? -1, name);
 const q = webgpu ? "?debug" : "?webgl&debug";
@@ -40,11 +48,7 @@ const q = webgpu ? "?debug" : "?webgl&debug";
 try {
   // ---------------------------------------------------------------- 1. first visit
   let page = await ctx.newPage();
-  page.on("pageerror", (e) => errors.push(e.message));
-  page.on("console", (m) => {
-    if (m.type() === "error") errors.push(m.text());
-    if (m.text().includes("[timing]")) console.log("    " + m.text());
-  });
+  watch(page);
   await page.goto(BASE + q);
   await mark(page, "menu-interactive", 30000);
   const mi = await markTime(page, "menu-interactive");
@@ -82,7 +86,7 @@ try {
 
   // ---------------------------------------------------------------- 2. second visit
   page = await ctx.newPage();
-  page.on("pageerror", (e) => errors.push(e.message));
+  watch(page);
   await page.goto(BASE + q);
   await mark(page, "menu-interactive", 30000);
   const mi2 = await markTime(page, "menu-interactive");
@@ -94,7 +98,7 @@ try {
   // ---------------------------------------------------------------- 3. offline play-through
   await ctx.setOffline(true);
   page = await ctx.newPage();
-  page.on("pageerror", (e) => errors.push(e.message));
+  watch(page);
   await page.goto(BASE + q + "&timescale=25");
   await mark(page, "menu-3d-ready", 60000);
   const t2 = Date.now();
@@ -122,6 +126,7 @@ try {
   check("run", false, String(e));
 } finally {
   if (errors.length) console.log("page errors:\n  " + [...new Set(errors)].slice(0, 20).join("\n  "));
+  check("no page or console errors", errors.length === 0, `${errors.length}`);
   await browser.close();
   server.kill();
 }

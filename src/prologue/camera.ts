@@ -16,12 +16,16 @@ export interface CameraTarget {
   pivot(out: Vector3): Vector3;
   /** keeps the third-person camera out of walls: returns the allowed distance */
   clip?(from: Vector3, dir: Vector3, maxDist: number): number;
+  /** distance to the nearest surface along a ray within maxDist, or Infinity */
+  rayDist?(from: Vector3, dir: Vector3, maxDist: number): number;
   firstPerson: boolean;
 }
 
 const ease = (t: number) => t * t * (3 - 2 * t);
 /** third-person over-the-shoulder offset to the right (m) */
 const SHOULDER = 0.45;
+/** walls pushed the third-person camera this close to the pivot (m): it would be inside the body */
+const CLOSE_UP = 0.35;
 
 /**
  * One camera, three behaviours: seated head-look (parented to a seat), scripted cinematics with
@@ -37,6 +41,8 @@ export class CameraRig {
   pitchLimits: [number, number] = [-0.95, 0.75];
   /** third-person distance; zoom with mouse wheel */
   distance = 3.2;
+  /** player mode, third person: walls brought the camera into the body (the follow target hides it) */
+  closeUp = false;
   lookEnabled = true;
   private target: CameraTarget | null = null;
   private move: { from: Vector3; to: Vector3; lookFrom: Vector3; lookTo: Vector3; t: number; dur: number; resolve: () => void } | null = null;
@@ -85,7 +91,10 @@ export class CameraRig {
   /** Sit: the camera is parented to a node (e.g. a wagon seat) and the player can only turn the head. */
   seat(node: TransformNode, offset: Vector3, yawLimit = 1.9) {
     this.mode = "seat";
+    // a glide never advances outside cine mode
+    this.endMove();
     this.steer = null;
+    this.closeUp = false;
     this.camera.parent = node;
     this.camera.position.copyFrom(offset);
     this.yawLimit = yawLimit;
@@ -95,8 +104,9 @@ export class CameraRig {
   /** Hard cut to a world-space shot. */
   cut(pos: Vector3, look: Vector3) {
     this.mode = "cine";
-    this.move = null;
+    this.endMove();
     this.steer = null;
+    this.closeUp = false;
     this.camera.parent = null;
     this.camera.position.copyFrom(pos);
     this.lookAt.copyFrom(look);
@@ -116,8 +126,15 @@ export class CameraRig {
     this.mode = "player";
     this.target = target;
     this.camera.parent = null;
-    this.move = null;
+    this.endMove();
     this.steer = null;
+  }
+
+  /** End the current glide where it is; whoever awaits it moves on (as when glide() supersedes it). */
+  private endMove() {
+    const m = this.move;
+    this.move = null;
+    m?.resolve();
   }
 
   private steer: { pos: () => Vector3 | null; t: number; dur: number } | null = null;
@@ -141,6 +158,7 @@ export class CameraRig {
   private tmp = new Vector3();
   private tmp2 = new Vector3();
   private tmp3 = new Vector3();
+  private tmp4 = new Vector3();
   /** Per frame. Never throws: an exception here would escape the render loop and stop the game for good. */
   update(dt: number) {
     try {
@@ -214,18 +232,41 @@ export class CameraRig {
     }
     const dir = this.tmp.set(-Math.sin(this.yaw) * Math.cos(this.pitch), Math.sin(this.pitch), -Math.cos(this.yaw) * Math.cos(this.pitch));
     if (t.firstPerson) {
+      this.closeUp = false;
       t.eye(this.camera.position);
     } else {
       const piv = t.pivot(this.tmp2);
       // over-the-shoulder offset to the right, shortened by a wall there (the pivot must stay in
       // the open, or the back ray below starts inside the wall and finds nothing)
       const right = this.tmp3.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
-      piv.addInPlace(right.scaleInPlace(t.clip ? t.clip(piv, right, SHOULDER) : SHOULDER));
+      const s = t.clip ? t.clip(piv, right, SHOULDER) : SHOULDER;
+      piv.addInPlace(right.scaleInPlace(s));
       const back = dir.scale(-1);
       const d = t.clip ? t.clip(piv, back, this.distance) : this.distance;
       this.camera.position.copyFrom(piv).addInPlace(back.scaleInPlace(d));
+      // (right and back are perpendicular)
+      this.closeUp = Math.hypot(s, d) < CLOSE_UP;
+      this.clearNearPlane(t);
     }
     this.camera.rotation.set(this.pitch + sy, this.yaw + sx, 0);
+  }
+
+  /**
+   * The near plane reaches `nh` to each side of the camera point. Looking along a wall at a grazing
+   * angle, the back ray keeps the point in front of it but the plane's edge cuts into the wall and
+   * shows what is behind it (the outside of the tower from its stairwell): step sideways off it.
+   */
+  private clearNearPlane(t: CameraTarget) {
+    if (!t.rayDist) return;
+    const cam = this.camera.position;
+    const nh = this.camera.minZ * Math.tan(this.camera.fov / 2) + 0.03;
+    const right = this.tmp3.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
+    const r = t.rayDist(cam, right, 2 * nh);
+    const l = t.rayDist(cam, right.negateToRef(this.tmp4), 2 * nh);
+    if (r >= nh && l >= nh) return;
+    // between two walls closer than that: the middle; otherwise off the near one
+    const x = r + l < 2 * nh ? (r - l) / 2 : r < nh ? r - nh : nh - l;
+    cam.addInPlace(right.scaleInPlace(x));
   }
 
   /** Remove the global listeners (settings, wheel) and drop the follow target. Runs with the scene's disposal. */
@@ -233,7 +274,7 @@ export class CameraRig {
     this.offSettings();
     window.removeEventListener("wheel", this.onWheel);
     this.target = null;
-    this.move = null;
+    this.endMove();
     this.steer = null;
   }
 }

@@ -30,10 +30,17 @@ const OUT = path.join(ROOT, "public/data");
 const only = process.argv.find((a) => a.startsWith("--only="))?.slice(7);
 
 const manifest = { version: "", generated: new Date().toISOString(), assets: [] };
+// --only reuses every other entry from the last manifest, and the sweep at the end deletes whatever
+// the new one doesn't list: without a valid previous manifest that would empty public/data.
 let previous = { assets: [] };
-try {
-  previous = JSON.parse(await fs.readFile(path.join(ROOT, "public/manifest.json"), "utf8"));
-} catch {}
+if (only) {
+  try {
+    previous = JSON.parse(await fs.readFile(path.join(ROOT, "public/manifest.json"), "utf8"));
+  } catch (e) {
+    throw new Error(`--only needs a valid public/manifest.json (${e.message}); run a full build instead`);
+  }
+  if (!Array.isArray(previous?.assets)) throw new Error("--only needs a valid public/manifest.json (no asset list); run a full build instead");
+}
 
 await fs.mkdir(OUT, { recursive: true });
 
@@ -59,6 +66,12 @@ async function emit(id, { segment, priority = 50, type, ext, data, pos, variants
 async function step(prefix, fn) {
   if (only && !prefix.startsWith(only) && !only.startsWith(prefix)) {
     const prev = previous.assets.filter((a) => (a._step ? a._step === prefix : a.id.startsWith(prefix)));
+    if (!prev.length) throw new Error(`--only: the previous manifest has nothing for ${prefix}; run a full build instead`);
+    for (const a of prev)
+      for (const url of [a.url, a.variants?.aac?.url].filter(Boolean))
+        await fs.access(path.join(ROOT, "public", url)).catch(() => {
+          throw new Error(`--only: ${a.id} would reuse public/${url}, which is missing; run a full build instead`);
+        });
     manifest.assets.push(...prev);
     return;
   }

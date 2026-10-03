@@ -54,6 +54,9 @@ export const DEFAULT_KEYS: Record<Action, string> = {
   quicksave: "F5",
 };
 
+/** Keys that can't be bound: modifiers start browser shortcuts (Ctrl+W closes the tab), F11/F12 are the browser's. */
+export const RESERVED_KEY = /^(Control|Meta|Alt|OS)|^F1[12]$/;
+
 export interface Settings {
   quality: Quality;
   renderScale: number; // 0.5..1
@@ -98,12 +101,26 @@ function load(): Partial<Settings> | null {
     const v1 = localStorage.getItem(KEY_V1);
     if (!v1) return null;
     const s: Partial<Settings> = JSON.parse(v1);
-    // v1 saved the old Ctrl default with every change; Ctrl+W (sneak forward) closes the tab
-    if (s?.keys?.sneak?.startsWith("Control")) s.keys.sneak = DEFAULT_KEYS.sneak;
+    if (s?.keys) migrateKeys(s.keys);
     return s;
   } catch {
     return null;
   }
+}
+
+/** v1 → v2 bindings. A changed or new default may be a key the player already uses: then the first free fallback. */
+function migrateKeys(keys: Partial<Record<Action, string>>) {
+  const free = (a: Action, codes: string[]) => {
+    const used = new Set(Object.entries({ ...DEFAULT_KEYS, ...keys }).filter(([k]) => k !== a).map(([, v]) => v));
+    return codes.find((c) => !used.has(c)) ?? codes[0];
+  };
+  // v1 saved the old Ctrl sneak default with every change, and bound any key: Ctrl+W (say sneak or
+  // sprint held while walking forward) closes the tab. Nothing the rebind UI rejects is carried over.
+  for (const a of Object.keys(keys) as Action[]) {
+    if (RESERVED_KEY.test(keys[a] ?? "")) keys[a] = free(a, a === "sneak" ? ["KeyC", "KeyV", "KeyX", "KeyZ"] : [DEFAULT_KEYS[a], "KeyV", "KeyX", "KeyZ", "KeyG", "KeyH"]);
+  }
+  // new in v2 (attack and block are mouse buttons, which v1 couldn't bind)
+  keys.heal ??= free("heal", ["KeyQ", "KeyG", "KeyH", "KeyT"]);
 }
 
 class SettingsStore {

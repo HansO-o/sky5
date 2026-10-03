@@ -1,6 +1,10 @@
 // Debug probe: start the cart ride, then run snippets against window.__game and screenshot.
 import { chromium } from "playwright-core";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 const WEBGPU = !!process.env.WEBGPU;
+// the steps file is a path from the shell's working directory; a bad one fails before the browser starts
+const steps = process.argv[2] ? (await import(pathToFileURL(path.resolve(process.argv[2])).href)).default : [];
 const browser = await chromium.launch({
   executablePath: "/opt/pw-browsers/chromium-1194/chrome-linux/chrome",
   args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist", ...(WEBGPU ? ["--enable-unsafe-webgpu", "--enable-features=Vulkan", "--use-vulkan=swiftshader", "--use-webgpu-adapter=swiftshader"] : [])],
@@ -20,7 +24,6 @@ try {
   await page.screenshot({ path: `/tmp/claude-0/shots/probe-fail.png` });
   throw e;
 }
-const steps = process.argv[2] ? (await import(process.argv[2])).default : [];
 let i = 0;
 for (const js of steps) {
   const r = await page.evaluate(js).catch((e) => "ERR " + e.message);

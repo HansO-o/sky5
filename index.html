@@ -82,9 +82,12 @@
       /* ---------------- key hints (bottom right, like a console prompt bar) */
       #keyhints { position: fixed; right: 26px; bottom: 16px; display: none; gap: 20px; align-items: center; font-size: 12px; letter-spacing: .15em; color: var(--ink-dim); pointer-events: none; text-shadow: 0 0 4px #000; }
       #keyhints > span { display: inline-flex; align-items: center; gap: 6px; }
-      body:has(#menu:not(.hidden)) #keyhints, body:has(#pause) #keyhints { display: flex; }
-      #keyhints .k-back { display: none; }
+      /* not while the menu fades out for a starting game: it takes no input then, and the loading hint sits here */
+      body:has(#menu:not(.hidden):not(.fade)) #keyhints, body:has(#pause) #keyhints { display: flex; }
+      #keyhints .k-back, #keyhints .k-tab { display: none; }
       body:has(#panel) #keyhints .k-back, body:has(#pause) #keyhints .k-back { display: inline-flex; }
+      /* in a panel Tab moves between its controls (Enter then operates the focused one) */
+      body:has(#panel) #keyhints .k-tab { display: inline-flex; }
       body:has(#panel) #keyhints .k-nav, body:has(#panel) #keyhints .k-ok { display: none; }
 
       /* ---------------- panels (settings / credits / load) */
@@ -153,7 +156,8 @@
       #fade { position: fixed; inset: 0; background: #000; opacity: 0; pointer-events: none; transition: opacity 1.2s; }
       #fade.on { opacity: 1; }
       #crosshair { position: fixed; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px; border-radius: 50%; background: rgba(255,255,255,.7); pointer-events: none; }
-      #toast { position: fixed; left: 34px; top: 30px; padding-bottom: 8px; font-family: var(--display); font-size: 17px; letter-spacing: .22em; color: var(--ink); text-shadow: 0 0 6px #000, 0 0 2px #000; pointer-events: none; opacity: 0; transform: translateY(-4px); transition: opacity .6s, transform .6s; }
+      /* above the pause menu (appended after it): 已存档, a failed save or load is reported over it */
+      #toast { position: fixed; z-index: 1; left: 34px; top: 30px; padding-bottom: 8px; font-family: var(--display); font-size: 17px; letter-spacing: .22em; color: var(--ink); text-shadow: 0 0 6px #000, 0 0 2px #000; pointer-events: none; opacity: 0; transform: translateY(-4px); transition: opacity .6s, transform .6s; }
       #toast::after { content: ""; position: absolute; left: 0; bottom: 0; height: 1px; width: 0; background: linear-gradient(90deg, var(--line-strong), transparent); transition: width 1.2s .2s; }
       #toast.on { opacity: 1; transform: none; }
       #toast.on::after { width: 120%; }
@@ -211,7 +215,7 @@
         </nav>
       </section>
       <div id="version">序章 · 预览版 M2</div>
-      <div id="keyhints"><span class="k-nav"><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span class="k-ok"><kbd>Enter</kbd> 确认</span><span class="k-back"><kbd>Esc</kbd> 返回</span></div>
+      <div id="keyhints"><span class="k-nav"><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span class="k-ok"><kbd>Enter</kbd> 确认</span><span class="k-tab"><kbd>Tab</kbd> 切换</span><span class="k-back"><kbd>Esc</kbd> 返回</span></div>
       <div id="dlstatus"></div>
     </div>
     <noscript><div id="fatal">需要启用 JavaScript 才能运行。</div></noscript>

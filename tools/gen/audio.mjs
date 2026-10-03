@@ -30,8 +30,8 @@ export const AUDIO = [
   { id: "audio/breath", src: "fs_867029_15638039-hq.ogg", segment: "dragon", priority: 92, kbps: 64, stereo: false, loop: 1 },
   { id: "audio/fire_loop", src: "fs_564621_9250976-hq.ogg", segment: "dragon", priority: 90, kbps: 64, stereo: false, loop: 1 },
   { id: "audio/burning", src: "fs_636178_4980667-hq.ogg", segment: "dragon", priority: 85, kbps: 64, stereo: true, trim: [10, 100], loop: 3 },
-  { id: "audio/collapse", src: "fs_487142_2524442-hq.ogg", segment: "dragon", priority: 88, kbps: 64, stereo: false },
-  { id: "audio/collapse_small", src: "fs_675900_2524442-hq.ogg", segment: "dragon", priority: 85, kbps: 64, stereo: false },
+  { id: "audio/collapse", src: "fs_508546_5026978-hq.ogg", segment: "dragon", priority: 88, kbps: 64, stereo: false, trim: [0.7, 7.3] },
+  { id: "audio/collapse_small", src: "fs_712918_15139380-hq.ogg", segment: "dragon", priority: 85, kbps: 64, stereo: false },
   { id: "audio/rubble", src: "fs_569510_3248005-hq.ogg", segment: "dragon", priority: 85, kbps: 64, stereo: false },
   { id: "audio/panic", src: "fs_435716_3140040-hq.ogg", segment: "dragon", priority: 84, kbps: 64, stereo: true, trim: [0, 70], loop: 3 },
   { id: "audio/bell", src: "fs_770122_13973196-hq.ogg", segment: "execution", priority: 80, kbps: 64, stereo: false, trim: [0, 30] },
@@ -39,11 +39,22 @@ export const AUDIO = [
   { id: "audio/music_battle", src: "epic_boss_battle_loop.wav", segment: "dragon", priority: 93, kbps: 96, stereo: true },
 ];
 
+let ffmpegVersion;
+
 async function encode(srcFile, a, codec) {
-  const key = crypto.createHash("sha256").update(await fs.readFile(srcFile)).update(JSON.stringify({ a, codec, v: 2 })).digest("hex");
-  const out = path.join(CACHE, `${key}.${codec === "opus" ? "ogg" : "m4a"}`);
+  // Key on what changes the bytes only (not id/segment/priority), so editing those doesn't re-encode.
+  ffmpegVersion ??= run("ffmpeg", ["-version"]).then((r) => r.stdout.split("\n")[0]);
+  const { trim, loop, fade, kbps, stereo } = a;
+  const key = crypto
+    .createHash("sha256")
+    .update(await fs.readFile(srcFile))
+    .update(JSON.stringify({ trim, loop, fade, kbps, stereo, codec, ffmpeg: await ffmpegVersion, v: 3 }))
+    .digest("hex");
+  const ext = codec === "opus" ? "ogg" : "m4a";
+  const out = path.join(CACHE, `${key}.${ext}`);
   try {
-    return await fs.readFile(out);
+    const hit = await fs.readFile(out);
+    if (hit.length >= 1024) return hit;
   } catch {}
   await fs.mkdir(CACHE, { recursive: true });
   const filters = [];
@@ -66,16 +77,23 @@ async function encode(srcFile, a, codec) {
     pre = "[f]";
   }
   filters.push(`${pre}aresample=48000,loudnorm=I=-18:TP=-2[o]`);
+  // Encode next to the cache entry and rename it into place only once ffmpeg succeeded: an interrupted
+  // encode (Ctrl-C makes ffmpeg finalise a shortened file) must never become a cache hit.
+  const tmp = path.join(CACHE, `${key}.tmp-${process.pid}-${crypto.randomUUID()}.${ext}`);
   const args = ["-y", "-loglevel", "error", "-i", srcFile, "-i", srcFile, "-filter_complex", filters.join(";"), "-map", "[o]", "-ac", a.stereo ? "2" : "1"];
-  if (codec === "opus") args.push("-c:a", "libopus", "-b:a", `${a.kbps}k`, "-vbr", "on", out);
-  else args.push("-c:a", "aac", "-b:a", `${Math.round(a.kbps * 1.5)}k`, "-movflags", "+faststart", out);
-  await run("ffmpeg", args);
-  const data = await fs.readFile(out);
-  if (data.length < 1024) {
-    await fs.rm(out);
-    throw new Error(`ffmpeg produced an empty file for ${a.id}`);
+  if (codec === "opus") args.push("-c:a", "libopus", "-b:a", `${a.kbps}k`, "-vbr", "on");
+  else args.push("-c:a", "aac", "-b:a", `${Math.round(a.kbps * 1.5)}k`, "-movflags", "+faststart");
+  // Reproducible bytes: fixed Ogg stream serial, no encoder/muxer version tags, no source metadata.
+  args.push("-map_metadata", "-1", "-fflags", "+bitexact", "-flags:a", "+bitexact", tmp);
+  try {
+    await run("ffmpeg", args);
+    const data = await fs.readFile(tmp);
+    if (data.length < 1024) throw new Error(`ffmpeg produced an empty file for ${a.id}`);
+    await fs.rename(tmp, out);
+    return data;
+  } finally {
+    await fs.rm(tmp, { force: true });
   }
-  return data;
 }
 
 export async function buildAudio({ emit, SRC }) {

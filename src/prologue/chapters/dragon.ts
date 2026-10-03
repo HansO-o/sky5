@@ -47,6 +47,8 @@ export class DragonChapter implements Chapter {
   private ragdolls: Ragdoll[] = [];
   private houseFires = new Set<number>();
   private alive = true;
+  /** run() has started: only then does the chapter own the global prompt/audio state */
+  private started = false;
 
   constructor(private ctx: ChapterContext) {}
 
@@ -164,17 +166,20 @@ export class DragonChapter implements Chapter {
         const start = roof.add(side.scale(-55)).add(new Vector3(0, 26, 0));
         const mid = roof.add(new Vector3(0, 13, 0)).add(side.scale(-8));
         const end = roof.add(side.scale(50)).add(new Vector3(0, 30, 0));
-        await dr.fly([start], 26);
+        await d.wait(dr.fly([start], 26));
         if (!this.rampage) continue;
         const pass = dr.fly([mid, end], 20);
         await d.sleep(Vector3.Distance(start, mid) / 20 - 1.4);
+        // the script took the dragon over (or the chapter ended) meanwhile: no stray stream
+        if (!this.alive || !this.rampage) continue;
         void this.fx.breath(() => {
           const s = dr.breathSource();
           return { pos: s.pos, dir: roof.subtract(s.pos).normalize() };
         }, 1.8);
         await d.sleep(1.6);
+        if (!this.alive) return;
         this.burnHouse(i);
-        await pass;
+        await d.wait(pass);
       } else {
         // a stretch of the circuit with a roar
         const pts: Vector3[] = [];
@@ -188,7 +193,7 @@ export class DragonChapter implements Chapter {
           await d.sleep(1.5);
           void audio.playOneShot(`audio/roar_${"abc"[Math.floor(Math.random() * 3)]}`, 1.3, dr.mouth(), "sfx", rand(0.9, 1.05), 40);
         }
-        await f;
+        await d.wait(f);
       }
     }
   }
@@ -217,6 +222,7 @@ export class DragonChapter implements Chapter {
   // ------------------------------------------------------------------ story
 
   async run() {
+    this.started = true;
     const { director: d, stage } = this.ctx;
     const w = this.w;
     const n = (k: string) => w.npcs.get(k)!;
@@ -238,12 +244,15 @@ export class DragonChapter implements Chapter {
       }),
     );
     for (const i of [4, 7]) this.burnHouse(i);
+    // resumed later in the chapter: the town is already under attack
+    if (this.step > 0) this.meteors = true;
+    if (this.step === 1 || this.step === 3) this.rampage = true;
 
     if (this.step < 1) {
       // dazed on the platform; the world comes back
       w.rig.pitch = 0.5;
       hud.flash(0.7, 2.5);
-      await hud.fade(false, 2.5);
+      await d.wait(hud.fade(false, 2.5));
       pl.canMove = false;
       // everybody scrambles
       const up = (k: string, clip = "KipUp") => w.npcs.has(k) && n(k).play(clip, { loop: false, offset: 0, blend: 0.2 });
@@ -280,8 +289,8 @@ export class DragonChapter implements Chapter {
       this.meteors = true;
       await d.sleep(1.2);
       w.rig.lookToward(head("brun"), 1.2);
-      await d.say("布伦", `${name}，起来！快起来！诸神不会给我们第二次机会！`, { npc: brun, look: () => pl.eye(new Vector3()), duration: 3.2 });
-      await d.say("布伦", "跟我来，进塔楼！快！", { npc: brun, look: () => pl.eye(new Vector3()), duration: 2 });
+      await d.say("布伦", `${name}！别躺着——再躺下去，就真起不来了！`, { npc: brun, look: () => pl.eye(new Vector3()), duration: 2.9 });
+      await d.say("布伦", "塔楼！石头墙烧不透——走！", { npc: brun, look: () => pl.eye(new Vector3()), duration: 2.5 });
       pl.canMove = true;
       hud.toast("跟随布伦进入塔楼", 5000);
       void walkPath(w, brun, [g(70, -592), g(TOWER_DOOR.x, TOWER_DOOR.z), g(TOWER_IN.x, TOWER_IN.z + 0.6)], { speed: 4.2, clip: "Sprint_Loop" }).then(() => faceTo(brun, { x: TOWER_DOOR.x, z: TOWER_DOOR.z }));
@@ -292,8 +301,8 @@ export class DragonChapter implements Chapter {
 
     if (this.step < 2) {
       faceTo(n("leader"), pl.position);
-      await d.say("托尔瓦德", "传说里的东西……它真的回来了。", { npc: n("leader"), look: () => pl.eye(new Vector3()) });
-      await d.say("布伦", "管它是什么，先活下来！上楼，从上面找路出去！", { npc: n("brun"), look: () => pl.eye(new Vector3()) });
+      await d.say("托尔瓦德", "我在寒脊听了一辈子的歌……没有一首说它会这么大。", { npc: n("leader"), look: () => pl.eye(new Vector3()) });
+      await d.say("布伦", "管它是什么，活下来再说！楼上有窗——往上爬！", { npc: n("brun"), look: () => pl.eye(new Vector3()) });
       hud.toast("爬上塔楼", 4000);
       await d.until(() => this.inTower(pl.position) && pl.position.y > this.base + T.floor2 - 0.6);
       // the dragon smashes the wall in front of the player
@@ -301,11 +310,11 @@ export class DragonChapter implements Chapter {
       const dr = this.dragon;
       const breach = new Vector3(T.x + TOWER_HALF, this.base + T.floor2 + 1.2, T.z);
       const hover = new Vector3(T.x + 26, this.base + T.floor2 + 9, T.z - 8);
-      await dr.fly([hover.add(new Vector3(20, 10, -30)), hover], 30);
+      await d.wait(dr.fly([hover.add(new Vector3(20, 10, -30)), hover], 30));
       dr.setYaw(Math.atan2(-(breach.x - hover.x), -(breach.z - hover.z)));
       void audio.playOneShot("audio/roar_a", 1.4, dr.mouth(), "sfx", 1, 40);
       await d.sleep(0.6);
-      await this.fx.fireballTo(dr.mouth(), breach, 30, { linger: 0, scorch: false });
+      await d.wait(this.fx.fireballTo(dr.mouth(), breach, 30, { linger: 0, scorch: false }));
       stage.breakBreach(new Vector3(-1, 0.15, 0));
       void audio.playOneShot("audio/collapse", 1.5, breach, "sfx", 1, 20);
       w.rig.shake(0.03, 1.2);
@@ -322,7 +331,7 @@ export class DragonChapter implements Chapter {
     if (this.step < 3) {
       w.env.setMood(1);
       this.rampage = true;
-      await d.say("布伦", `${name}！看见那家旅店没有？屋顶烧穿了——从缺口跳过去！我们随后就来！`, { npc: n("brun"), duration: 4.2 });
+      await d.say("布伦", "对面旅店的房顶烧穿了——跳！我带领主大人从楼梯绕下去，咱们在楼下碰头！", { npc: n("brun"), duration: 4.3 });
       hud.toast("从缺口跳进旅店的屋顶", 6000);
       hud.prompt("空格 跳跃");
       // in the inn (or anywhere on the far side of the wall)
@@ -343,22 +352,22 @@ export class DragonChapter implements Chapter {
     if (Vector3.Distance(scribe.root.position, g(STREET.x, STREET.z)) > 12) stand(w, scribe, STREET.x - 1.5, STREET.z + 1, pl.position);
     faceTo(scribe, pl.position);
     w.rig.lookToward(head("scribe"), 1.2);
-    await d.say("书记官", `${name}？你还活着！`, { npc: scribe, look: () => pl.eye(new Vector3()) });
-    await d.say("书记官", "跟紧我，想活命就别掉队！", { npc: scribe, look: () => pl.eye(new Vector3()) });
+    await d.say("书记官", `${name}？……你命真硬。`, { npc: scribe, look: () => pl.eye(new Vector3()) });
+    await d.say("书记官", "贴着我走，别离开三步以内。", { npc: scribe, look: () => pl.eye(new Vector3()) });
     hud.toast("跟随书记官前往要塞", 5000);
     const route = LAYOUT.escape.slice(1);
     for (let i = 0; i < route.length; i++) {
       const p = route[i];
-      await walkPath(w, scribe, [g(p.x, p.z)], { speed: 3.8 });
+      await d.wait(walkPath(w, scribe, [g(p.x, p.z)], { speed: 3.8 }));
       if (i === 1) {
         // the dragon sweeps the street ahead
         faceTo(scribe, pl.position);
         scribe.play("Crouch_Idle_Loop", { blend: 0.3 });
-        await d.say("书记官", "退后！贴着墙！", { npc: scribe, look: () => pl.eye(new Vector3()), duration: 1.6 });
+        await d.say("书记官", "别动——等它把火喷完！", { npc: scribe, look: () => pl.eye(new Vector3()), duration: 2.0 });
         this.rampage = false;
         const dr = this.dragon;
         const a = new Vector3(70, this.base + 40, -530), b = new Vector3(66, this.base + 11, -584), c = new Vector3(60, this.base + 16, -630);
-        await dr.fly([a], 32);
+        await d.wait(dr.fly([a], 32));
         const pass = dr.fly([b, c], 18);
         await d.sleep(Vector3.Distance(a, b) / 18 - 1.6);
         void this.fx.breath(() => {
@@ -372,7 +381,7 @@ export class DragonChapter implements Chapter {
           void d.sleep(9).then(() => f.stop(), () => f.stop());
           this.fx.scorch(x, z, 3);
         }
-        await pass;
+        await d.wait(pass);
         this.rampage = true;
         void dr; // keeps flying its circuit
         await d.sleep(2.5);
@@ -426,7 +435,10 @@ export class DragonChapter implements Chapter {
     for (const r of this.ragdolls) r.dispose();
     this.dragon?.stopFlight();
     this.fx?.dispose();
-    hud.prompt(null);
-    audio.stopBed?.("panic", 3);
+    if (this.started) {
+      hud.prompt(null);
+      audio.stopBed?.("panic", 3);
+      audio.resetMusicState();
+    }
   }
 }

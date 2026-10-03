@@ -18,7 +18,7 @@ export async function createPlayerBody(world: World, a: Appearance): Promise<{ b
 
 export const raceName = (a: Appearance) => RACES.find((r) => r.id === a.race)?.name ?? "";
 
-/** Where the scribe promises to send the remains (flavour line in the roll call). */
+/** Where the player comes from (the scribe's line when he adds the name in the roll call). */
 export function homeland(a: Appearance) {
   return { nord: "北方的冰原", imperial: "帝国的故乡", redsand: "南方的赤沙之地", woodelf: "古老的林地", rockborn: "群山深处" }[a.race];
 }

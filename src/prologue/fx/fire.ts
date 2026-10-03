@@ -31,7 +31,14 @@ export class FireFx {
   private scorchMat: StandardMaterial;
   private ballMat: StandardMaterial;
   private lights: PointLight[] = [];
+  /** the fire each borrowed light is lighting */
+  private lightOwner = new Map<PointLight, FireHandle>();
   private offs: (() => void)[] = [];
+  /** pending after() timers: each forgets itself when it fires */
+  private timers = new Set<() => void>();
+  /** breaths and fireballs in progress: each ends itself (sound, mesh) when called, e.g. by dispose */
+  private active = new Set<() => void>();
+  private disposed = false;
 
   static async create(world: World) {
     const s = world.scene;
@@ -66,13 +73,17 @@ export class FireFx {
       l.range = 18;
       this.lights.push(l);
     }
+    // particles advance on game time (pause, debug time scale): set on every rendered frame, paused
+    // ones included (no world update runs then)
+    const ob = s.onBeforeRenderObservable.add(() => {
+      const k = s.animationTimeScale;
+      for (const ps of this.systems) ps.updateSpeed = k / 60;
+    });
+    this.offs.push(() => s.onBeforeRenderObservable.remove(ob));
     let t = 0;
     this.offs.push(
       world.onUpdate((dt) => {
         t += dt;
-        // particles advance on game time (pause, debug time scale)
-        const k = world.scene.animationTimeScale;
-        for (const ps of this.systems) ps.updateSpeed = k / 60;
         this.lights.forEach((l, i) => {
           if (l.position.y < -50) return;
           l.intensity = 9 + Math.sin(t * 13 + i * 2) * 1.6 + Math.sin(t * 29 + i) * 1.1;
@@ -88,9 +99,25 @@ export class FireFx {
     return ps;
   }
 
+  /** Dispose a system, never its texture (shared by every system of its kind). */
   private release(ps: ParticleSystem) {
-    this.systems.delete(ps);
+    // already gone (dispose() took it)
+    if (!this.systems.delete(ps)) return;
     ps.dispose(false);
+  }
+
+  /** Run `fn` after `seconds` of game time (stops with the pause; dropped by dispose). */
+  private after(seconds: number, fn: () => void) {
+    if (this.disposed) return;
+    let t = 0;
+    const off = this.world.onUpdate((dt) => {
+      t += dt;
+      if (t < seconds) return;
+      off();
+      this.timers.delete(off);
+      fn();
+    });
+    this.timers.add(off);
   }
 
   /** Fire sheet particles (animated 8x8 sprite sheet), additive. */
@@ -134,9 +161,14 @@ export class FireFx {
     ps.maxAngularSpeed = 0.4;
   }
 
-  /** A burning spot (roof, rubble, a hit) with a smoke column; `light` borrows one of the flicker lights. */
+  /**
+   * A burning spot (roof, rubble, a hit) with a smoke column; `light` borrows one of the flicker
+   * lights (when none is free, the one on the lit fire farthest from the camera, if that is farther).
+   */
   fire(pos: Vector3, scale = 1, o: { smoke?: boolean; light?: boolean; sound?: boolean } = {}): FireHandle {
     const p = pos.clone();
+    // a script left running past the chapter's end: nothing to light
+    if (this.disposed) return { pos: p, stop() {} };
     const f = this.system("fire", Math.round(50 * scale) + 10, true);
     this.flames(f, 1.5 * scale);
     // tongues of flame rising from a disc, shrinking as they climb
@@ -169,28 +201,45 @@ export class FireFx {
     }
     let light: PointLight | null = null;
     if (o.light) {
-      light = this.lights.find((l) => l.position.y < -50) ?? null;
+      light = this.lights.find((l) => !this.lightOwner.has(l)) ?? null;
+      if (!light) {
+        // a scripted fire by the player takes the light from a distant roof
+        const cam = this.world.rig.position;
+        let far = Vector3.Distance(p, cam);
+        for (const [l, owner] of this.lightOwner) {
+          const d = Vector3.Distance(owner.pos, cam);
+          if (d > far) {
+            far = d;
+            light = l;
+          }
+        }
+      }
       light?.position.copyFrom(p.add(new Vector3(0, 1.2, 0)));
     }
-    let snd: { stop(): void } | null = null;
-    if (o.sound !== false) void this.world.loopEmitter("audio/burning", () => p, 0.5 * Math.min(1.5, scale)).then((h) => (snd = h));
+    // the stop handle arrives once the loop has loaded: a fire stopped before then still stops it
+    const snd = o.sound !== false ? this.world.loopEmitter("audio/burning", () => p, 0.5 * Math.min(1.5, scale)) : null;
     const h: FireHandle = {
       pos: p,
       stop: () => {
+        // stopped already
+        if (!this.fires.includes(h)) return;
+        this.fires = this.fires.filter((x) => x !== h);
         f.stop();
         sm?.stop();
-        snd?.stop();
-        if (light) {
+        void snd?.then((s) => s?.stop());
+        // (unless a nearer fire has taken it meanwhile)
+        if (light && this.lightOwner.get(light) === h) {
+          this.lightOwner.delete(light);
           light.position.y = -100;
           light.intensity = 0;
         }
-        setTimeout(() => {
+        this.after(6, () => {
           this.release(f);
           if (sm) this.release(sm);
-        }, 6000);
-        this.fires = this.fires.filter((x) => x !== h);
+        });
       },
     };
+    if (light) this.lightOwner.set(light, h);
     this.fires.push(h);
     return h;
   }
@@ -209,6 +258,7 @@ export class FireFx {
 
   /** One-shot burst (impact, explosion). */
   burst(pos: Vector3, scale = 1) {
+    if (this.disposed) return;
     const f = this.system("burst", 60, true);
     this.flames(f, 2.6 * scale);
     f.particleEmitterType = new SphereParticleEmitter(0.6 * scale, 1);
@@ -220,7 +270,6 @@ export class FireFx {
     f.maxEmitPower = 9 * scale;
     f.gravity = new Vector3(0, 3, 0);
     f.targetStopDuration = 1.2;
-    f.disposeOnStop = true;
     f.start();
     const sp = this.system("sparks", 80, false);
     sp.particleTexture = this.tex.spark;
@@ -239,7 +288,6 @@ export class FireFx {
     sp.maxEmitPower = 14;
     sp.gravity = new Vector3(0, -9.8, 0);
     sp.targetStopDuration = 2;
-    sp.disposeOnStop = true;
     sp.start();
     const sm = this.system("burstSmoke", 30, true);
     this.smokeOf(sm, 3 * scale, 0.12);
@@ -252,9 +300,11 @@ export class FireFx {
     sm.maxEmitPower = 3;
     sm.gravity = new Vector3(0, 1.2, 0);
     sm.targetStopDuration = 5;
-    sm.disposeOnStop = true;
     sm.start();
-    for (const ps of [f, sp, sm]) ps.onDisposeObservable.addOnce(() => this.systems.delete(ps));
+    // each ends by targetStopDuration and is released once played out: not with disposeOnStop, which
+    // would dispose the shared textures (and every other fire with them), and not from inside the
+    // scene's particle loop that reports the end
+    for (const ps of [f, sp, sm]) ps.onAnimationEnd = () => this.after(0, () => this.release(ps));
   }
 
   /**
@@ -265,9 +315,10 @@ export class FireFx {
     return this.fireballTo(from, new Vector3(x, this.world.heightAt(x, z) + 0.3, z), speed, o);
   }
 
-  /** A fireball between two points (e.g. from the dragon's mouth into a wall). */
+  /** A fireball between two points (e.g. from the dragon's mouth into a wall). Never resolves once disposed first. */
   fireballTo(from: Vector3, to: Vector3, speed = 38, o: { linger?: number; scorch?: boolean } = {}) {
     const w = this.world;
+    if (this.disposed) return new Promise<Vector3>(() => {});
     const ball = CreateSphere("fireball", { diameter: 0.9, segments: 8 }, w.scene);
     ball.material = this.ballMat;
     ball.isPickable = false;
@@ -293,24 +344,29 @@ export class FireFx {
     const dist = Vector3.Distance(from, to);
     let t = 0;
     return new Promise<Vector3>((resolve) => {
+      // (also dispose's way to end a ball still in flight)
+      const end = () => {
+        off();
+        this.active.delete(end);
+        trail.stop();
+        smoke.stop();
+        ball.dispose();
+      };
       const off = w.onUpdate((dt) => {
         t += dt;
         const k = Math.min(1, (t * speed) / dist);
         Vector3.LerpToRef(from, to, k, ball.position);
         if (k >= 1) {
-          off();
-          trail.stop();
-          smoke.stop();
-          ball.dispose();
-          setTimeout(() => {
+          end();
+          this.after(2.5, () => {
             this.release(trail);
             this.release(smoke);
-          }, 2500);
+          });
           this.impact(to, o.linger ?? 8, 1, o.scorch !== false);
           resolve(to);
         }
       });
-      this.offs.push(off);
+      this.active.add(end);
     });
   }
 
@@ -324,7 +380,7 @@ export class FireFx {
     void audio.playOneShot(Math.random() < 0.5 ? "audio/collapse_small" : "audio/rubble", 1.1 * scale, at, "sfx", 0.8 + Math.random() * 0.3, 14);
     if (linger > 0) {
       const f = this.fire(at, 0.6 * scale, { sound: false });
-      setTimeout(() => f.stop(), linger * 1000);
+      this.after(linger, () => f.stop());
     }
   }
 
@@ -334,6 +390,7 @@ export class FireFx {
    */
   breath(source: () => { pos: Vector3; dir: Vector3 }, seconds = 2.5) {
     const w = this.world;
+    if (this.disposed) return Promise.resolve();
     const ps = this.system("breath", 600, true);
     this.flames(ps, 2.2);
     ps.particleEmitterType = new ConeParticleEmitter(0.6, 0.22);
@@ -361,24 +418,33 @@ export class FireFx {
     void audio.playOneShot("audio/breath", 1.2, cur.pos, "sfx", 1, 20);
     let t = 0;
     return new Promise<void>((resolve) => {
+      // (also dispose's way to end a stream still burning: its sound loop would play on)
+      const end = () => {
+        off();
+        this.active.delete(end);
+        ps.stop();
+        void snd.then((h) => h?.stop());
+        resolve();
+      };
       const off = w.onUpdate((dt) => {
         t += dt;
         cur = source();
         cur.dir.normalize();
         em.copyFrom(cur.pos);
         if (t < seconds) return;
-        off();
-        ps.stop();
-        void snd.then((h) => h?.stop());
-        setTimeout(() => this.release(ps), 1500);
-        resolve();
+        end();
+        this.after(1.5, () => this.release(ps));
       });
-      this.offs.push(off);
+      this.active.add(end);
     });
   }
 
   dispose() {
+    this.disposed = true;
     for (const o of this.offs) o();
+    for (const off of this.timers) off();
+    this.timers.clear();
+    for (const end of [...this.active]) end();
     for (const f of [...this.fires]) f.stop();
     for (const ps of this.systems) ps.dispose(false);
     this.systems.clear();

@@ -14,18 +14,26 @@ class AudioSystem {
   private buses = {} as Record<Bus, GainNode>;
   private buffers = new Map<string, Promise<AudioBuffer>>();
   private music: { id: string; src: AudioBufferSourceNode; gain: GainNode } | null = null;
+  /** the track playMusic is still loading, and the latest request (a later play or a stop drops a pending one) */
+  private pendingMusic: string | null = null;
+  private musicGen = 0;
   private beds = new Map<string, { src: AudioBufferSourceNode; gain: GainNode }>();
+  /** beds still loading, by key (stopBed / stopAllBeds take them back) */
+  private pendingBeds = new Map<string, object>();
+  /** a gesture has called unlock(): before that the context, if any, is usually suspended */
+  private unlocked = false;
   musicTracks: Partial<Record<MusicState, string>> = {};
   musicState: MusicState | null = null;
 
   /** Must be called from a user gesture (first click/keypress) to start playback. */
   unlock() {
+    this.unlocked = true;
     this.ensureContext();
     if (this.ctx!.state === "suspended") void this.ctx!.resume();
   }
 
   /** Create the context early (it stays suspended until unlock) so buffers can decode ahead. */
-  private ensureContext() {
+  private ensureContext(): AudioContext {
     if (!this.ctx) {
       const AC = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       this.ctx = new AC({ latencyHint: "interactive" });
@@ -38,6 +46,7 @@ class AudioSystem {
       this.applyVolumes();
       settings.on(() => this.applyVolumes());
     }
+    return this.ctx;
   }
 
   private applyVolumes() {
@@ -68,15 +77,30 @@ class AudioSystem {
     return this.buffers.has(id);
   }
 
+  /**
+   * Before the first gesture the track starts on the suspended context and fades in once unlock()
+   * resumes it. The latest request wins: a track still loading is dropped by another playMusic or
+   * by stopMusic.
+   */
   async playMusic(id: string, { fade = 3, volume = 1, loop = true } = {}) {
-    if (!this.ctx || this.music?.id === id) return;
-    const buf = await this.load(id);
-    const t = this.ctx.currentTime;
+    const ctx = this.ensureContext();
+    if (this.pendingMusic === id) return;
+    const gen = ++this.musicGen;
+    this.pendingMusic = null;
+    if (this.music?.id === id) return;
+    this.pendingMusic = id;
+    const buf = await this.load(id).catch((e) => {
+      if (gen === this.musicGen) this.pendingMusic = null;
+      throw e;
+    });
+    if (gen !== this.musicGen) return;
+    this.pendingMusic = null;
+    const t = ctx.currentTime;
     this.stopMusic(fade);
-    const src = this.ctx.createBufferSource();
+    const src = ctx.createBufferSource();
     src.buffer = buf;
     src.loop = loop;
-    const gain = this.ctx.createGain();
+    const gain = ctx.createGain();
     gain.gain.setValueAtTime(0, t);
     gain.gain.linearRampToValueAtTime(volume, t + fade);
     src.connect(gain).connect(this.buses.music);
@@ -85,6 +109,9 @@ class AudioSystem {
   }
 
   stopMusic(fade = 2) {
+    // also a track still loading: it would start after this otherwise
+    this.musicGen++;
+    this.pendingMusic = null;
     if (!this.ctx || !this.music) return;
     const { src, gain } = this.music;
     const t = this.ctx.currentTime;
@@ -97,21 +124,36 @@ class AudioSystem {
 
   /** Switch between calm / tense / combat tracks registered in musicTracks. */
   setMusicState(state: MusicState) {
-    if (this.musicState === state) return;
-    this.musicState = state;
     const id = this.musicTracks[state];
+    // the same state again only when its track still plays: a stopMusic since (the menu, a load) ended it
+    if (this.musicState === state && (!id || this.music?.id === id || this.pendingMusic === id)) return;
+    this.musicState = state;
     if (id) void this.playMusic(id, { fade: state === "combat" ? 1 : 4 });
   }
 
+  /** For a stage or chapter change: forgets the state and its tracks (the next one registers its own). */
+  resetMusicState() {
+    this.musicTracks = {};
+    this.musicState = null;
+  }
+
   async startBed(key: string, id: string, volume = 1, fade = 2, bus: Bus = "ambience") {
-    if (!this.ctx || this.beds.has(key)) return;
-    const buf = await this.load(id);
-    if (this.beds.has(key)) return;
-    const src = this.ctx.createBufferSource();
+    const ctx = this.ensureContext();
+    if (this.beds.has(key) || this.pendingBeds.has(key)) return;
+    const req = {};
+    this.pendingBeds.set(key, req);
+    const buf = await this.load(id).catch((e) => {
+      if (this.pendingBeds.get(key) === req) this.pendingBeds.delete(key);
+      throw e;
+    });
+    // stopped while it loaded
+    if (this.pendingBeds.get(key) !== req) return;
+    this.pendingBeds.delete(key);
+    const src = ctx.createBufferSource();
     src.buffer = buf;
     src.loop = true;
-    const gain = this.ctx.createGain();
-    const t = this.ctx.currentTime;
+    const gain = ctx.createGain();
+    const t = ctx.currentTime;
     gain.gain.setValueAtTime(0, t);
     gain.gain.linearRampToValueAtTime(volume, t + fade);
     src.connect(gain).connect(this.buses[bus]);
@@ -130,6 +172,7 @@ class AudioSystem {
   }
 
   stopBed(key: string, fade = 1.5) {
+    this.pendingBeds.delete(key);
     const b = this.beds.get(key);
     if (!b || !this.ctx) return;
     const t = this.ctx.currentTime;
@@ -141,6 +184,7 @@ class AudioSystem {
   }
 
   stopAllBeds(fade = 1.5) {
+    this.pendingBeds.clear();
     for (const k of [...this.beds.keys()]) this.stopBed(k, fade);
   }
 
@@ -218,7 +262,8 @@ class AudioSystem {
 
   /** Short synthesized UI tick (no asset needed). */
   uiTick(kind: "move" | "select" = "move") {
-    if (!this.ctx) return;
+    // before the first gesture the context is suspended: ticks queued on it would all sound at once with it
+    if (!this.ctx || !this.unlocked) return;
     const t = this.ctx.currentTime;
     const o = this.ctx.createOscillator();
     const g = this.ctx.createGain();

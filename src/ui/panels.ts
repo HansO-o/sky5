@@ -1,7 +1,7 @@
 import { assets } from "../core/assets/AssetClient";
 import { audio } from "../core/audio";
 import { input } from "../core/input";
-import { ACTION_LABELS, DEFAULT_KEYS, keyLabel, settings, type Action, type Quality } from "../core/settings";
+import { ACTION_LABELS, DEFAULT_KEYS, keyLabel, RESERVED_KEY, settings, type Action, type Quality } from "../core/settings";
 import { listSaves, type SaveGame } from "../core/saves";
 import { heading, styleRange } from "./widgets";
 
@@ -190,9 +190,10 @@ export function openSettings(close?: () => void) {
       b.classList.add("wait");
       b.textContent = "按下新按键…";
       input.keyHook = (e) => {
+        // the held key that started the wait (Enter on the focused button) repeats: neither binds nor cancels
+        if (e.repeat) return true;
         if (e.code === "Escape") stop();
-        // modifiers start browser shortcuts (Ctrl+W closes the tab); F11/F12 are the browser's
-        else if (!e.code || /^(Control|Meta|Alt|OS)|^F1[12]$/.test(e.code)) b.textContent = "该键不可用";
+        else if (!e.code || RESERVED_KEY.test(e.code)) b.textContent = "该键不可用";
         else stop(e.code);
         return true;
       };

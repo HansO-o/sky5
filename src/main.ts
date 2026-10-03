@@ -54,8 +54,8 @@ window.addEventListener("keydown", (e) => {
   audio.unlock();
   // the main menu's panels (in play Game closes the pause menu's in its frame: handling the same Esc
   // here too would close the panel and then resume the game); a pending rebind takes its Esc first
-  // through input.keyHook
-  if (panelOpen() && e.code === "Escape" && !menuEl.classList.contains("hidden")) {
+  // through input.keyHook (and its auto-repeat must not close the panel either, if Esc is held)
+  if (panelOpen() && e.code === "Escape" && !e.repeat && !menuEl.classList.contains("hidden")) {
     closePanel();
     return;
   }
@@ -167,6 +167,8 @@ function getGame() {
       e.returnValue = "";
     });
     g.onExitToMenu = () => {
+      // the game's music states end with it (a later visit to its chapter sets its state again)
+      audio.resetMusicState();
       // back on the menu the cursor starts on 继续 again, not on the 新游戏 the last game came from
       selectFirst();
       void showMenu().catch((e) => {
@@ -179,6 +181,8 @@ function getGame() {
         } else {
           void hud.fade(false, 0.3);
           menuEl.classList.remove("hidden", "fade");
+          // the prologue just finished has written autosaves: 继续 and 读取 are enabled now
+          void refreshSaves();
         }
       });
     };
@@ -191,31 +195,49 @@ function getGame() {
 
 async function showMenu() {
   // 新游戏 works on the DOM menu before the engine is up: once a game is starting it owns the screen
-  // (the menu, the asset segment, the music), so every step after an await gives way to it
+  // (the menu, the asset segment, the music) until its stage is on screen, so every step after an
+  // await gives way to it. So does a start since this call, even one already over: a game that came
+  // up stays up, and a failed one shows its own menu
+  const gen = starts;
+  const stale = () => starting || starts !== gen;
   const game = await getGame();
-  if (starting) return;
+  if (stale()) return;
   assets.setSegment("menu");
   const { MenuStage } = await import("./scenes/MenuStage");
-  if (starting) return;
+  if (stale()) return;
   // after a failed start the menu scene is usually still up
-  if (!(game.stage instanceof MenuStage)) await game.setStage(async () => new MenuStage(game.engine).init());
-  if (starting) return;
+  if (!(game.stage instanceof MenuStage)) {
+    try {
+      await game.setStage(async () => {
+        const menu = new MenuStage(game.engine);
+        try {
+          await menu.init();
+          // a game started while the scene loaded (and may be on screen by now): not replaced by it
+          if (stale()) throw new Error("menu superseded by a game start");
+        } catch (e) {
+          menu.dispose();
+          throw e;
+        }
+        return menu;
+      });
+    } catch (e) {
+      // that game reports its own failure and brings the menu back then
+      if (stale()) return;
+      throw e;
+    }
+  }
+  if (stale()) return;
   menuEl.classList.remove("hidden", "fade");
   // back from a game left on a black screen (a chapter change, a skip): nothing clears it on the menu
   void hud.fade(false, 0.3);
   document.getElementById("smoke")!.classList.add("off");
-  await refreshSaves();
-  if (starting) return;
-  // playMusic waits for the track first and stopMusic can't cancel that wait: only start the theme
-  // once it's loaded, if no game has started meanwhile (no AudioContext yet: no gesture, no music)
-  if (audio.ctx)
-    void audio
-      .load("audio/music_menu")
-      .then(() => {
-        if (!starting && !menuEl.classList.contains("hidden") && !menuEl.classList.contains("fade"))
-          return audio.playMusic("audio/music_menu", { fade: 4, volume: 0.8 });
-      })
-      .catch(() => {});
+  // a saves DB that hangs (it times out after seconds) doesn't hold up the music and the preload:
+  // 继续/读取 are enabled whenever it answers
+  await Promise.race([refreshSaves(), new Promise((r) => setTimeout(r, 1500))]);
+  if (stale()) return;
+  // a start's stopMusic also drops the theme while it loads; before the first click or key it waits
+  // on the suspended AudioContext and fades in with it
+  void audio.playMusic("audio/music_menu", { fade: 4, volume: 0.8 }).catch(() => {});
   // build the ride behind the menu straight away (downloads overlap with parsing/compiling)
   void preloadPrologue();
 }
@@ -281,17 +303,25 @@ function toPrologueSave(save: SaveGame | null): PrologueSaveT {
  * There is one autosave slot and every chapter checkpoint goes there: a new game keeps the save it
  * replaces as a second autosave in 读取 instead of losing it. Not when that save is still on the ride
  * (say the last new game's own start): then auto-prev keeps the real checkpoint from before it.
+ * Keeping it is best-effort: the new game's own autosave always runs, and reports its own failure.
  */
 async function newGameAutosave(game: Game) {
-  const prev = (await listSaves()).find((s) => s.id === "auto");
-  if (prev && toPrologueSave(prev).chapter !== "cart") await writeSave({ ...prev, id: "auto-prev" });
+  try {
+    const prev = (await listSaves()).find((s) => s.id === "auto");
+    if (prev && toPrologueSave(prev).chapter !== "cart") await writeSave({ ...prev, id: "auto-prev" });
+  } catch (e) {
+    console.warn("auto-prev not kept", e);
+  }
   await game.save("auto");
 }
 
 let starting = false;
+/** Starts so far: a showMenu() from before the latest start gives way to it (see there). */
+let starts = 0;
 async function startFromSave(save: SaveGame | null) {
   if (starting) return;
   starting = true;
+  const mine = ++starts;
   audio.unlock();
   audio.uiTick("select");
   // the menu stops taking input right away, not after the engine comes up (seconds on a first visit)
@@ -309,13 +339,17 @@ async function startFromSave(save: SaveGame | null) {
     off = assets.onProgress(() => {
       if (!ready) hud.loading(true, `正在准备 ${Math.round(assets.startPackProgress(ps.chapter) * 100)}%`);
     });
-    audio.stopMusic(2.5);
     const st = await preloadPrologue();
     built = st;
     preload = null; // a later "new game" builds a fresh stage
     await st.prepareChapter(ps);
     ready = true;
     hud.loading(false);
+    // only now that the load can no longer fail: until then the music is the game's still being played
+    // (读取 from its pause menu), or the menu's
+    audio.stopMusic(2.5);
+    // a new stage: the last game's music states don't carry over
+    audio.resetMusicState();
     await hud.fade(true, 1.0);
     menuEl.classList.add("hidden");
     // the CSS smoke is still up if the game was started before the 3D menu was
@@ -323,8 +357,11 @@ async function startFromSave(save: SaveGame | null) {
     // a sneak toggled on in the last game (exit to menu, or 读取 from the pause menu) doesn't carry over
     input.resetLatches();
     await game.setStage(async () => st);
-    // the game is running now: a failed autosave must not throw the player back to the menu
-    if (!save) await newGameAutosave(game).catch((err) => console.warn("autosave failed", err));
+    // the game is on screen: it no longer holds the menu off (返回主菜单 from a pause during the fade-in)
+    starting = false;
+    // the game is running now: a failed autosave must not throw the player back to the menu, nor hold
+    // the fade-in (a saves DB that hangs takes seconds to time out)
+    if (!save) void newGameAutosave(game).catch((err) => console.warn("autosave failed", err));
     mark("cart-started");
     console.info(`[timing] cart started ${(performance.now() - t0).toFixed(0)} ms after boot`);
     await hud.fade(false, 2.5);
@@ -336,16 +373,17 @@ async function startFromSave(save: SaveGame | null) {
     void hud.fade(false, 0.3);
     // the menu scene, its music and the preload behind it: this start stopped or used them up, or
     // began before the 3D menu was up (showMenu gives way to a start, so clear the flag first)
-    starting = false;
+    if (starts === mine) starting = false;
     // 读取 from the pause menu: that game is still on and Game reopens its pause menu
     if (!game?.stage?.gameplay) {
       menuEl.classList.remove("hidden", "fade");
       if (game) void showMenu().catch((err) => console.error(err));
-    }
+    } else assets.setSegment(game.stage.segment);
     alert("无法开始游戏：" + (e instanceof Error ? e.message : String(e)));
   } finally {
     off?.();
-    starting = false;
+    // not a later start's flag (one can begin during this start's fade-in)
+    if (starts === mine) starting = false;
   }
 }
 

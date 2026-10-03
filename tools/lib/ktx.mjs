@@ -12,6 +12,8 @@ const workers = [];
 const idle = [];
 const queue = [];
 const waiting = new Map();
+/** In-flight encodes by cache key: the merged character documents share images, so one encode serves every copy. */
+const pending = new Map();
 let seq = 0;
 
 function spawn() {
@@ -73,9 +75,19 @@ export async function toKTX2(input, o) {
     .update(input)
     .update(JSON.stringify({ opts, maxSize: o.maxSize, size: o.size, v: 2 }))
     .digest("hex");
+  let p = pending.get(key);
+  if (!p) {
+    p = encode(input, o, opts, key).finally(() => pending.delete(key));
+    pending.set(key, p);
+  }
+  return p;
+}
+
+async function encode(input, o, opts, key) {
   const cacheFile = path.join(CACHE, key + ".ktx2");
   try {
-    return await fs.readFile(cacheFile);
+    const hit = await fs.readFile(cacheFile);
+    if (isCompleteKtx2(hit)) return hit;
   } catch {}
   let img = sharp(input);
   const meta = await img.metadata();
@@ -94,6 +106,24 @@ export async function toKTX2(input, o) {
   const png = await img.png({ compressionLevel: 1 }).toBuffer();
   const out = await run(png, opts);
   await fs.mkdir(CACHE, { recursive: true });
-  await fs.writeFile(cacheFile, out);
+  // write-then-rename, so a build killed mid-write never leaves a truncated cache entry; a temp name per
+  // call, so concurrent encodes of one texture each rename their own complete file (last one wins)
+  const tmp = `${cacheFile}.tmp-${process.pid}-${crypto.randomUUID()}`;
+  await fs.writeFile(tmp, out);
+  await fs.rename(tmp, cacheFile);
   return out;
+}
+
+const KTX2_ID = Buffer.from([0xab, 0x4b, 0x54, 0x58, 0x20, 0x32, 0x30, 0xbb, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+/** KTX2 identifier present and the file reaches the end of every mip level in its level index. */
+function isCompleteKtx2(b) {
+  if (b.length < 80 || !b.subarray(0, 12).equals(KTX2_ID)) return false;
+  const levels = Math.max(1, b.readUInt32LE(40));
+  if (b.length < 80 + levels * 24) return false;
+  for (let i = 0; i < levels; i++) {
+    const at = 80 + i * 24;
+    if (Number(b.readBigUInt64LE(at)) + Number(b.readBigUInt64LE(at + 8)) > b.length) return false;
+  }
+  return true;
 }

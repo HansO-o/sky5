@@ -29,7 +29,7 @@ while (Date.now() - t0 < 600000) {
   if (s.toast.includes("进入塔楼") && !did.has(1)) { did.add(1); await page.waitForTimeout(4000); await shot("square"); await tp(88.4, 0.1, -584, -Math.PI / 2); }
   if (s.toast.includes("爬上塔楼") && !did.has(2)) { did.add(2); await page.waitForTimeout(1500); await tp(91.5, 6.5, -582.5, -Math.PI / 2); }
   if (s.toast.includes("跳进旅店") && !did.has(3)) { did.add(3); await page.waitForTimeout(2500); for (const [i, yaw] of [0, Math.PI / 2, Math.PI, -Math.PI / 2].entries()) { await page.evaluate((y) => { const w = window.__game.stage.world; w.rig.yaw = y; w.rig.pitch = 0; }, yaw); await page.waitForTimeout(1500); await shot("breach" + i); } await tp(97.8, 3.5, -584, -Math.PI / 2); await page.waitForTimeout(3000); await shot("inn"); await tp(103, 0.1, -571, 0); }
-  if (s.step === 3 && (s.sub.includes("跟紧我") || did.has(4))) {
+  if (s.step === 3 && (s.toast.includes("跟随书记官") || did.has(4))) {
     did.add(4);
     // keep up with the scribe
     await page.evaluate(() => { const s = window.__game.stage; const c = s.world.npcs.get("scribe"); const V = s.world.rig.camera.position.constructor; const p = c.root.position; s.player.teleport(new V(p.x + 2, s.world.heightAt(p.x + 2, p.z + 2) + 0.1, p.z + 2)); s.world.rig.yaw = Math.atan2(-(p.x - (p.x + 2)), -(p.z - (p.z + 2))); });

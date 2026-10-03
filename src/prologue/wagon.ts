@@ -1,4 +1,4 @@
-import type { AssetContainer } from "@babylonjs/core/assetContainer";
+import type { AssetContainer, InstantiatedEntries } from "@babylonjs/core/assetContainer";
 import type { AnimationGroup } from "@babylonjs/core/Animations/animationGroup";
 import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import { Quaternion, Vector3 } from "@babylonjs/core/Maths/math.vector";
@@ -33,6 +33,8 @@ export class Wagon {
   private wheelAngle = 0;
   horseRoot: TransformNode;
   private horseWalk: AnimationGroup | null = null;
+  /** what the models instantiated: disposing the nodes alone leaves the horse's cloned skeleton and walk clip in the scene */
+  private entries: InstantiatedEntries[] = [];
   private seed = Math.random() * 100;
   /** vertical bounce + roll added to the body (felt through the seat camera) */
   bump = 0;
@@ -44,6 +46,7 @@ export class Wagon {
     readonly name: string,
   ) {
     const w = wagon.instantiateModelsToScene((n) => n, false);
+    this.entries.push(w);
     this.root = new TransformNode(`${name}_root`, scene);
     this.root.rotationQuaternion = Quaternion.Identity();
     // inner node carries bounce/roll so the axles stay on the road
@@ -66,6 +69,7 @@ export class Wagon {
     }
 
     const h = horse.instantiateModelsToScene((n) => `${name}_${n}`, false, { doNotInstantiate: true });
+    this.entries.push(h);
     this.horseRoot = new TransformNode(`${name}_horse`, scene);
     this.horseRoot.rotationQuaternion = Quaternion.Identity();
     this.horseRoot.scaling.setAll(HORSE_SCALE);
@@ -126,7 +130,9 @@ export class Wagon {
   }
 
   dispose() {
-    this.horseWalk?.dispose();
+    // the models first (nodes with whoever sits on them, skeletons, clips; shared materials stay), then the wrapper nodes
+    for (const e of this.entries) e.dispose();
+    this.entries = [];
     this.horseRoot.dispose(false, false);
     this.root.dispose(false, false);
   }

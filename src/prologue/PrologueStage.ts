@@ -79,6 +79,8 @@ export class PrologueStage implements Stage {
   private ctx: Omit<ChapterContext, "director">;
   private paused = false;
   private disposed = false;
+  /** begin() has run: the stage reached the screen */
+  private begun = false;
 
   constructor(private game: Game) {
     this.world = new World(game.engine);
@@ -281,6 +283,7 @@ export class PrologueStage implements Stage {
 
   /** Called by Game.setStage when this stage becomes active. */
   begin() {
+    this.begun = true;
     void this.play();
   }
 
@@ -317,6 +320,8 @@ export class PrologueStage implements Stage {
         // also ends what a finished chapter left running (detached script branches)
         cur.scope.cancel();
         ch.dispose();
+        // every chapter starts with no music states (it registers its own tracks)
+        audio.resetMusicState();
         this.running = null;
         this.chapter = null;
         this.gap = end;
@@ -335,7 +340,21 @@ export class PrologueStage implements Stage {
         // fades in when it is ready
         if (!ch.seamless) await hud.fade(true, 1.0);
         if (this.disposed) return "failed";
-        await ch.prepare(null, true);
+        // the town may still be loading (a ride skipped early, a cold cache): say so behind the
+        // black screen, but not for a prepare that is over in a moment
+        let hint = false;
+        const t = setTimeout(() => {
+          if (this.townReady || this.disposed) return;
+          hint = true;
+          hud.loading(true, "加载中");
+        }, 400);
+        try {
+          await ch.prepare(null, true);
+        } finally {
+          clearTimeout(t);
+          // (dispose() has cleared it already; by now the hint may belong to the next load)
+          if (hint && !this.disposed) hud.loading(false);
+        }
       }
       // the story never moves on behind the pause menu
       while (this.paused && !this.disposed) await nextFrame();
@@ -376,6 +395,7 @@ export class PrologueStage implements Stage {
     hud.clearSubtitle();
     audio.stopAllBeds(2);
     audio.stopMusic(3);
+    audio.resetMusicState();
     const card = document.createElement("section");
     card.id = "endcard";
     card.appendChild(heading("雾门镇"));
@@ -386,6 +406,8 @@ export class PrologueStage implements Stage {
       this.game.exitToMenu();
     });
     document.getElementById("ui")!.appendChild(card);
+    // Enter / Space work on the card straight away
+    card.querySelector("button")!.focus({ preventScroll: true });
     input.releaseLock();
     this.gameplay = false;
   }
@@ -423,14 +445,18 @@ export class PrologueStage implements Stage {
     this.running?.chapter.dispose();
     this.prepared?.chapter.dispose();
     for (const w of this.wagons) w.dispose();
-    audio.stopAllBeds(1);
     this.player?.dispose();
     this.world.dispose();
     this.physics?.dispose();
-    hud.clearSubtitle();
-    hideSubtitle(false);
-    hud.loading(false);
-    hud.prompt(null);
+    // a stage that never reached the screen (a failed load from the pause menu) owns none of the
+    // global audio/HUD state: that still belongs to the game being played
+    if (this.begun) {
+      audio.stopAllBeds(1);
+      hud.clearSubtitle();
+      hideSubtitle(false);
+      hud.loading(false);
+      hud.prompt(null);
+    }
   }
 }
 
