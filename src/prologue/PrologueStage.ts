@@ -7,9 +7,11 @@ import { input } from "../core/input";
 import { settings, type Quality } from "../core/settings";
 import { hud } from "../ui/hud";
 import { buildTown, LAYOUT, type Town } from "../world/town";
-import { Physics } from "../physics/Physics";
+import { L, Physics } from "../physics/Physics";
 import { VertexBuffer } from "@babylonjs/core/Buffers/buffer";
-import { Vector3 } from "@babylonjs/core/Maths/math.vector";
+import { Quaternion, Vector3 } from "@babylonjs/core/Maths/math.vector";
+import { CreateBox } from "@babylonjs/core/Meshes/Builders/boxBuilder";
+import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import type { AbstractMesh } from "@babylonjs/core/Meshes/abstractMesh";
 import { nextFrame } from "../game/loaders";
 import { Cancelled, Director } from "./Director";
@@ -21,6 +23,7 @@ import { PlayerController } from "./player";
 import { createPlayerBody } from "./playerBody";
 import { CartChapter } from "./chapters/cart";
 import { RoamChapter } from "./chapters/roam";
+import { DragonChapter } from "./chapters/dragon";
 import { ExecutionChapter } from "./chapters/execution";
 import { MusterChapter } from "./chapters/muster";
 
@@ -31,6 +34,7 @@ export const CHAPTERS: { id: SegmentId; make: ChapterFactory }[] = [
   { id: "cart", make: (c) => new CartChapter(c) },
   { id: "muster", make: (c) => new MusterChapter(c) },
   { id: "execution", make: (c) => new ExecutionChapter(c) },
+  { id: "dragon", make: (c) => new DragonChapter(c) },
 ];
 const DEBUG = new URLSearchParams(location.search);
 if (DEBUG.has("debug") && DEBUG.has("roam")) CHAPTERS.splice(0, CHAPTERS.length, { id: "muster", make: (c) => new RoamChapter(c) });
@@ -159,6 +163,47 @@ export class PrologueStage implements Stage {
     return this.physicsP;
   }
   breachBody: ReturnType<Physics["addStaticMesh"]> | null = null;
+  breached = false;
+  private debris: Mesh[] = [];
+
+  /**
+   * The dragon smashes the tower's east wall: the wall section disappears and (with `push`) breaks
+   * into tumbling stones that settle and then freeze (they never block the player: ragdoll layer).
+   */
+  breakBreach(push?: Vector3) {
+    if (this.breached || !this.town) return;
+    this.breached = true;
+    const br = this.town.breach;
+    const ph = this.physics;
+    if (ph && this.breachBody) ph.removeBody(this.breachBody);
+    this.breachBody = null;
+    const src = br.meshes[0];
+    br.node.setEnabled(false);
+    if (!push || !ph || !src) return;
+    src.computeWorldMatrix(true);
+    const { minimumWorld: lo, maximumWorld: hi } = src.getBoundingInfo().boundingBox;
+    const ids: ReturnType<Physics["addBox"]>[] = [];
+    for (let i = 0; i < 16; i++) {
+      const s = 0.22 + Math.random() * 0.3;
+      const m = CreateBox("debris", { width: s * 2, height: s * 1.4, depth: s * 1.7 }, this.scene);
+      m.material = src.material;
+      const c = new Vector3(lo.x + Math.random() * (hi.x - lo.x), lo.y + Math.random() * (hi.y - lo.y), lo.z + Math.random() * (hi.z - lo.z));
+      m.position.copyFrom(c);
+      this.world.addShadowCasters([m]);
+      const id = ph.addBox(c, new Vector3(s, s * 0.7, s * 0.85), Quaternion.FromEulerAngles(Math.random() * 3, Math.random() * 3, Math.random() * 3), { dynamic: true, mass: 40, node: m, layer: L.RAGDOLL, friction: 0.9 });
+      ph.setVelocity(id, push.scale(3 + Math.random() * 5).add(new Vector3((Math.random() - 0.5) * 2, Math.random() * 3, (Math.random() - 0.5) * 2)), new Vector3(Math.random() * 6 - 3, Math.random() * 6 - 3, Math.random() * 6 - 3));
+      ids.push(id);
+      this.debris.push(m);
+    }
+    // once settled, the stones become scenery
+    let t = 0;
+    const off = this.world.onUpdate((dt) => {
+      t += dt;
+      if (t < 8) return;
+      off();
+      for (const id of ids) ph.removeBody(id);
+    });
+  }
 
   /** The on-foot player, created at `pos` facing `yaw` on first use (later calls teleport it). */
   async ensurePlayer(pos: Vector3, yaw: number) {
@@ -235,7 +280,7 @@ export class PrologueStage implements Stage {
     audio.stopMusic(3);
     const card = document.createElement("section");
     card.id = "endcard";
-    card.innerHTML = `<h2>囚 车</h2><p>第一段 · 完</p><p style="font-size:13px">后续段落将在之后的版本中开放</p><button>返回主菜单</button>`;
+    card.innerHTML = `<h2>雾 门 镇</h2><p>序章 · 未完待续</p><p style="font-size:13px">阵营选择、要塞与出洞将在之后的版本中开放</p><button>返回主菜单</button>`;
     card.querySelector("button")!.addEventListener("click", () => {
       card.remove();
       void hud.fade(false, 0.5);

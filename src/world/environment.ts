@@ -57,6 +57,8 @@ export interface Environment {
   pipeline: DefaultRenderingPipeline;
   addShadowCaster(m: AbstractMesh): void;
   applyQuality(q: Quality): void;
+  /** 0 = the overcast morning, 1 = the town burning (smoky orange fog, dimmer reddened light) */
+  setMood(k: number): void;
   dispose(): void;
 }
 
@@ -144,6 +146,19 @@ export async function createEnvironment(scene: Scene, camera: Camera): Promise<E
   pipeline.bloomKernel = 48;
   pipeline.bloomScale = 0.5;
 
+  let mood = 0, baseFog = 0.0024;
+  const sunBase = { c: sun.diffuse.clone(), i: sun.intensity }, envBase = scene.environmentIntensity;
+  const SMOKE = new Color3(0.36, 0.29, 0.25), FIRE_SUN = new Color3(1, 0.6, 0.38);
+  const applyMood = () => {
+    Color3.LerpToRef(FOG_COLOR, SMOKE, mood, scene.fogColor);
+    scene.clearColor.set(scene.fogColor.r, scene.fogColor.g, scene.fogColor.b, 1);
+    scene.fogDensity = baseFog * (1 + mood * 0.7);
+    Color3.LerpToRef(sunBase.c, FIRE_SUN, mood, sun.diffuse);
+    sun.intensity = sunBase.i * (1 - mood * 0.35);
+    scene.environmentIntensity = envBase * (1 - mood * 0.3);
+    if (skyMat.emissiveTexture) skyMat.emissiveTexture.level = 1 - mood * 0.45;
+    skyMat.emissiveColor.set(mood * 0.12, mood * 0.04, 0);
+  };
   const env3: Environment = {
     sun,
     get shadows() {
@@ -162,7 +177,7 @@ export async function createEnvironment(scene: Scene, camera: Camera): Promise<E
         pipeline.fxaaEnabled = true;
         pipeline.samples = 1;
         ip.colorCurvesEnabled = false;
-        scene.fogDensity = 0.0032;
+        baseFog = 0.0032;
       } else if (q === "medium") {
         makeShadows(1024, 2);
         shadows!.shadowMaxZ = 120;
@@ -170,15 +185,20 @@ export async function createEnvironment(scene: Scene, camera: Camera): Promise<E
         pipeline.fxaaEnabled = true;
         pipeline.samples = 1;
         ip.colorCurvesEnabled = true;
-        scene.fogDensity = 0.0026;
+        baseFog = 0.0026;
       } else {
         makeShadows(2048, 3);
         pipeline.bloomEnabled = true;
         pipeline.fxaaEnabled = false;
         pipeline.samples = 4;
         ip.colorCurvesEnabled = true;
-        scene.fogDensity = 0.0024;
+        baseFog = 0.0024;
       }
+      applyMood();
+    },
+    setMood(k) {
+      mood = Math.max(0, Math.min(1, k));
+      applyMood();
     },
     dispose() {
       shadows?.dispose();

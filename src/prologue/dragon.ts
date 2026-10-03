@@ -141,6 +141,18 @@ export class Dragon {
     return out.copyFrom(h.getAbsolutePosition());
   }
 
+  /** Where the fire comes from and where it goes: the mouth, along the neck → head direction. */
+  breathSource() {
+    const pos = this.mouth();
+    const n = this.nodes.get(NECK[NECK.length - 1]);
+    let dir: Vector3;
+    if (n) {
+      n.computeWorldMatrix(true);
+      dir = pos.subtract(n.getAbsolutePosition()).normalize();
+    } else dir = this.forward();
+    return { pos: pos.addInPlace(dir.scale(0.6)), dir };
+  }
+
   /** Forward direction of the body (model faces +Z). */
   forward() {
     return Vector3.TransformNormal(Vector3.Forward(), this.root.getWorldMatrix()).normalize();
