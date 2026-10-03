@@ -21,13 +21,13 @@ let s = await waitFor((s) => s.ch === "muster" && s.sub.length > 0, 240000);
 console.log("muster:", s);
 await page.screenshot({ path: "/tmp/claude-0/shots/chain-muster.png" });
 for (const next of ["execution", "dragon"]) {
-  await page.evaluate(() => window.__game.stage.skipChapter());
+  await page.evaluate(() => { void window.__game.stage.skipChapter(); });
   s = await waitFor((s) => s.ch === next && s.sub.length > 0, 300000);
   console.log(next + ":", s);
   await page.waitForTimeout(6000);
   await page.screenshot({ path: `/tmp/claude-0/shots/chain-${next}.png` });
 }
-await page.evaluate(() => window.__game.stage.skipChapter());
+await page.evaluate(() => { void window.__game.stage.skipChapter(); });
 s = await waitFor((s) => s.end, 120000);
 console.log("end:", s);
 console.log(logs.filter((l) => /error|pageerror|warn/i.test(l)).slice(0, 20).join("\n"));

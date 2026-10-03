@@ -101,8 +101,20 @@ try {
   await page.click("text=新游戏");
   await mark(page, "cart-started", 120000);
   check("offline: ride starts", true, `${Date.now() - t2} ms`);
-  await page.waitForSelector("#endcard", { timeout: 900000 });
-  check("offline: ride plays through to the end card", true, "");
+  // the ride plays in full; later chapters start (their assets come from the cache) and are skipped
+  const chapter = () => page.evaluate(() => window.__game?.stage?.chapter?.id ?? null);
+  await page.waitForFunction(() => window.__game?.stage?.chapter?.id === "muster", null, { timeout: 900000 });
+  check("offline: ride plays through to the town", true, "");
+  for (const next of ["execution", "dragon"]) {
+    await page.waitForTimeout(3000);
+    await page.evaluate(() => { void window.__game.stage.skipChapter(); });
+    await page.waitForFunction((n) => window.__game?.stage?.chapter?.id === n, next, { timeout: 300000 });
+    check(`offline: ${next} starts`, true, String(await chapter()));
+  }
+  await page.waitForTimeout(3000);
+  await page.evaluate(() => { void window.__game.stage.skipChapter(); });
+  await page.waitForSelector("#endcard", { timeout: 120000 });
+  check("offline: plays through to the end card", true, "");
   await page.screenshot({ path: "/tmp/claude-0/shots/e2e-end.png" });
   await page.close();
   await ctx.setOffline(false);

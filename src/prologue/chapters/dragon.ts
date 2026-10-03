@@ -272,10 +272,10 @@ export class DragonChapter implements Chapter {
           if (!w.npcs.has("p1")) return;
           const at = p1.root.position.clone();
           const hit = await this.fx.fireball(at.add(new Vector3(30, 90, -20)), at.x - 1.5, at.z - 2.5, 50, { linger: 10 });
-          if (!w.npcs.has("p1") || !w.physics) return;
+          if (!this.alive || !w.npcs.has("p1") || !w.physics) return;
           const push = p1.root.position.subtract(hit).normalize().scale(7).add(new Vector3(0, 5, 0));
           this.ragdolls.push(new Ragdoll(w.physics, p1, push, "pelvis"));
-        });
+        }).catch(() => {});
       }
       this.meteors = true;
       await d.sleep(1.2);
@@ -369,7 +369,7 @@ export class DragonChapter implements Chapter {
         await d.sleep(1.8);
         for (const [x, z] of [[65, -588], [63.5, -594], [62.5, -600]]) {
           const f = this.fx.fire(g(x, z), 0.9, { sound: x === 63.5 });
-          void d.sleep(9).then(() => f.stop());
+          void d.sleep(9).then(() => f.stop(), () => f.stop());
           this.fx.scorch(x, z, 3);
         }
         await pass;
