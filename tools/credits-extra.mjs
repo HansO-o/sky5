@@ -10,7 +10,6 @@ export const EXTRA_CREDITS = [
   { id: "fs-479790", kind: "sound", name: "R22-05-Two Horses on Dirt Road", authors: ["craigsmith"], source: "https://freesound.org/s/479790/", license: "CC0 1.0", licenseUrl: "https://creativecommons.org/publicdomain/zero/1.0/" },
   { id: "fs-538438", kind: "sound", name: "horse with old cart", authors: ["bruno.auzet"], source: "https://freesound.org/s/538438/", license: "CC0 1.0", licenseUrl: "https://creativecommons.org/publicdomain/zero/1.0/" },
   { id: "lib-babylon", kind: "library", name: "Babylon.js", authors: ["Babylon.js contributors"], source: "https://www.babylonjs.com", license: "Apache-2.0", licenseUrl: "https://github.com/BabylonJS/Babylon.js/blob/master/license.md" },
-  { id: "lib-jolt", kind: "library", name: "Jolt Physics / JoltPhysics.js", authors: ["Jorrit Rouwe"], source: "https://github.com/jrouwe/JoltPhysics.js", license: "MIT", licenseUrl: "https://github.com/jrouwe/JoltPhysics.js/blob/main/LICENSE" },
   { id: "lib-meshopt", kind: "library", name: "meshoptimizer", authors: ["Arseny Kapoulkine"], source: "https://github.com/zeux/meshoptimizer", license: "MIT", licenseUrl: "https://github.com/zeux/meshoptimizer/blob/master/LICENSE.md" },
   { id: "lib-basis", kind: "library", name: "Basis Universal", authors: ["Binomial LLC"], source: "https://github.com/BinomialLLC/basis_universal", license: "Apache-2.0", licenseUrl: "https://github.com/BinomialLLC/basis_universal/blob/master/LICENSE" },
 ];

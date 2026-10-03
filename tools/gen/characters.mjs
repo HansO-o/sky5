@@ -110,7 +110,7 @@ export async function buildCharacters({ emit, SRC }) {
     m.setBaseColorFactor([f[0] * k, f[1] * k * 0.98, f[2] * k * 0.95, f[3]]);
   }
   await doc.transform(unpartition(), prune());
-  await compressTextures(doc, 1024, 1024);
+  await compressTextures(doc, 1024, 512, 512);
   await emit("chars/male", { segment: "cart", priority: 97, type: "glb", ext: "glb", data: await finalize(doc) });
 
   // --- animation clips

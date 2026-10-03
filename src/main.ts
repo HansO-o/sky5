@@ -114,6 +114,8 @@ async function showMenu() {
   document.getElementById("smoke")!.classList.add("off");
   await refreshSaves();
   void audio.playMusic("audio/music_menu", { fade: 4, volume: 0.8 }).catch(() => {});
+  // build the ride behind the menu straight away (downloads overlap with parsing/compiling)
+  void preloadCart();
 }
 
 async function refreshSaves() {
@@ -121,6 +123,29 @@ async function refreshSaves() {
   buttons.find((b) => b.dataset.act === "continue")!.disabled = !has;
   buttons.find((b) => b.dataset.act === "load")!.disabled = !has;
   if (buttons[sel].disabled) select(0);
+}
+
+// ---------------------------------------------------------------- cart preloading
+// As soon as the ride's start pack is cached, build the whole cart scene (GPU uploads, shader
+// compilation) behind the menu, so "新游戏" only has to fade.
+type CartStageT = import("./scenes/cart/CartStage").CartStage;
+let cartPreload: Promise<CartStageT> | null = null;
+function preloadCart() {
+  cartPreload ??= (async () => {
+    const game = await getGame();
+    const tw = performance.now();
+    // request the whole start pack now (it jumps the queue); init() consumes each asset as it lands
+    void Promise.all(assets.startPack("cart").map((id) => assets.get(id))).then(() =>
+      console.info(`[timing] start pack ready +${(performance.now() - tw).toFixed(0)} ms`),
+    );
+    const { CartStage } = await import("./scenes/cart/CartStage");
+    const st = new CartStage(game);
+    await st.init();
+    mark("cart-preloaded");
+    return st;
+  })();
+  cartPreload.catch(() => (cartPreload = null));
+  return cartPreload;
 }
 
 let starting = false;
@@ -131,28 +156,23 @@ async function startFromSave(save: SaveGame | null) {
   audio.uiTick("select");
   try {
     const game = await getGame();
-    const seg = "cart" as const; // M1 ships the cart ride only; later segments resume here too
-    assets.setSegment(seg);
-    // Wait for the start pack with a corner indicator, never a full-screen loader.
-    const ids = assets.startPack(seg);
+    assets.setSegment("cart"); // M1 ships the cart ride only; later segments resume here too
     let ready = false;
     const off = assets.onProgress(() => {
-      if (!ready) hud.loading(true, `正在准备 ${Math.round(assets.startPackProgress(seg) * 100)}%`);
+      if (!ready) hud.loading(true, `正在准备 ${Math.round(assets.startPackProgress("cart") * 100)}%`);
     });
     hud.loading(true, "正在准备");
     menuEl.classList.add("fade");
     audio.stopMusic(2.5);
-    const [{ CartStage }] = await Promise.all([import("./scenes/cart/CartStage"), Promise.all(ids.map((id) => assets.get(id)))]);
+    const st = await preloadCart();
+    cartPreload = null; // a later "new game" builds a fresh stage
     ready = true;
     off();
     hud.loading(false);
-    await hud.fade(true, 1.2);
+    await hud.fade(true, 1.0);
     menuEl.classList.add("hidden");
-    await game.setStage(async () => {
-      const st = new CartStage(game);
-      await st.init((save?.state as Record<string, number>) ?? null);
-      return st;
-    });
+    st.applyState((save?.state as Record<string, number>) ?? null);
+    await game.setStage(async () => st);
     if (!save) await game.save("auto");
     mark("cart-started");
     console.info(`[timing] cart started ${(performance.now() - t0).toFixed(0)} ms after boot`);
@@ -160,7 +180,7 @@ async function startFromSave(save: SaveGame | null) {
   } catch (e) {
     console.error(e);
     hud.loading(false);
-    hud.fade(false, 0.3);
+    void hud.fade(false, 0.3);
     menuEl.classList.remove("hidden", "fade");
     alert("无法开始游戏：" + (e as Error).message);
   } finally {
@@ -194,6 +214,14 @@ for (const b of buttons) {
         break;
     }
   });
+}
+
+if (new URLSearchParams(location.search).has("debug")) {
+  (window as unknown as { __assetsProgress: () => unknown }).__assetsProgress = () => {
+    const p = assets.progress;
+    if (!p) return null;
+    return { done: p.segments.reduce((s, x) => s + x.bytesDone, 0), total: p.segments.reduce((s, x) => s + x.bytesTotal, 0) };
+  };
 }
 
 // download status line on the menu

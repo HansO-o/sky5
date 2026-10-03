@@ -140,7 +140,7 @@ await step("cart/tex/terrain", async () => {
       const d = await fs.readFile(path.join(SRC, "textures", src, "Diffuse.jpg"));
       const n = await fs.readFile(path.join(SRC, "textures", src, "nor_gl.jpg"));
       await emit(`cart/tex/terrain_${layer}_d`, { segment: "cart", priority: 95, type: "ktx2", ext: "ktx2", data: await toKTX2(d, { preset: "color", maxSize: 1024 }) });
-      await emit(`cart/tex/terrain_${layer}_n`, { segment: "cart", priority: 90, type: "ktx2", ext: "ktx2", data: await toKTX2(n, { preset: "normal", maxSize: 1024 }) });
+      await emit(`cart/tex/terrain_${layer}_n`, { segment: "cart", priority: 90, type: "ktx2", ext: "ktx2", data: await toKTX2(n, { preset: "normal", maxSize: 512 }) });
     }),
   );
 });
@@ -300,7 +300,8 @@ await shutdownKtx();
 // that first appears well ahead of the player). Everything else forms the segment's start pack.
 const STREAMED = new Set([
   "ph/mountainside", "ph/rock_face_01", "ph/boulder_01", "ph/rock_moss_set_02", "ph/tree_stump_01",
-  "ph/dead_tree_trunk", "audio/music_menu",
+  "ph/dead_tree_trunk", "audio/music_menu", "audio/music_cart", "audio/amb_forest",
+  "ph/wooden_lantern_01", "ph/kite_shield",
 ]);
 for (const a of manifest.assets) {
   if (STREAMED.has(a.id)) a.optional = true;

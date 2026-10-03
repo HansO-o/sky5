@@ -18,8 +18,14 @@ class AudioSystem {
   musicTracks: Partial<Record<MusicState, string>> = {};
   musicState: MusicState | null = null;
 
-  /** Must be called from a user gesture (first click/keypress). */
+  /** Must be called from a user gesture (first click/keypress) to start playback. */
   unlock() {
+    this.ensureContext();
+    if (this.ctx!.state === "suspended") void this.ctx!.resume();
+  }
+
+  /** Create the context early (it stays suspended until unlock) so buffers can decode ahead. */
+  private ensureContext() {
     if (!this.ctx) {
       const AC = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       this.ctx = new AC({ latencyHint: "interactive" });
@@ -32,7 +38,6 @@ class AudioSystem {
       this.applyVolumes();
       settings.on(() => this.applyVolumes());
     }
-    if (this.ctx.state === "suspended") void this.ctx.resume();
   }
 
   private applyVolumes() {
@@ -50,8 +55,8 @@ class AudioSystem {
     let p = this.buffers.get(id);
     if (!p) {
       p = assets.get(id).then((buf) => {
-        if (!this.ctx) throw new Error("audio not unlocked");
-        return this.ctx.decodeAudioData(buf);
+        this.ensureContext();
+        return this.ctx!.decodeAudioData(buf);
       });
       p.catch(() => this.buffers.delete(id));
       this.buffers.set(id, p);

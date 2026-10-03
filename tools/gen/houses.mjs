@@ -31,7 +31,7 @@ export function buildHouse({ w, d, h, pitch, chimney }) {
   // windows: dark recesses with shutters
   for (const x of [-hw * 0.55, hw * 0.6]) {
     if (Math.abs(x - w * 0.15) < 1.2) continue;
-    box(dark, [x, foot + 1.6, hd + 0.03], [0.8, 0.7, 0.05], [0, 0, 0], { color: [0.15, 0.15, 0.15, 1] });
+    box(dark, [x, foot + 1.6, hd + 0.03], [0.8, 0.7, 0.05]);
     box(dark, [x - 0.62, foot + 1.6, hd + 0.06], [0.42, 0.78, 0.04]);
     box(dark, [x + 0.62, foot + 1.6, hd + 0.06], [0.42, 0.78, 0.04]);
   }

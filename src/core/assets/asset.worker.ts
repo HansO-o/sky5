@@ -78,8 +78,9 @@ function cmp(a: number[], b: number[]) {
   return 0;
 }
 
+/** Urgent = someone is waiting for it, or it belongs to the current segment's start pack. */
 function isUrgent(e: ResolvedEntry) {
-  return demands.has(e.id) || e.segment === segment;
+  return demands.has(e.id) || (e.segment === segment && !e.optional);
 }
 
 function pump() {

@@ -45,8 +45,14 @@ function piece(container: AssetContainer, name: string, scene: Scene) {
 export async function buildTown(scene: Scene, fort: AssetContainer, houses: AssetContainer | null, heightAt: (x: number, z: number) => number) {
   const meshes: AbstractMesh[] = [];
   const root = new TransformNode("town", scene);
+  const slow = (what: string, t: number) => {
+    const d = performance.now() - t;
+    if (d > 16) console.info(`[timing] town ${what} blocked ${d.toFixed(0)} ms`);
+  };
   const place = (name: string, x: number, z: number, yaw: number, y?: number) => {
+    const t = performance.now();
     const p = piece(fort, name, scene);
+    slow(`piece ${name}`, t);
     p.holder.parent = root;
     p.holder.position.set(x, y ?? heightAt(x, z) - 0.3, z);
     Quaternion.RotationYawPitchRollToRef(yaw, 0, 0, p.holder.rotationQuaternion!);
@@ -116,8 +122,13 @@ export async function buildTown(scene: Scene, fort: AssetContainer, houses: Asse
   const mats = new Set(meshes.map((m) => m.material).filter((x) => !!x));
   for (const mat of mats) {
     const m = meshes.find((x) => x.material === mat)!;
+    const t = performance.now();
     await mat!.forceCompilationAsync(m).catch(() => {});
+    slow(`compile ${mat!.name}`, t);
   }
+  const t = performance.now();
   for (const m of meshes) m.setEnabled(true);
+  slow("enable", t);
+  scene.onAfterRenderObservable.addOnce(() => slow("first frame after enable", t));
   return { root, meshes };
 }

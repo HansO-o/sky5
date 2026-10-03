@@ -129,9 +129,10 @@ export class Game {
     st.applyQuality(settings.value.quality);
     this.paused = false;
     this.transitioning = false;
-    if (st.gameplay) input.requestLock(this.canvas);
-    else input.releaseLock();
+    // pointer lock needs a fresh user gesture; the stage prompts for a click instead
+    if (!st.gameplay) input.releaseLock();
     hud.crosshair(false);
+    (st as Stage & { begin?: () => void }).begin?.();
   }
 
   pause(on: boolean) {

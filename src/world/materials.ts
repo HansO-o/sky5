@@ -50,7 +50,8 @@ export class TerrainSplatPlugin extends MaterialPluginBase {
   }
 
   getSamplers(samplers: string[]) {
-    for (const l of LAYERS) samplers.push(`tD_${l}`, `tN_${l}`);
+    for (const l of LAYERS) samplers.push(`tD_${l}`);
+    if (this.useNormals) for (const l of LAYERS) samplers.push(`tN_${l}`);
   }
 
   getActiveTextures(active: BaseTexture[]) {
@@ -105,7 +106,11 @@ varying vTerrainW: vec4f;
 vertexOutputs.vTerrainW = vertexInputs.color;
 #endif`,
         };
-      const samplers = LAYERS.map((l) => `var tD_${l}Sampler: sampler;\nvar tD_${l}: texture_2d<f32>;\nvar tN_${l}Sampler: sampler;\nvar tN_${l}: texture_2d<f32>;`).join("\n");
+      const samplers =
+        LAYERS.map((l) => `var tD_${l}Sampler: sampler;\nvar tD_${l}: texture_2d<f32>;`).join("\n") +
+        "\n#ifdef TERRAIN_NORMALS\n" +
+        LAYERS.map((l) => `var tN_${l}Sampler: sampler;\nvar tN_${l}: texture_2d<f32>;`).join("\n") +
+        "\n#endif";
       return {
         CUSTOM_FRAGMENT_DEFINITIONS: `#ifdef TERRAIN
 varying vTerrainW: vec4f;
@@ -169,7 +174,11 @@ varying vec4 vTerrainW;
 vTerrainW = color;
 #endif`,
       };
-    const samplers = LAYERS.map((l) => `uniform sampler2D tD_${l};\nuniform sampler2D tN_${l};`).join("\n");
+    const samplers =
+      LAYERS.map((l) => `uniform sampler2D tD_${l};`).join("\n") +
+      "\n#ifdef TERRAIN_NORMALS\n" +
+      LAYERS.map((l) => `uniform sampler2D tN_${l};`).join("\n") +
+      "\n#endif";
     return {
       CUSTOM_FRAGMENT_DEFINITIONS: `#ifdef TERRAIN
 varying vec4 vTerrainW;

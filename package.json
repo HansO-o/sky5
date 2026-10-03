@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "fetch-sources": "node tools/fetch-sources.mjs",
+    "fetch-sources": "node tools/fetch-sources.mjs && node tools/fetch-extra.mjs",
     "build-assets": "node tools/build-assets.mjs",
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

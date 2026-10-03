@@ -439,17 +439,6 @@
    "licenseUrl": "https://github.com/BabylonJS/Babylon.js/blob/master/license.md"
   },
   {
-   "id": "lib-jolt",
-   "kind": "library",
-   "name": "Jolt Physics / JoltPhysics.js",
-   "authors": [
-    "Jorrit Rouwe"
-   ],
-   "source": "https://github.com/jrouwe/JoltPhysics.js",
-   "license": "MIT",
-   "licenseUrl": "https://github.com/jrouwe/JoltPhysics.js/blob/main/LICENSE"
-  },
-  {
    "id": "lib-meshopt",
    "kind": "library",
    "name": "meshoptimizer",

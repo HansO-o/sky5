@@ -24,7 +24,7 @@ function presetForSlots(slots) {
 }
 
 /** Convert every non-KTX2 texture in the document to KTX2, resized to at most maxSize. */
-export async function compressTextures(doc, maxSize = 1024, normalMaxSize = maxSize) {
+export async function compressTextures(doc, maxSize = 1024, normalMaxSize = maxSize, linearMaxSize = maxSize) {
   const root = doc.getRoot();
   let any = false;
   await Promise.all(
@@ -41,7 +41,7 @@ export async function compressTextures(doc, maxSize = 1024, normalMaxSize = maxS
       const preset = presetForSlots(slots);
       const out = await toKTX2(Buffer.from(tex.getImage()), {
         preset,
-        maxSize: preset === "normal" ? normalMaxSize : maxSize,
+        maxSize: preset === "normal" ? normalMaxSize : preset === "linear" ? linearMaxSize : maxSize,
       });
       tex.setImage(new Uint8Array(out));
       tex.setMimeType("image/ktx2");
@@ -164,6 +164,7 @@ export class MeshBuilder {
     this.n = Array.from(n);
   }
   toGeometry() {
+    if (this.c.length && this.c.length / 4 !== this.p.length / 3) throw new Error("MeshBuilder: colours must be given for every vertex or none");
     return {
       positions: new Float32Array(this.p),
       normals: new Float32Array(this.n),

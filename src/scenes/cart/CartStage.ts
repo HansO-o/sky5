@@ -97,13 +97,27 @@ export class CartStage implements Stage {
 
   // ------------------------------------------------------------------ loading
 
-  async init(state: Record<string, number> | null) {
-    const scene = this.scene;
-    if (state?.s) this.s = state.s;
-    if (state?.line) this.lineIdx = state.line;
+  /** Resume a saved ride (call after init, before the stage becomes active). */
+  applyState(state: Record<string, number> | null) {
+    this.s = state?.s ?? START_S;
+    this.lineIdx = state?.line ?? 0;
     this.time = state?.time ?? 0;
+    this.nextAllowed = this.time;
+    this.placeConvoy(0);
+    this.updateSets(true);
+  }
 
-    const [route, env, terrain, fir, scatterBuf, wagonC, horseC, bodyC, animC, rocksA, ferns, hfBuf, lanternC, shieldC] = await Promise.all([
+  /** Called when the stage becomes the active one (audio, prompts). */
+  begin() {
+    this.startAudio();
+  }
+
+  async init() {
+    const scene = this.scene;
+    const T0 = performance.now();
+    const lap = (what: string) => console.info(`[timing] cart ${what} +${(performance.now() - T0).toFixed(0)} ms`);
+
+    const [route, env, terrain, fir, scatterBuf, wagonC, horseC, bodyC, animC, rocksA, ferns, hfBuf] = await Promise.all([
       loadJSON<{ x: number[]; y: number[]; z: number[] }>("cart/route"),
       createEnvironment(scene, this.camera),
       loadGLB("cart/terrain", scene),
@@ -116,12 +130,10 @@ export class CartStage implements Stage {
       loadGLB("ph/rock_moss_set_01", scene),
       loadGLB("ph/fern_02", scene),
       assets.get("cart/heightfield"),
-      loadGLB("ph/wooden_lantern_01", scene),
-      loadGLB("ph/kite_shield", scene),
-      audio.load("audio/amb_forest"),
       audio.load("audio/sfx_hooves"),
       audio.load("audio/sfx_cart"),
     ]);
+    lap("assets loaded");
     this.route = new Route(route);
     this.env = env;
     this.parseHeightfield(hfBuf);
@@ -129,14 +141,17 @@ export class CartStage implements Stage {
     await nextFrame();
 
     await this.setupTerrain(terrain);
+    lap("terrain");
     await nextFrame();
     this.setupTrees(fir);
     this.addScatter(rocksA, (k) => `rock_moss_set_01_rock0${k + 1}`, ["rockA0", "rockA1", "rockA2", "rockA3", "rockA4", "rockA5"], 140, false);
     this.addScatter(ferns, (k) => `fern_02_${"abcd"[k]}`, ["fern0", "fern1", "fern2", "fern3"], 55, true);
     await nextFrame();
 
+    lap("vegetation");
     this.factory = new CharacterFactory(scene, bodyC, [animC]);
-    this.setupConvoy(wagonC, horseC, lanternC, shieldC);
+    this.setupConvoy(wagonC, horseC);
+    this.streamProps();
     this.placeConvoy(0);
 
     // Scenery that streams in during the ride; instances near the camera stay hidden until it moves away.
@@ -152,11 +167,11 @@ export class CartStage implements Stage {
       for (const c of this.npc.values()) c.postAnimate(dt);
     });
 
+    lap("convoy");
     this.applyQuality(settings.value.quality);
     this.updateSets(true);
     await scene.whenReadyAsync();
-    this.startAudio();
-    hud.crosshair(false);
+    lap("shaders ready");
     return this;
   }
 
@@ -285,7 +300,40 @@ export class CartStage implements Stage {
       .catch((e) => console.warn("stream failed", id, e));
   }
 
-  private setupConvoy(wagonC: AssetContainer, horseC: AssetContainer, lanternC: AssetContainer, shieldC: AssetContainer) {
+  /**
+   * Props on the lead wagon (a lantern on the driver's bench, a shield on the side board) stream in
+   * during the ride; they are attached only while the lead wagon is out of view.
+   */
+  private streamProps() {
+    void Promise.all([loadGLB("ph/wooden_lantern_01", this.scene), loadGLB("ph/kite_shield", this.scene)])
+      .then(([lanternC, shieldC]) => {
+        const attach = () => {
+          if (this.disposed) return;
+          const body = this.lead.seats.get("seat_0")?.parent as TransformNode | undefined;
+          const visible = this.lead.meshes.some((m) => m.isEnabled() && this.camera.isInFrustum(m));
+          if (!body || visible) {
+            setTimeout(attach, 500);
+            return;
+          }
+          const lantern = lanternC.instantiateModelsToScene((n) => n, false);
+          for (const r of lantern.rootNodes as TransformNode[]) {
+            r.parent = body;
+            r.position.set(0.62, 1.68, -1.45);
+          }
+          const shield = shieldC.instantiateModelsToScene((n) => n, false);
+          for (const r of shield.rootNodes as TransformNode[]) {
+            r.parent = body;
+            r.position.set(0.82, 1.15, 0.6);
+            r.rotation.set(0, Math.PI / 2, 0.15);
+          }
+          for (const r of [...lantern.rootNodes, ...shield.rootNodes]) for (const m of r.getChildMeshes()) this.env.addShadowCaster(m);
+        };
+        attach();
+      })
+      .catch((e) => console.warn("props failed", e));
+  }
+
+  private setupConvoy(wagonC: AssetContainer, horseC: AssetContainer) {
     this.wagon = new Wagon(this.scene, wagonC, horseC, "playerWagon");
     this.lead = new Wagon(this.scene, wagonC, horseC, "leadWagon");
     for (const w of [this.wagon, this.lead])
@@ -294,21 +342,6 @@ export class CartStage implements Stage {
         m.receiveShadows = true;
         m.isPickable = false;
       }
-    // props on the lead wagon: a lantern on the driver's bench and a shield on the side board
-    const lantern = lanternC.instantiateModelsToScene((n) => n, false);
-    const ls = this.lead.seats.get("driver_seat");
-    if (ls) for (const r of lantern.rootNodes as TransformNode[]) {
-      r.parent = ls.parent;
-      r.position.set(0.62, 1.68, -1.45);
-    }
-    const shield = shieldC.instantiateModelsToScene((n) => n, false);
-    for (const r of shield.rootNodes as TransformNode[]) {
-      r.parent = this.lead.seats.get("seat_0")?.parent ?? null;
-      r.position.set(0.82, 1.15, 0.6);
-      r.rotation.set(0, Math.PI / 2, 0.15);
-    }
-    lanternC.dispose();
-
     // camera sits on the right rear bench of the player's wagon
     const seat = this.wagon.seats.get("seat_0");
     if (!seat) throw new Error("wagon model has no seat_0 anchor");
@@ -424,6 +457,7 @@ export class CartStage implements Stage {
     this.placeConvoy(dt);
 
     this.updateHead(dt);
+    hud.prompt(!input.locked && !input.usingPad && this.time > 4 && this.time < 60 ? "点击画面以环顾四周" : null);
     this.updateDialogue(remaining);
     this.updateSets(false);
     this.updateAudio();
@@ -509,10 +543,13 @@ export class CartStage implements Stage {
 
   private loadTown() {
     this.townState = "loading";
+    const t0 = performance.now();
     void Promise.all([loadGLB("ph/modular_fort_01", this.scene), loadGLB("cart/houses", this.scene).catch(() => null)])
       .then(async ([fort, houses]) => {
         if (this.disposed) return;
+        console.info(`[timing] town assets parsed +${(performance.now() - t0).toFixed(0)} ms`);
         const town = await buildTown(this.scene, fort, houses, (x, z) => this.heightAt(x, z));
+        console.info(`[timing] town built +${(performance.now() - t0).toFixed(0)} ms`);
         for (const m of town.meshes) this.env.addShadowCaster(m);
         this.townState = "ready";
       })
@@ -572,6 +609,7 @@ export class CartStage implements Stage {
 
   dispose() {
     this.disposed = true;
+    hud.prompt(null);
     for (const e of this.emitters) e.panner.disconnect();
     audio.stopAllBeds(1);
     for (const { set } of this.sets) set.dispose();
