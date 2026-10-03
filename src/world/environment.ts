@@ -15,8 +15,43 @@ import type { Camera } from "@babylonjs/core/Cameras/camera";
 import type { AbstractMesh } from "@babylonjs/core/Meshes/abstractMesh";
 import type { Quality } from "../core/settings";
 import { blobURL, loadKTX2 } from "../game/loaders";
+import { AtmosphereBlend, climbOut, lerpAtmosphere, smoothstep, type Atmosphere } from "../engine/render/atmosphere";
+import { applyLightBudget } from "../engine/render/lightBudget";
 
 export const FOG_COLOR = new Color3(0.6, 0.64, 0.68);
+
+/**
+ * Lighting profiles inside the keep and the cave (design §3.2). The sun goes to 0 (it is never
+ * switched off: the light set never changes); the light comes from the pool lights (braziers,
+ * torches), a little sky fill and image-based light, and a raised exposure.
+ */
+export const INTERIORS = {
+  hall: { env: 0.25, fog: [0.08, 0.06, 0.05], density: 0.02, exposure: 1.25, sun: 0, fill: 0.05 },
+  basement: { env: 0.08, fog: [0.03, 0.03, 0.035], density: 0.035, exposure: 1.45, sun: 0, fill: 0.03 },
+  cave: { env: 0.05, fog: [0.02, 0.025, 0.03], density: 0.04, exposure: 1.6, sun: 0, fill: 0.02 },
+} satisfies Record<string, Atmosphere>;
+export type InteriorName = keyof typeof INTERIORS;
+/**
+ * "outdoor" restores the open-air look (with the current fire mood); "climb-out" blends from an
+ * interior profile to outdoor by the viewer's distance to a tunnel mouth.
+ */
+export type LightingProfile = "outdoor" | InteriorName | "climb-out";
+
+export interface InteriorOptions {
+  /** climb-out: the tunnel mouth (fully outdoor there) */
+  anchor?: { x: number; y: number; z: number };
+  /** climb-out: metres before the anchor over which the blend happens (default 13) */
+  span?: number;
+  /** climb-out: the interior profile it starts from (default "cave") */
+  from?: InteriorName;
+  /** the blend starts from these values instead of the current ones (e.g. `{ exposure: 1.6 }` stepping into daylight) */
+  start?: Partial<Atmosphere>;
+  /** set the fire mood too (0..1; e.g. 1 when stepping out above the burning town) */
+  mood?: number;
+}
+
+const OUTDOOR_EXPOSURE = 1.05;
+const OUTDOOR_FILL = 0.12;
 
 /** Sky dome UV-mapped to the upper half of an equirectangular panorama. */
 function buildSkyDome(scene: Scene) {
@@ -53,12 +88,27 @@ function buildSkyDome(scene: Scene) {
 
 export interface Environment {
   sun: DirectionalLight;
+  /** the hemispheric sky fill */
+  fill: HemisphericLight;
+  /** the sky dome (hidden with the outdoor world) */
+  sky: Mesh;
   shadows: CascadedShadowGenerator | null;
   pipeline: DefaultRenderingPipeline;
   addShadowCaster(m: AbstractMesh): void;
   applyQuality(q: Quality): void;
   /** 0 = the overcast morning, 1 = the town burning (smoky orange fog, dimmer reddened light) */
   setMood(k: number): void;
+  readonly mood: number;
+  /**
+   * Blend to a lighting profile over `seconds`: sun and fill intensity, image-based light, fog and
+   * exposure (uniforms only: nothing recompiles). Inside (sun 0) the sun's shadow map stops
+   * re-rendering. See {@link INTERIORS}; "climb-out" needs `o.anchor`.
+   */
+  setInterior(profile: LightingProfile, seconds?: number, o?: InteriorOptions): void;
+  /** the profile last set ("outdoor" at start) */
+  readonly interior: LightingProfile;
+  /** per frame (World.update): advances blends; `eye` drives "climb-out" */
+  update(dt: number, eye: Vector3): void;
   dispose(): void;
 }
 
@@ -81,6 +131,7 @@ export async function createEnvironment(scene: Scene, camera: Camera): Promise<E
   const skyTex = await loadKTX2("cart/sky", scene, { wrap: true, noMipmap: true });
   const sky = buildSkyDome(scene);
   const skyMat = new StandardMaterial("skyMat", scene);
+  applyLightBudget([skyMat]);
   skyMat.disableLighting = true;
   skyMat.emissiveTexture = skyTex;
   skyMat.backFaceCulling = false;
@@ -119,6 +170,12 @@ export async function createEnvironment(scene: Scene, camera: Camera): Promise<E
     sg.enableSoftTransparentShadow = false;
     casters.forEach((m) => sg.addShadowCaster(m, false));
     shadows = sg;
+    refreshShadows();
+  };
+  /** the sun's shadow map renders only while the sun shines (inside it is frozen) */
+  const refreshShadows = () => {
+    const map = shadows?.getShadowMap();
+    if (map) map.refreshRate = sun.intensity > 1e-3 ? 1 : 0;
   };
 
   const pipeline = new DefaultRenderingPipeline("post", true, scene, [camera]);
@@ -151,18 +208,60 @@ export async function createEnvironment(scene: Scene, camera: Camera): Promise<E
   let tier: Quality | null = null;
   const sunBase = { c: sun.diffuse.clone(), i: sun.intensity }, envBase = scene.environmentIntensity;
   const SMOKE = new Color3(0.36, 0.29, 0.25), FIRE_SUN = new Color3(1, 0.6, 0.38);
-  const applyMood = () => {
-    Color3.LerpToRef(FOG_COLOR, SMOKE, mood, scene.fogColor);
-    scene.clearColor.set(scene.fogColor.r, scene.fogColor.g, scene.fogColor.b, 1);
-    scene.fogDensity = baseFog * (1 + mood * 0.7);
+  const smoke = new Color3();
+  /** the open-air values at the current mood and quality */
+  const outdoor = (): Atmosphere => {
+    Color3.LerpToRef(FOG_COLOR, SMOKE, mood, smoke);
+    return {
+      env: envBase * (1 - mood * 0.3),
+      fog: [smoke.r, smoke.g, smoke.b],
+      density: baseFog * (1 + mood * 0.7),
+      exposure: OUTDOOR_EXPOSURE,
+      sun: sunBase.i * (1 - mood * 0.35),
+      fill: OUTDOOR_FILL,
+    };
+  };
+  let interior: LightingProfile = "outdoor";
+  let climb: { anchor: Vector3; span: number; from: Atmosphere } | null = null;
+  const eye = new Vector3();
+  const target = (): Atmosphere => {
+    if (interior === "outdoor") return outdoor();
+    if (interior === "climb-out") {
+      if (!climb) return INTERIORS.cave;
+      return lerpAtmosphere(climb.from, outdoor(), smoothstep(climbOut(Vector3.Distance(eye, climb.anchor), climb.span)));
+    }
+    return INTERIORS[interior];
+  };
+  const blend = new AtmosphereBlend(outdoor());
+  /** write blended values into the scene (all uniforms) */
+  const write = (a: Atmosphere) => {
+    scene.environmentIntensity = a.env;
+    scene.fogColor.set(a.fog[0], a.fog[1], a.fog[2]);
+    scene.clearColor.set(a.fog[0], a.fog[1], a.fog[2], 1);
+    scene.fogDensity = a.density;
+    ip.exposure = a.exposure;
+    sun.intensity = a.sun;
+    fill.intensity = a.fill;
+    refreshShadows();
+  };
+  /** the mood's parts that are not blended: sun tint, sky dome */
+  const tint = () => {
     Color3.LerpToRef(sunBase.c, FIRE_SUN, mood, sun.diffuse);
-    sun.intensity = sunBase.i * (1 - mood * 0.35);
-    scene.environmentIntensity = envBase * (1 - mood * 0.3);
     if (skyMat.emissiveTexture) skyMat.emissiveTexture.level = 1 - mood * 0.45;
     skyMat.emissiveColor.set(mood * 0.12, mood * 0.04, 0);
   };
+  /** the mood changed: tint, and outdoors (no blend under way) the blended values at once */
+  const applyMood = () => {
+    tint();
+    if (interior === "outdoor" && !blend.blending) {
+      blend.to(outdoor, 0);
+      write(blend.step(0));
+    }
+  };
   const env3: Environment = {
     sun,
+    fill,
+    sky,
     get shadows() {
       return shadows;
     },
@@ -203,6 +302,31 @@ export async function createEnvironment(scene: Scene, camera: Camera): Promise<E
     setMood(k) {
       mood = Math.max(0, Math.min(1, k));
       applyMood();
+    },
+    get mood() {
+      return mood;
+    },
+    setInterior(profile, seconds = 1.5, o = {}) {
+      interior = profile;
+      climb =
+        profile === "climb-out" && o.anchor
+          ? { anchor: new Vector3(o.anchor.x, o.anchor.y, o.anchor.z), span: o.span ?? 13, from: INTERIORS[o.from ?? "cave"] }
+          : null;
+      if (o.mood !== undefined) {
+        mood = Math.max(0, Math.min(1, o.mood));
+        tint();
+      }
+      blend.to(target, seconds, o.start);
+      write(blend.step(0));
+    },
+    get interior() {
+      return interior;
+    },
+    update(dt, e) {
+      eye.copyFrom(e);
+      // outdoors and settled: setMood writes straight away, nothing to follow
+      if (interior === "outdoor" && !blend.blending) return;
+      write(blend.step(dt));
     },
     dispose() {
       shadows?.dispose();

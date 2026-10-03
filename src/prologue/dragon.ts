@@ -7,6 +7,7 @@ import type { Scene } from "@babylonjs/core/scene";
 import type { Node } from "@babylonjs/core/node";
 import { audio } from "../core/audio";
 import { loadGLB } from "../game/loaders";
+import { precompile } from "../engine/render/precompile";
 import type { World } from "./World";
 
 /** Model scale: the source rig is ~1 unit long; the dragon is ~16 m nose to tail. */
@@ -53,9 +54,15 @@ export class Dragon {
   /** cross-fade in progress: its per-frame observer and the clip it is fading out */
   private fade: { obs: Observer<Scene>; out: AnimationGroup } | null = null;
 
+  /** Loads the dragon and compiles its shaders (and shadow pass) before it is first shown. */
   static async create(world: World) {
     const c = await loadGLB("dragon/dragon", world.scene);
-    return new Dragon(world, c.instantiateModelsToScene((n) => n, false, { doNotInstantiate: true }));
+    const d = new Dragon(world, c.instantiateModelsToScene((n) => n, false, { doNotInstantiate: true }));
+    // out of sight while it compiles (it would stand at the origin meanwhile)
+    d.root.setEnabled(false);
+    await precompile(d.meshes, { shadows: world.env.shadows });
+    d.root.setEnabled(true);
+    return d;
   }
 
   private constructor(

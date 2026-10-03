@@ -11,6 +11,7 @@ import { hud } from "../ui/hud";
 import { closePanel, openLoad, openSettings, panelOpen } from "../ui/panels";
 import { createEngine } from "./engine";
 import { SceneInstrumentation } from "@babylonjs/core/Instrumentation/sceneInstrumentation";
+import { ShaderWatch } from "../engine/render/shaderWatch";
 
 /** One playable piece of the game (menu background, cart ride, ...). */
 export interface Stage {
@@ -21,8 +22,8 @@ export interface Stage {
   update(dt: number): void;
   applyQuality(q: Quality): void;
   setPaused(paused: boolean): void;
-  /** Serializable progress for save games. */
-  saveState(): { label: string; state: Record<string, unknown> };
+  /** Serializable progress for save games (`kind` "auto" is a checkpoint). */
+  saveState(kind?: SaveGame["kind"]): { label: string; state: Record<string, unknown> };
   dispose(): void;
 }
 
@@ -44,6 +45,12 @@ export class Game {
   /** 读取 from the pause menu is loading: the old game waits behind the loading hint, paused */
   private loadingSave = false;
   onExitToMenu: (() => void) | null = null;
+  /**
+   * Debug (?debug): every shader program built, tagged with the phase the stage reports
+   * ("<chapter>:prepare", "<chapter>:play", ...). One built in a play phase is a mid-play hitch and is
+   * logged as `[shader] built while playing`.
+   */
+  shaders: ShaderWatch | null = null;
 
   constructor(readonly canvas: HTMLCanvasElement) {}
 
@@ -51,6 +58,10 @@ export class Game {
     const { engine, api } = await createEngine(this.canvas);
     this.engine = engine;
     this.api = api;
+    if (new URLSearchParams(location.search).has("debug"))
+      this.shaders = new ShaderWatch(engine, {
+        report: (c) => c.phase.endsWith(":play") && console.info(`[shader] built while playing (${c.phase}): ${c.name}`),
+      });
     input.attach(this.canvas);
     this.applyResolution();
     // graphics are re-applied only when they change, not on every volume or sensitivity slider tick
@@ -229,7 +240,7 @@ export class Game {
   /** Resolves with whether the save was written; a failure (storage full or blocked) is reported, never thrown. */
   async save(kind: SaveGame["kind"]) {
     if (!this.stage?.gameplay) return false;
-    const { label, state } = this.stage.saveState();
+    const { label, state } = this.stage.saveState(kind);
     const id = kind === "manual" ? `manual-${Date.now()}` : kind;
     try {
       await writeSave({ id, kind, label, segment: this.stage.segment, createdAt: Date.now(), playSeconds: this.playSeconds, state });
@@ -290,6 +301,7 @@ export class Game {
   }
 
   exitToMenu() {
+    this.shaders?.mark("menu");
     document.getElementById("pause")?.remove();
     closePanel();
     this.paused = false;

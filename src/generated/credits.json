@@ -23,6 +23,17 @@
    "licenseUrl": "https://polyhaven.com/license"
   },
   {
+   "id": "dark_wooden_planks",
+   "kind": "texture",
+   "name": "Dark Wooden Planks",
+   "authors": [
+    "Amal Kumar"
+   ],
+   "source": "https://polyhaven.com/a/dark_wooden_planks",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
    "id": "dead_tree_trunk",
    "kind": "model",
    "name": "Dead Tree Trunk",
@@ -214,6 +225,17 @@
    "licenseUrl": "https://polyhaven.com/license"
   },
   {
+   "id": "rock_tile_floor",
+   "kind": "texture",
+   "name": "Rock Tile Floor",
+   "authors": [
+    "Charlotte Baglioni"
+   ],
+   "source": "https://polyhaven.com/a/rock_tile_floor",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
    "id": "rocky_terrain_02",
    "kind": "texture",
    "name": "Rocky Terrain 02",
@@ -276,6 +298,18 @@
     "Rob Tuytel"
    ],
    "source": "https://polyhaven.com/a/snow_02",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
+   "id": "stone_brick_wall_001",
+   "kind": "texture",
+   "name": "Stone Brick Wall 001",
+   "authors": [
+    "Dimitrios Savva",
+    "Rico Cilliers"
+   ],
+   "source": "https://polyhaven.com/a/stone_brick_wall_001",
    "license": "CC0 1.0",
    "licenseUrl": "https://polyhaven.com/license"
   },

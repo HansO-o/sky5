@@ -1,5 +1,6 @@
 import { Quaternion, Vector3 } from "@babylonjs/core/Maths/math.vector";
 import type { Character } from "../world/characters";
+import { floorAt } from "../engine/physics/ground";
 import type { World } from "./World";
 
 export interface PathOptions {
@@ -96,4 +97,29 @@ export function stand(world: World, ch: Character, x: number, z: number, look?: 
   ch.root.position.set(x, world.heightAt(x, z), z);
   if (look) faceTo(ch, look);
   ch.play(clip, { blend: 0.2 });
+}
+
+/**
+ * The floor under (x, z) near `yHint` from the static colliders (a ray down from yHint + 1.5): for
+ * places where terrain height means nothing (inside the keep, underground). Falls back to `yHint`
+ * without physics or a floor within 4 m below it.
+ */
+export function floor3(world: World, x: number, z: number, yHint: number) {
+  const y = world.physics ? floorAt(world.physics, x, z, yHint) : null;
+  return new Vector3(x, y ?? yHint, z);
+}
+
+/**
+ * `stand()` for interiors and underground: places a character on the static floor under (x, z)
+ * near `yHint` (see {@link floor3}), never on the terrain above. Returns the position used. Walks
+ * there take explicit y values (`walkPath` without `ground`).
+ */
+export function place3(world: World, ch: Character, x: number, z: number, yHint: number, look?: { x: number; z: number }, clip = "Idle_Loop") {
+  stopWalk(ch);
+  ch.root.parent = null;
+  const p = floor3(world, x, z, yHint);
+  ch.root.position.copyFrom(p);
+  if (look) faceTo(ch, look);
+  ch.play(clip, { blend: 0.2 });
+  return p;
 }

@@ -3,11 +3,15 @@ import { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { Color3 } from "@babylonjs/core/Maths/math.color";
 import { Quaternion, Vector3 } from "@babylonjs/core/Maths/math.vector";
+import { applyLightBudget } from "../../engine/render/lightBudget";
+import { precompile } from "../../engine/render/precompile";
 import type { World } from "../World";
 
 let shared: Mesh | null = null;
-function arrowMesh(world: World) {
-  if (shared && !shared.isDisposed()) return shared.clone("arrow", null)!;
+
+/** The hidden arrow every shot clones (built once per scene). */
+function template(world: World) {
+  if (shared && !shared.isDisposed() && shared.getScene() === world.scene) return shared;
   const scene = world.scene;
   const wood = new StandardMaterial("arrowWood", scene);
   wood.diffuseColor = new Color3(0.42, 0.3, 0.18);
@@ -17,6 +21,7 @@ function arrowMesh(world: World) {
   const fl = new StandardMaterial("arrowFletch", scene);
   fl.diffuseColor = new Color3(0.8, 0.78, 0.7);
   fl.backFaceCulling = false;
+  applyLightBudget([wood, iron, fl]);
   // built along +Z, tip at +0.4
   const shaft = MeshBuilder.CreateCylinder("shaft", { height: 0.78, diameter: 0.012, tessellation: 5 }, scene);
   shaft.rotation.x = Math.PI / 2;
@@ -33,7 +38,16 @@ function arrowMesh(world: World) {
   f2.rotation.z = Math.PI / 2;
   shared = Mesh.MergeMeshes([shaft, tip, f1, f2], true, true, undefined, false, true)!;
   shared.setEnabled(false);
-  return shared.clone("arrow", null)!;
+  return shared;
+}
+
+function arrowMesh(world: World) {
+  return template(world).clone("arrow", null)!;
+}
+
+/** Build the arrow and compile its shaders ahead of the first shot (nothing compiles mid-flight). */
+export function prepareArrows(world: World) {
+  return precompile([template(world)]);
 }
 
 /**

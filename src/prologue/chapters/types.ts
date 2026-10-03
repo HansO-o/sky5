@@ -31,6 +31,11 @@ export interface Chapter {
   run(resume: Record<string, unknown> | null): Promise<void>;
   update?(dt: number): void;
   save(): Record<string, unknown>;
+  /**
+   * Whether the chapter may be skipped right now (default: yes). While false the pause menu hides
+   * 跳过本章, e.g. while the player has a choice to make that the rest of the story depends on.
+   */
+  canSkip?(): boolean;
   /** Jump to the chapter's end state (the player chose to skip it). */
   skip?(): void;
   /** Remove content only this chapter needs. */

@@ -23,6 +23,10 @@ export const PH_TEXTURES = {
   old_planks_02: { res: "1k", maps: ["Diffuse", "nor_gl", "arm"] },
   rough_wood: { res: "1k", maps: ["Diffuse", "nor_gl", "arm"] },
   burned_ground_01: { res: "1k", maps: ["Diffuse", "nor_gl"] },
+  // keep interior (tools/gen/keepinterior.mjs): basement walls, all floors, doors and woodwork
+  stone_brick_wall_001: { res: "1k", maps: ["Diffuse", "nor_gl", "arm"] },
+  rock_tile_floor: { res: "1k", maps: ["Diffuse", "nor_gl", "arm"] },
+  dark_wooden_planks: { res: "1k", maps: ["Diffuse", "nor_gl", "arm"] },
 };
 
 /** Extra texture maps that live inside a model asset (fir twig cards). */

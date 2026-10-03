@@ -3,6 +3,7 @@
 //
 //   node tools/build-assets.mjs            build everything
 //   node tools/build-assets.mjs --only=cart/fir  rebuild matching ids (others are reused from the old manifest)
+//   node tools/build-assets.mjs --only=cart/terrain,keep/  several prefixes, comma-separated
 import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -14,6 +15,8 @@ import { toKTX2, shutdownKtx } from "./lib/ktx.mjs";
 import { readHDR, downsample, writeHDR } from "./lib/hdr.mjs";
 import { buildRoute, makeTerrain, fbm } from "./gen/world.mjs";
 import { buildTerrainChunks } from "./gen/terrain.mjs";
+import { TERRAIN_HOLES, activeHoles } from "./gen/terrainHoles.mjs";
+import { buildKeepInterior } from "./gen/keepinterior.mjs";
 import { buildFirTextures, buildFirMesh, buildImpostor } from "./gen/fir.mjs";
 import { buildCart, SEATS, CART } from "./gen/cart.mjs";
 import { buildHouse, HOUSE_VARIANTS } from "./gen/houses.mjs";
@@ -28,6 +31,9 @@ const ROOT = path.resolve(import.meta.dirname, "..");
 const SRC = path.join(ROOT, "assets-src");
 const OUT = path.join(ROOT, "public/data");
 const only = process.argv.find((a) => a.startsWith("--only="))?.slice(7);
+const onlyList = only ? only.split(",").filter(Boolean) : [];
+/** Whether --only selects the step `prefix` (a step matches a selected prefix in either direction). */
+const selected = (prefix) => onlyList.some((o) => prefix.startsWith(o) || o.startsWith(prefix));
 
 const manifest = { version: "", generated: new Date().toISOString(), assets: [] };
 // --only reuses every other entry from the last manifest, and the sweep at the end deletes whatever
@@ -64,7 +70,7 @@ async function emit(id, { segment, priority = 50, type, ext, data, pos, variants
 
 /** Skip a step when --only is set and doesn't match; reuse the previous manifest entries instead. */
 async function step(prefix, fn) {
-  if (only && !prefix.startsWith(only) && !only.startsWith(prefix)) {
+  if (only && !selected(prefix)) {
     const prev = previous.assets.filter((a) => (a._step ? a._step === prefix : a.id.startsWith(prefix)));
     if (!prev.length) throw new Error(`--only: the previous manifest has nothing for ${prefix}; run a full build instead`);
     for (const a of prev)
@@ -118,8 +124,16 @@ await step("cart/route", async () => {
   await emit("cart/route", { segment: "cart", priority: 100, type: "json", ext: "json", data: Buffer.from(JSON.stringify(r)) });
 });
 
+// Asset ids this build ships that cover a terrain hole (tools/gen/terrainHoles.mjs `cover`). The render
+// terrain is cut only under a cover that ships, as the runtime cuts the collider only then
+// (activeTerrainHoles); a gate before the manifest is written checks the two agree. When a generator
+// for another cover starts shipping (cave/mesh: EXIT_HOLE), add its id here and rebuild cart/terrain.
+const HOLE_COVERS = new Set(["keep/interior"]);
+
 await step("cart/terrain", async () => {
-  const chunks = buildTerrainChunks(T, route);
+  const holes = activeHoles((id) => HOLE_COVERS.has(id));
+  const chunks = buildTerrainChunks(T, route, holes);
+  for (const c of chunks) if (c.holes.length) console.log(`  ${c.name}: hole ${c.holes.join("+")} skips ${c.skippedQuads} quads (${c.spacing} m grid)`);
   const doc = new Document();
   doc.createBuffer();
   const scene = doc.createScene("terrain");
@@ -129,7 +143,8 @@ await step("cart/terrain", async () => {
     scene.addChild(doc.createNode(c.name).setMesh(mesh));
   }
   const glb = await finalize(doc);
-  await emit("cart/terrain", { segment: "cart", priority: 100, type: "glb", ext: "glb", data: glb });
+  const terrain = await emit("cart/terrain", { segment: "cart", priority: 100, type: "glb", ext: "glb", data: glb });
+  terrain._holes = holes.map((h) => h.id);
   // Height field for gameplay queries (2 m grid over the route corridor would be large; ship 4 m over the map).
   const N = 451, half = 900;
   const hf = new Float32Array(N * N);
@@ -288,23 +303,38 @@ await step("town/buildings", async () => {
   const footing = await mat("inn_footing", "plastered_stone_wall");
   const dark = await mat("dark_wood", "rough_wood", 512);
   const deck = await mat("deck_planks", "weathered_brown_planks", 1024);
-  const node = (name, parts) => {
+  const node = (name, parts, parent = scene) => {
     const mesh = doc.createMesh(name);
     for (const [mb, m] of parts) if (mb.i.length) mesh.addPrimitive(makePrimitive(doc, mb.toGeometry(), m));
-    scene.addChild(doc.createNode(name).setMesh(mesh));
+    const n = doc.createNode(name).setMesh(mesh);
+    parent.addChild(n);
+    return n;
   };
   const t = buildTower();
   node("tower", [[t.stone, towerStone], [t.wood, floor]]);
   node("tower_breach", [[t.breach, towerStone]]);
   const i = buildInn();
   node("inn", [[i.timber, timber], [i.stone, footing], [i.wood, floor], [i.thatch, thatch], [i.dark, dark]]);
+  // keep: a mesh-less group at the keep-local origin, so the town loader (which recentres a piece on
+  // its node's position) places it exactly: keep_shell, plus the postern leaf under its hinge node
   const k = buildKeep();
-  node("keep", [[k.stone, keepStone], [k.dark, dark]]);
+  const keepGroup = doc.createNode("keep");
+  scene.addChild(keepGroup);
+  node("keep_shell", [[k.stone, keepStone], [k.dark, dark]], keepGroup);
+  const posternWood = await mat("postern_wood", "dark_wooden_planks", 512);
+  const posternIron = await mat("postern_iron", "rusty_metal_02", 256, { metal: 1 });
+  const postern = doc.createNode("keep_postern").setTranslation(k.postern.hinge);
+  keepGroup.addChild(postern);
+  node("keep_postern_leaf", [[k.postern.wood, posternWood], [k.postern.iron, posternIron]], postern);
   const p = buildPlatform();
   node("platform", [[p.wood, deck], [p.dark, dark]]);
   node("block", [[p.block, dark]]);
   await emit("town/buildings", { segment: "muster", priority: 96, type: "glb", ext: "glb", data: await finalize(doc), pos: [70, -590] });
 });
+
+// ------------------------------------------------------------------ keep interior (segment keep)
+// keep/interior (glb: rooms, *_col colliders, door leaves, anchor_* nodes) + keep/anchors (json)
+await step("keep/interior", () => buildKeepInterior({ emit, SRC }));
 
 // ------------------------------------------------------------------ Poly Haven models
 const PH = {
@@ -374,6 +404,19 @@ for (const a of manifest.assets) {
 }
 // AAC fallbacks live only inside their Opus entry's `variants`.
 manifest.assets = manifest.assets.filter((a) => !a.id.endsWith("#aac"));
+// Terrain holes: the render terrain must be cut exactly where the runtime cuts the collider, i.e.
+// under every hole whose cover asset ships (checked before anything is written).
+{
+  const ids = new Set(manifest.assets.map((a) => a.id));
+  const cut = new Set(manifest.assets.find((a) => a.id === "cart/terrain")?._holes ?? []);
+  for (const h of TERRAIN_HOLES)
+    if (ids.has(h.cover) !== cut.has(h.id))
+      throw new Error(
+        ids.has(h.cover)
+          ? `terrain hole "${h.id}": ${h.cover} ships but cart/terrain was built without the hole; add "${h.cover}" to HOLE_COVERS in tools/build-assets.mjs and rebuild with --only=cart/terrain,...`
+          : `terrain hole "${h.id}": cart/terrain cuts it but ${h.cover} does not ship; remove "${h.cover}" from HOLE_COVERS and rebuild cart/terrain`,
+      );
+}
 manifest.assets.sort((a, b) => a.id.localeCompare(b.id));
 manifest.version = sha(Buffer.from(JSON.stringify(manifest.assets.map((a) => [a.id, a.hash])))).slice(0, 12);
 const summary = {};
@@ -397,7 +440,7 @@ console.log("manifest version", manifest.version);
 // credits page data (only assets that actually ship)
 const phIds = new Set(Object.keys(PH));
 for (const k of Object.keys(TERRAIN_LAYERS)) phIds.add(TERRAIN_LAYERS[k]);
-["pine_bark", "weathered_brown_planks", "rusty_metal_02", "plastered_stone_wall", "medieval_wood", "thatch_roof_angled", "fir_tree_01", "kloofendal_overcast_puresky", "rough_block_wall", "castle_wall_slates", "old_planks_02", "rough_wood"].forEach((x) => phIds.add(x));
+["pine_bark", "weathered_brown_planks", "rusty_metal_02", "plastered_stone_wall", "medieval_wood", "thatch_roof_angled", "fir_tree_01", "kloofendal_overcast_puresky", "rough_block_wall", "castle_wall_slates", "old_planks_02", "rough_wood", "stone_brick_wall_001", "rock_tile_floor", "dark_wooden_planks"].forEach((x) => phIds.add(x));
 const ph = JSON.parse(await fs.readFile(path.join(SRC, "credits-polyhaven.json"), "utf8")).filter((c) => phIds.has(c.id));
 await fs.mkdir(path.join(ROOT, "src/generated"), { recursive: true });
 await fs.writeFile(path.join(ROOT, "src/generated/credits.json"), JSON.stringify({ polyhaven: ph, extra: EXTRA_CREDITS }, null, 1));

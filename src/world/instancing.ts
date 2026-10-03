@@ -1,7 +1,9 @@
 import { Matrix, Quaternion, Vector3 } from "@babylonjs/core/Maths/math.vector";
 import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import type { AbstractMesh } from "@babylonjs/core/Meshes/abstractMesh";
+import type { ShadowGenerator } from "@babylonjs/core/Lights/Shadows/shadowGenerator";
 import "@babylonjs/core/Meshes/thinInstanceMesh";
+import { precompile } from "../engine/render/precompile";
 
 export interface LodLevel {
   /** All primitive meshes that make up this LOD (they share the instance matrices). */
@@ -28,6 +30,9 @@ export class InstancedSet {
   readonly count: number;
   revealDistance = 0;
   rebuildDistance = 6;
+  private enabled = true;
+  /** a precompile holds the instance counts: no re-bucketing meanwhile */
+  private compiling = 0;
 
   constructor(
     data: Float32Array, // [x, y, z, yaw, scale] * n
@@ -70,8 +75,51 @@ export class InstancedSet {
     });
   }
 
+  /** Show or hide every LOD (e.g. with the outdoor world); hidden sets skip their updates. */
+  setEnabled(on: boolean) {
+    if (on === this.enabled) return;
+    this.enabled = on;
+    for (const l of this.lods) for (const m of l.meshes) m.setEnabled(on);
+    // re-bucket at the next update: the camera has moved meanwhile
+    if (on) this.lastCam.set(1e9, 0, 1e9);
+  }
+
+  get isEnabled() {
+    return this.enabled;
+  }
+
+  /**
+   * Compile every LOD's shaders for thin-instanced drawing (and its shadow pass), including LODs that
+   * have no instances yet: a mesh compiled without instances compiles again the first time it gets
+   * one. Call before the set is first shown.
+   */
+  async precompile(shadows?: ShadowGenerator | null) {
+    const meshes = this.lods.flatMap((l) => l.meshes);
+    const bumped: Mesh[] = [];
+    this.compiling++;
+    // a LOD without instances gets one while compiling: a zeroed matrix (degenerate, nothing shows)
+    this.lods.forEach((l, k) => {
+      const empty = l.meshes.filter((m) => !m.isDisposed() && m.thinInstanceCount === 0);
+      if (!empty.length) return;
+      this.buffers[k].fill(0, 0, 16);
+      for (const m of empty) {
+        m.thinInstanceCount = 1;
+        m.thinInstanceBufferUpdated("matrix");
+        bumped.push(m);
+      }
+    });
+    try {
+      await precompile(meshes, { shadows });
+    } finally {
+      this.compiling--;
+      for (const m of bumped) if (!m.isDisposed()) m.thinInstanceCount = 0;
+      this.lastCam.set(1e9, 0, 1e9);
+    }
+  }
+
   /** Re-bucket instances if the camera moved; returns true when buffers were rebuilt. */
   update(cam: Vector3, force = false) {
+    if (!this.enabled || this.compiling) return false;
     if (!force && Vector3.DistanceSquared(cam, this.lastCam) < this.rebuildDistance ** 2) return false;
     this.lastCam.copyFrom(cam);
     const counts = this.lods.map(() => 0);

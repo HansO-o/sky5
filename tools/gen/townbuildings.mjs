@@ -5,14 +5,23 @@
 //   tower_breach the wall section the dragon smashes (east face, top floor) - separate node
 //   inn          two-storey timber inn east of the tower: burnt hole in the west roof slope and in the
 //                upper floor; door on +Z
-//   keep         stone keep with a gate opening on +Z (the door itself is a separate prop)
+//   keep         stone keep with a gate opening on +Z (its two leaves are a separate prop placed at
+//                runtime) and a west postern, whose leaf is the child node keep_postern (a hinge)
+//                -> keep_postern_leaf. The interior is a separate asset (tools/gen/keepinterior.mjs).
 //   platform     execution platform with the block
 import { MeshBuilder } from "../lib/gltf.mjs";
 import { box, quad, tri } from "./shapes.mjs";
 
 export const TOWER = { w: 7, h: 13.5, wall: 0.6, floor1: 3.2, floor2: 6.4, top: 9.6, doorW: 1.5, doorH: 2.5, breachW: 2.4, breachH: 2.3 };
 export const INN = { w: 10, d: 8, floor: 3.4, eave: 5.7, ridge: 8.8, wall: 0.35 };
-export const KEEP = { w: 26, d: 18, h: 12, wall: 1.2, gateW: 4, gateH: 5 };
+/** floorY: the interior's ground-floor top (also the top front step); threshold: the gate passage's stone sill */
+export const KEEP = { w: 26, d: 18, h: 12, wall: 1.2, gateW: 4, gateH: 5, floorY: 0.4, threshold: 0.42 };
+/**
+ * West postern (design §4.1), keep-local: an opening through the west wall (x −13…−11.8) at z 2.3…3.7,
+ * y 0.4…2.8. Its leaf hangs inside the wall at the inner face, hinged at the north jamb (z 2.3), and
+ * swings inward (+X) for a positive rotation about +Y.
+ */
+export const POSTERN = { z0: 2.3, z1: 3.7, y0: 0.4, y1: 2.8, hinge: [-11.86, 0.4, 2.3], leafT: 0.09, openYaw: Math.PI / 2 };
 
 /** A wall slab along X (thickness along Z) with optional rectangular openings. */
 function wallX(mb, x0, x1, y0, y1, z, t, openings = [], tile = 2) {
@@ -181,12 +190,16 @@ export function buildInn() {
 }
 
 export function buildKeep() {
-  const K = KEEP;
+  const K = KEEP, P = POSTERN;
   const stone = new MeshBuilder(), dark = new MeshBuilder();
   const hw = K.w / 2, hd = K.d / 2, t = K.wall;
-  wallX(stone, -hw, hw, -0.5, K.h, hd - t / 2, t, [{ x0: -K.gateW / 2, x1: K.gateW / 2, y0: -0.5, y1: K.gateH }], 2.5);
+  // gate: the wall below the opening is a stone threshold 2 cm above the hall floor (the terrain in
+  // the passage, which the keep's terrain hole stops short of, reaches 0.40 and must stay under it)
+  wallX(stone, -hw, hw, -0.5, K.h, hd - t / 2, t, [{ x0: -K.gateW / 2, x1: K.gateW / 2, y0: K.threshold, y1: K.gateH }], 2.5);
   wallX(stone, -hw, hw, -0.5, K.h, -hd + t / 2, t, [], 2.5);
-  wallZ(stone, -hd, hd, -0.5, K.h, -hw + t / 2, t, [], 2.5);
+  // west wall with the postern; the wall below it ends at floor level, plus a 0.1 m sill outside
+  wallZ(stone, -hd, hd, -0.5, K.h, -hw + t / 2, t, [{ z0: P.z0, z1: P.z1, y0: P.y0, y1: P.y1 }], 2.5);
+  box(stone, [-hw - 0.075, P.y0 - 0.05, (P.z0 + P.z1) / 2], [0.15, 0.1, P.z1 - P.z0 + 0.2], [0, 0, 0], { tile: 1 });
   wallZ(stone, -hd, hd, -0.5, K.h, hw - t / 2, t, [], 2.5);
   box(stone, [0, K.h, 0], [K.w, 0.6, K.d], [0, 0, 0], { tile: 2.5 });
   // crenellations
@@ -202,11 +215,36 @@ export function buildKeep() {
   }
   // corner turrets
   for (const x of [-hw, hw]) for (const z of [-hd, hd]) box(stone, [x, K.h / 2 + 1.5, z], [3.2, K.h + 3, 3.2], [0, 0, 0], { tile: 2.5 });
-  // entrance passage behind the gate (dark interior)
-  box(dark, [0, K.gateH / 2, hd - t - 1.5], [K.gateW, K.gateH, 3]);
+  // (the dark box that used to fill the gate passage is gone: the interior asset is behind the gate)
   // stone steps in front of the gate
   for (let i = 0; i < 3; i++) box(stone, [0, 0.1 + i * 0.15 - 0.15, hd + 1.4 - i * 0.4], [K.gateW + 2, 0.3, 0.8]);
-  return { stone, dark };
+  return { stone, dark, postern: buildPosternLeaf() };
+}
+
+/**
+ * The postern leaf in its hinge frame: origin on the hinge axis at the sill, the closed leaf runs
+ * along +Z (north jamb → south jamb), its inner face toward +X. Vertical boards with two iron straps
+ * and a ring pull on the inner face.
+ */
+export function buildPosternLeaf() {
+  const P = POSTERN;
+  const wood = new MeshBuilder(), iron = new MeshBuilder();
+  const w = P.z1 - P.z0 - 0.04, h = P.y1 - P.y0 - 0.03, t = P.leafT;
+  const z0 = 0.02, y0 = 0.015;
+  const boards = 6, bw = w / boards;
+  for (let i = 0; i < boards; i++) {
+    const inset = i % 2 ? 0.004 : 0; // alternate boards sit a few mm proud so the joints read
+    box(wood, [inset, y0 + h / 2, z0 + bw * (i + 0.5)], [t - 0.01, h, bw - 0.008], [0, 0, 0], { tile: 2 });
+  }
+  // ledges (inner face) and iron straps (outer face)
+  for (const y of [0.35, h - 0.35]) {
+    box(wood, [t / 2 + 0.02, y0 + y, z0 + w / 2], [0.04, 0.16, w - 0.12], [0, 0, 0], { tile: 2 });
+    box(iron, [-t / 2 - 0.006, y0 + y, z0 + w * 0.46], [0.012, 0.07, w * 0.9], [0, 0, 0], { tile: 1 });
+    // strap hinge knuckle on the hinge side
+    box(iron, [0, y0 + y, z0 - 0.005], [t + 0.02, 0.08, 0.03], [0, 0, 0], { tile: 1 });
+  }
+  box(iron, [t / 2 + 0.03, y0 + h * 0.45, z0 + w - 0.18], [0.03, 0.12, 0.05], [0, 0, 0], { tile: 1 });
+  return { wood, iron, hinge: P.hinge, size: [t, h, w] };
 }
 
 export function buildPlatform() {

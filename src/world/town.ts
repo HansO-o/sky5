@@ -4,7 +4,9 @@ import { Quaternion, Vector3 } from "@babylonjs/core/Maths/math.vector";
 import type { Scene } from "@babylonjs/core/scene";
 import type { AbstractMesh } from "@babylonjs/core/Meshes/abstractMesh";
 import type { Node } from "@babylonjs/core/node";
+import type { ShadowGenerator } from "@babylonjs/core/Lights/Shadows/shadowGenerator";
 import { instantiateSubset, nextFrame } from "../game/loaders";
+import { precompile } from "../engine/render/precompile";
 
 /** Gate position, town plateau height and wall line (must match tools/gen/world.mjs). */
 export const GATE = { x: 60, z: -500, y: 38 };
@@ -94,12 +96,14 @@ export interface Town {
 /**
  * Builds 雾门镇: the curtain wall and gate seen at the end of the ride, the story buildings (watch
  * tower, inn, keep, execution platform) and timber houses. Work is spread over frames, and nothing
- * becomes visible until its shaders are compiled.
+ * becomes visible until its shaders are compiled: `o.casters` registers the meshes as shadow casters
+ * first, so their shadow pass (in `o.shadows()`) compiles too.
  */
 export async function buildTown(
   scene: Scene,
   c: { fort: AssetContainer; houses: AssetContainer | null; buildings: AssetContainer | null; door: AssetContainer | null },
   heightAt: (x: number, z: number) => number,
+  o: { casters?: (meshes: AbstractMesh[]) => void; shadows?: () => ShadowGenerator | null } = {},
 ): Promise<Town> {
   const meshes: AbstractMesh[] = [];
   const colliders: AbstractMesh[] = [];
@@ -210,12 +214,10 @@ export async function buildTown(
     m.computeWorldMatrix(true);
     m.freezeWorldMatrix();
   }
-  // compile shaders before anything becomes visible, then show everything at once
-  const mats = new Set(meshes.map((m) => m.material).filter((x) => !!x));
-  for (const mat of mats) {
-    const m = meshes.find((x) => x.material === mat)!;
-    await mat!.forceCompilationAsync(m).catch(() => {});
-  }
+  // compile shaders before anything becomes visible (each mesh as it draws: glTF instances drawn
+  // instanced, plus its shadow pass), then show everything at once
+  o.casters?.(meshes);
+  await precompile(meshes, { shadows: o.shadows?.() ?? null, timeout: 20 });
   for (const m of meshes) m.setEnabled(true);
   return { root, meshes, colliders, tower, breach, inn, keep, platform, block, houses, keepDoors, heightAt };
 }

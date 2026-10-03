@@ -1,4 +1,5 @@
 import type { Game, Stage } from "../game/Game";
+import type { SaveGame } from "../core/saves";
 import { loadGLB } from "../game/loaders";
 import { assets } from "../core/assets/AssetClient";
 import type { SegmentId } from "../core/assets/manifest";
@@ -8,11 +9,12 @@ import { settings, type Quality } from "../core/settings";
 import { hud } from "../ui/hud";
 import { heading } from "../ui/widgets";
 import { buildTown, GATE, LAYOUT, type Town } from "../world/town";
-import { L, Physics } from "../physics/Physics";
+import { Physics, type BodyId } from "../engine/physics/Physics";
+import { Debris } from "../engine/physics/Debris";
+import { BodyFollower } from "../engine/physics/BodyFollower";
+import { activeTerrainHoles } from "../world/terrainHoles";
 import { VertexBuffer } from "@babylonjs/core/Buffers/buffer";
-import { Quaternion, Vector3 } from "@babylonjs/core/Maths/math.vector";
-import { CreateBox } from "@babylonjs/core/Meshes/Builders/boxBuilder";
-import type { Mesh } from "@babylonjs/core/Meshes/mesh";
+import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import type { AbstractMesh } from "@babylonjs/core/Meshes/abstractMesh";
 import type { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import { nextFrame } from "../game/loaders";
@@ -28,8 +30,29 @@ import { RoamChapter } from "./chapters/roam";
 import { DragonChapter } from "./chapters/dragon";
 import { ExecutionChapter } from "./chapters/execution";
 import { MusterChapter } from "./chapters/muster";
+import { WorldState, type WorldSnapshot } from "../engine/state/WorldState";
+import { DEFAULT_FLAGS, normalizeFlags, type PrologueFlags } from "./flags";
+import { FireFx } from "./fx/fire";
+import { TownFires } from "./fx/townFires";
+import { prepareArrows } from "./fx/arrow";
+import { DragonDirector } from "./dragonDirector";
+import { NodeHider } from "../engine/world/visibility";
+import { Zones, type ZoneDef, type ZoneEffects } from "../engine/world/zones";
+import type { InteriorOptions, LightingProfile } from "../world/environment";
 
 type ChapterFactory = (ctx: ChapterContext) => Chapter;
+
+/**
+ * One leaf of the keep's main gate (hinged at x 58 "l" and x 62 "r"). Swing `hinge` about Y, then
+ * `sync()` carries the leaf's collider along; or switch the collider off with
+ * `physics.setBodyEnabled(body, false)` / `setTagEnabled("keep_door_l", false)`.
+ */
+export interface DoorLeaf {
+  hinge: TransformNode;
+  /** the leaf's static collider (registry tag "keep_door_l" / "keep_door_r") */
+  body: BodyId | null;
+  sync(): void;
+}
 /** A chapter and the script scope its scripts run in. */
 type ScopedChapter = { chapter: Chapter; scope: ScriptScope };
 
@@ -48,6 +71,10 @@ export interface PrologueSave {
   state: Record<string, unknown> | null;
   /** the player's character (set during the muster) */
   appearance?: Appearance | null;
+  /** story flags as of the last checkpoint (missing in saves from before flags existed: defaults) */
+  flags?: PrologueFlags;
+  /** world-state parts of registered Saveables (only written when there are any) */
+  parts?: WorldSnapshot["parts"];
 }
 
 /**
@@ -69,6 +96,26 @@ export class PrologueStage implements Stage {
   /** on-foot player (created by the first chapter that needs it, kept across chapters) */
   player: PlayerController | null = null;
   physics: Physics | null = null;
+  /** loose pieces that tumble and freeze into scenery (set with the physics) */
+  debris: Debris | null = null;
+  /** the keep gate's leaves with their colliders (set with the physics when the town has the doors) */
+  keepDoors: { l: DoorLeaf; r: DoorLeaf } | null = null;
+  /**
+   * Persistent story state (faction, inventory, outcomes, ...). Saves record it as of the last
+   * checkpoint: every autosave is one, and so is `snapshotFlags()` (e.g. an encounter starting).
+   */
+  readonly state = new WorldState<PrologueFlags>(DEFAULT_FLAGS, { normalize: (raw) => normalizeFlags(raw) });
+  /**
+   * World events that outlive the chapter that started them (created on first use by
+   * `ensureTownFx` / `ensureDragons`): the town's fire effects, its burning houses and the dragon.
+   */
+  townFx: FireFx | null = null;
+  townFires: TownFires | null = null;
+  dragons: DragonDirector | null = null;
+  /** hides the town (not the keep while on its ground floor) with the outdoor world */
+  private townHider = new NodeHider();
+  private townFxP: Promise<FireFx> | null = null;
+  private dragonsP: Promise<DragonDirector> | null = null;
   private townP: Promise<void> | null = null;
   private physicsP: Promise<Physics> | null = null;
   private prepared: (ScopedChapter & { index: number; resume: Record<string, unknown> | null }) | null = null;
@@ -91,14 +138,38 @@ export class PrologueStage implements Stage {
     return this.world.scene;
   }
 
+  /** The live story flags (see `state`). */
+  get flags(): PrologueFlags {
+    return this.state.flags;
+  }
+
+  /** Make the flags as they are now the checkpoint later saves record (a chapter checkpoint, an encounter start). */
+  snapshotFlags() {
+    this.state.checkpoint();
+  }
+
+  /** Put the flags back to the last checkpoint (an encounter retried after the player died). */
+  restoreFlags() {
+    return this.state.rollback();
+  }
+
+  /** A chapter checkpoint: snapshot the flags and autosave (resolves with whether the save was written). */
+  checkpoint() {
+    this.snapshotFlags();
+    return this.game.save("auto");
+  }
+
   async init() {
     const T0 = performance.now();
     const lap = (what: string) => console.info(`[timing] world ${what} +${(performance.now() - T0).toFixed(0)} ms`);
+    this.game.shaders?.mark("load");
     await this.world.init(lap);
     // most players start a new game: get the first chapter ready behind the menu
     await this.prepareChapter({ chapter: CHAPTERS[0].id, state: null });
     lap("chapter prepared");
     this.applyQuality(settings.value.quality);
+    // every scatter LOD as it will draw (thin-instanced, shadowed), even those with no instance yet
+    await this.world.precompileSets();
     await this.scene.whenReadyAsync();
     lap("shaders ready");
     return this;
@@ -107,6 +178,9 @@ export class PrologueStage implements Stage {
   /** Prepare the chapter a save (or a new game) starts in. */
   async prepareChapter(save: PrologueSave) {
     if (save.appearance !== undefined) this.appearance = save.appearance;
+    // a save from before flags existed starts from the defaults (so does a new game)
+    await this.state.restore({ v: 1, flags: save.flags as PrologueFlags, parts: save.parts ?? {} });
+    this.state.checkpoint();
     const index = Math.max(0, CHAPTERS.findIndex((c) => c.id === save.chapter));
     if (this.prepared && this.prepared.index === index && !save.state && !this.prepared.resume) return;
     if (this.prepared) {
@@ -142,9 +216,18 @@ export class PrologueStage implements Stage {
       const opt = (id: string) => loadGLB(id, this.scene).catch((e) => (console.warn(id, e), null));
       const [fort, houses, buildings, door] = await Promise.all([loadGLB("ph/modular_fort_01", this.scene), opt("cart/houses"), opt("town/buildings"), opt("ph/large_castle_door")]);
       if (this.world.disposed) return;
-      const town = await buildTown(this.scene, { fort, houses, buildings, door }, (x, z) => this.world.heightAt(x, z));
+      const town = await buildTown(this.scene, { fort, houses, buildings, door }, (x, z) => this.world.heightAt(x, z), {
+        casters: (m) => this.world.addShadowCasters(m),
+        shadows: () => this.world.env.shadows,
+      });
       this.town = town;
-      this.world.addShadowCasters(town.meshes);
+      // hidden with the outdoor world; on the keep's ground floor its building and gate stay
+      const keepParts = new Set<unknown>([town.keep, ...town.keepDoors.map((h) => h.parent)]);
+      this.world.addOutdoorPart({
+        setOutdoorVisible: (on, o) => this.townHider.hideOnly(on ? [] : town.root.getChildren().filter((c) => !(o.keep && keepParts.has(c)))),
+      });
+      // the arrows' shader, ahead of the first shot (muster, raid)
+      void prepareArrows(this.world);
       console.info(`[timing] town built +${(performance.now() - t0).toFixed(0)} ms`);
       this.townReady = true;
     })().catch((e) => {
@@ -163,36 +246,57 @@ export class PrologueStage implements Stage {
       const alive = () => {
         if (w.disposed) throw new Cancelled();
       };
+      let doors: PrologueStage["keepDoors"] = null;
       try {
         alive();
-        // terrain around the town (512 m square, ~2 m spacing)
+        // terrain around the town (512 m square, ~2 m spacing), open where the keep's basement and
+        // the cave tunnel go below ground (once the geometry covering the openings ships)
         const size = 512;
-        ph.addHeightField(LAYOUT.square.x - size / 2, LAYOUT.square.z - size / 2, size, 256, (x, z) => w.heightAt(x, z));
+        ph.addHeightField(LAYOUT.square.x - size / 2, LAYOUT.square.z - size / 2, size, 256, (x, z) => w.heightAt(x, z), activeTerrainHoles((id) => assets.has(id)), { tag: "terrain" });
         // on foot the town is the whole stage: close the gateway at its outer arch (the terrain collider
         // ends ~160 m up the road; the gate piece is 7.4 m wide)
         const gz = GATE.z + 1;
-        ph.addBox(new Vector3(GATE.x, w.heightAt(GATE.x, gz) + 3, gz), new Vector3(3.7, 3.5, 0.3));
+        ph.addBox(new Vector3(GATE.x, w.heightAt(GATE.x, gz) + 3, gz), new Vector3(3.7, 3.5, 0.3), undefined, { tag: "blocker_town_gate" });
         await nextFrame();
         alive();
         if (this.town) {
+          const town = this.town;
+          // the keep gate's leaves: one tagged body each, kept so the chapter can swing them
+          const doorTag = new Map<unknown, "l" | "r">();
+          town.keepDoors.forEach((hinge, i) => hinge.parent && doorTag.set(hinge.parent, i === 0 ? "l" : "r"));
+          const doorBody: Partial<Record<"l" | "r", BodyId>> = {};
           // one static mesh body per building, built over several frames
           const groups = new Map<unknown, AbstractMesh[]>();
-          for (const m of this.town.colliders) {
+          for (const m of town.colliders) {
             let top: unknown = m;
-            while ((top as AbstractMesh).parent && (top as AbstractMesh).parent !== this.town.root) top = (top as AbstractMesh).parent;
+            while ((top as AbstractMesh).parent && (top as AbstractMesh).parent !== town.root) top = (top as AbstractMesh).parent;
             if (!groups.has(top)) groups.set(top, []);
             groups.get(top)!.push(m);
           }
-          for (const list of groups.values()) {
+          for (const [top, list] of groups) {
             const pos: number[] = [], idx: number[] = [];
             for (const m of list) appendWorldGeometry(m, pos, idx);
-            if (idx.length) ph.addStaticMesh(pos, idx);
+            const side = doorTag.get(top);
+            if (idx.length) {
+              const id = ph.addStaticMesh(pos, idx, side ? { tag: `keep_door_${side}` } : {});
+              if (side) doorBody[side] = id;
+            }
+            // the leaves move when the gate opens: their meshes follow their hinges again
+            if (side) for (const m of list) m.unfreezeWorldMatrix();
             await nextFrame();
             alive();
           }
+          if (town.keepDoors.length === 2) {
+            const leaf = (side: "l" | "r", hinge: TransformNode): DoorLeaf => {
+              const body = doorBody[side] ?? null;
+              const f = body ? new BodyFollower(ph, body, hinge) : null;
+              return { hinge, body, sync: () => f?.sync() };
+            };
+            doors = { l: leaf("l", town.keepDoors[0]), r: leaf("r", town.keepDoors[1]) };
+          }
           const b: number[] = [], bi: number[] = [];
           for (const m of this.town.breach.meshes) appendWorldGeometry(m, b, bi);
-          if (bi.length) this.breachBody = ph.addStaticMesh(b, bi);
+          if (bi.length) this.breachBody = ph.addStaticMesh(b, bi, { tag: "tower_breach" });
         }
       } catch (e) {
         ph.dispose();
@@ -200,6 +304,10 @@ export class PrologueStage implements Stage {
       }
       this.physics = ph;
       this.world.physics = ph;
+      this.keepDoors = doors;
+      this.debris = new Debris({ physics: ph, scene: this.scene, shadows: (m) => this.world.addShadowCasters(m) });
+      // the breach stones' shader, ahead of the raid
+      void this.debris.warm([this.town?.breach.meshes[0]?.material]);
       return ph;
     })().catch((e) => {
       this.physicsP = null; // a later chapter tries again
@@ -207,9 +315,72 @@ export class PrologueStage implements Stage {
     });
     return this.physicsP;
   }
-  breachBody: ReturnType<Physics["addStaticMesh"]> | null = null;
+  /**
+   * The town's fire effects and burning houses, owned by the stage: a chapter that lights fires (the
+   * dragon raid) hands them over to the next one instead of putting them out.
+   */
+  ensureTownFx() {
+    this.townFxP ??= (async () => {
+      // no lights of its own: its fires light up through the world's light pool
+      const [fx] = await Promise.all([FireFx.create(this.world), this.ensureTown()]);
+      if (this.disposed || this.world.disposed) {
+        fx.dispose();
+        throw new Cancelled();
+      }
+      this.townFx = fx;
+      const fires = new TownFires(fx, this.town?.houses ?? [], (x, z) => this.world.heightAt(x, z));
+      this.townFires = fires;
+      // the burning town goes dark with the outdoor world (and relights already burning)
+      this.world.addOutdoorPart({
+        setOutdoorVisible: (on) => {
+          // (the story's end put them out)
+          if (this.townFires !== fires) return;
+          if (on) fires.resume();
+          else fires.pause();
+          fx.setDecalsVisible(on);
+        },
+      });
+      return fx;
+    })().catch((e) => {
+      this.townFxP = null; // a later chapter tries again
+      throw e;
+    });
+    return this.townFxP;
+  }
+
+  /** The dragon as a stage-owned world event (see {@link DragonDirector}). */
+  ensureDragons() {
+    this.dragonsP ??= (async () => {
+      const [dragon] = await Promise.all([this.world.ensureDragon(), this.ensureTownFx()]);
+      if (this.disposed || this.world.disposed) throw new Cancelled();
+      this.dragons = new DragonDirector({
+        world: this.world,
+        dragon,
+        // the stage's own script scope: chapters come and go, the dragon flies on
+        scope: this.director.scope(),
+        fx: () => this.townFx,
+        fires: () => this.townFires,
+      });
+      return this.dragons;
+    })().catch((e) => {
+      this.dragonsP = null;
+      throw e;
+    });
+    return this.dragonsP;
+  }
+
+  /** The story is over (end card): the dragon leaves and the fires go out behind the black screen. */
+  private endWorldEvents() {
+    this.dragons?.hide();
+    this.townFires?.dispose();
+    this.townFires = null;
+    this.townFx?.dispose();
+    this.townFx = null;
+    this.townFxP = null;
+  }
+
+  breachBody: BodyId | null = null;
   breached = false;
-  private debris: Mesh[] = [];
 
   /**
    * The dragon smashes the tower's east wall: the wall section disappears and (with `push`) breaks
@@ -223,31 +394,54 @@ export class PrologueStage implements Stage {
     if (ph && this.breachBody) ph.removeBody(this.breachBody);
     this.breachBody = null;
     const src = br.meshes[0];
+    // broken for good: showing the outdoor world again must not bring it back
+    this.townHider.forget(br.node);
     br.node.setEnabled(false);
-    if (!push || !ph || !src) return;
+    if (!push || !ph || !src || !this.debris) return;
     src.computeWorldMatrix(true);
-    const { minimumWorld: lo, maximumWorld: hi } = src.getBoundingInfo().boundingBox;
-    const ids: ReturnType<Physics["addBox"]>[] = [];
-    for (let i = 0; i < 16; i++) {
-      const s = 0.22 + Math.random() * 0.3;
-      const m = CreateBox("debris", { width: s * 2, height: s * 1.4, depth: s * 1.7 }, this.scene);
-      m.material = src.material;
-      const c = new Vector3(lo.x + Math.random() * (hi.x - lo.x), lo.y + Math.random() * (hi.y - lo.y), lo.z + Math.random() * (hi.z - lo.z));
-      m.position.copyFrom(c);
-      this.world.addShadowCasters([m]);
-      const id = ph.addBox(c, new Vector3(s, s * 0.7, s * 0.85), Quaternion.FromEulerAngles(Math.random() * 3, Math.random() * 3, Math.random() * 3), { dynamic: true, mass: 40, node: m, layer: L.RAGDOLL, friction: 0.9 });
-      ph.setVelocity(id, push.scale(3 + Math.random() * 5).add(new Vector3((Math.random() - 0.5) * 2, Math.random() * 3, (Math.random() - 0.5) * 2)), new Vector3(Math.random() * 6 - 3, Math.random() * 6 - 3, Math.random() * 6 - 3));
-      ids.push(id);
-      this.debris.push(m);
-    }
-    // once settled, the stones become scenery
-    let t = 0;
-    const off = this.world.onUpdate((dt) => {
-      t += dt;
-      if (t < 8) return;
-      off();
-      for (const id of ids) ph.removeBody(id);
-    });
+    const { minimumWorld: min, maximumWorld: max } = src.getBoundingInfo().boundingBox;
+    // stones on the ragdoll layer (never in the player's way) that become scenery once settled
+    this.debris.burst({ min, max }, { count: 16, push, material: src.material });
+  }
+
+  /**
+   * Zones wired to this stage (design §3.2), checked 4 times a second against the player's feet (the
+   * camera before there is a player). For each zone change:
+   * - `profile` → `world.env.setInterior(profile, blend, o.profiles?.[profile])` ("climb-out" needs
+   *   its anchor there);
+   * - visibility sets: the built-in "outdoor" (shown: the outdoor world) and "keep" (shown while the
+   *   outdoor world is hidden: the keep building stays) drive `world.setOutdoorVisible`; any other set
+   *   name calls `o.sets[name](on)`;
+   * - beds → audio beds keyed by asset id (gain 0.35 unless the bed gives one: the beds are
+   *   loudness-normalised);
+   * - music: an audio id to play (3 s fade), null to stop.
+   * The chapter owns the result: `dispose()` it (its beds stop; profile and visibility stay).
+   */
+  createZones(defs: readonly ZoneDef[], o: { sets?: Record<string, (on: boolean) => void>; outside?: ZoneEffects; profiles?: Partial<Record<LightingProfile, InteriorOptions>> } = {}) {
+    const w = this.world;
+    const vis = { outdoor: w.outdoorVisible, keep: false, dirty: false };
+    return new Zones(
+      {
+        probe: () => this.player?.position ?? w.rig.position,
+        profile: (name, seconds) => w.env.setInterior(name as LightingProfile, seconds, o.profiles?.[name as LightingProfile]),
+        show: (set, on) => {
+          if (set === "outdoor" || set === "keep") {
+            vis[set] = on;
+            vis.dirty = true;
+          } else o.sets?.[set]?.(on);
+        },
+        startBed: (id, gain) => void audio.startBed(id, id, gain ?? 0.35, 2).catch((e) => console.warn("bed", id, e)),
+        stopBed: (id) => audio.stopBed(id, 2),
+        music: (id) => (id ? void audio.playMusic(id, { fade: 3 }) : audio.stopMusic(3)),
+        entered: () => {
+          if (!vis.dirty) return;
+          vis.dirty = false;
+          w.setOutdoorVisible(vis.outdoor, { keep: vis.keep });
+        },
+      },
+      defs,
+      { outside: o.outside, bus: w },
+    );
   }
 
   /** The on-foot player, created at `pos` facing `yaw` on first use (later calls teleport it). */
@@ -268,17 +462,20 @@ export class PrologueStage implements Stage {
   private skipResolve: (() => void) | null = null;
   /**
    * Skip the rest of the current chapter (pause menu / hold-to-skip). `target` is the chapter the
-   * request was made in: if it ends before the screen is black, nothing is skipped.
+   * request was made in: if it ends before the screen is black, nothing is skipped. A chapter whose
+   * `canSkip()` says no (a choice the player must make) is not skipped unless `force` (tests, debug).
    */
-  async skipChapter(target: Chapter | null = this.chapter) {
+  async skipChapter(target: Chapter | null = this.chapter, force = false) {
     const resolve = this.skipResolve;
     if (!resolve || !target || target !== this.chapter) return;
+    if (!force && target.canSkip?.() === false) return;
     await hud.fade(true, 0.5);
     // a chapter that ended meanwhile is followed by one that fades itself in: never skip that one
     if (this.skipResolve === resolve && this.chapter === target) resolve();
   }
+  /** Whether the pause menu offers 跳过本章 now. */
   get canSkip() {
-    return !!this.skipResolve;
+    return !!this.skipResolve && this.chapter?.canSkip?.() !== false;
   }
 
   /** Called by Game.setStage when this stage becomes active. */
@@ -342,6 +539,7 @@ export class PrologueStage implements Stage {
         if (this.disposed) return "failed";
         // the town may still be loading (a ride skipped early, a cold cache): say so behind the
         // black screen, but not for a prepare that is over in a moment
+        this.game.shaders?.mark(`${ch.id}:prepare`);
         let hint = false;
         const t = setTimeout(() => {
           if (this.townReady || this.disposed) return;
@@ -362,6 +560,8 @@ export class PrologueStage implements Stage {
       this.chapter = ch;
       this.segment = ch.id;
       assets.setSegment(ch.id);
+      // debug: a shader built from here on is one built mid-play (a hitch)
+      this.game.shaders?.mark(`${ch.id}:play`);
       // checkpoint at the start of every chapter (the ride saves its own progress on new game)
       if (prepare) await this.autosave();
       if (this.disposed) return "failed";
@@ -386,12 +586,14 @@ export class PrologueStage implements Stage {
   }
 
   private async endCard() {
+    this.game.shaders?.mark("end");
     await this.autosave();
     if (this.disposed) return;
     await hud.fade(true, 2);
     // not behind the pause menu: once gameplay is over, 继续 could no longer close it
     while (this.paused && !this.disposed) await nextFrame();
     if (this.disposed) return;
+    this.endWorldEvents();
     hud.clearSubtitle();
     audio.stopAllBeds(2);
     audio.stopMusic(3);
@@ -430,11 +632,17 @@ export class PrologueStage implements Stage {
     hideSubtitle(p);
   }
 
-  saveState() {
+  saveState(kind?: SaveGame["kind"]) {
+    // an autosave is a checkpoint: the flags as they are now become what this and later saves record
+    if (kind === "auto") this.snapshotFlags();
     const ch = this.chapter ?? this.prepared?.chapter;
     // between chapters the next one from its start, after the last one its end: never a restart from the ride
     const at = ch ? { id: ch.id, label: ch.label, state: ch.save() } : (this.gap ?? { id: CHAPTERS[0].id, label: "序章", state: null });
-    return { label: at.label, state: { chapter: at.id, state: at.state, appearance: this.appearance } as unknown as Record<string, unknown> };
+    // quick and manual saves between checkpoints record the flags of the checkpoint their chapter step resumes from
+    const snap = this.state.checkpointed;
+    const save: PrologueSave = { chapter: at.id, state: at.state, appearance: this.appearance, flags: snap.flags };
+    if (Object.keys(snap.parts).length) save.parts = snap.parts;
+    return { label: at.label, state: save as unknown as Record<string, unknown> };
   }
 
   dispose() {
@@ -444,8 +652,14 @@ export class PrologueStage implements Stage {
     this.director.cancelAll();
     this.running?.chapter.dispose();
     this.prepared?.chapter.dispose();
+    // the stage's world events (their sound loops would outlive the world otherwise)
+    this.dragons?.dispose();
+    this.townFires = null;
+    this.townFx?.dispose();
+    this.townFx = null;
     for (const w of this.wagons) w.dispose();
     this.player?.dispose();
+    this.debris?.dispose();
     this.world.dispose();
     this.physics?.dispose();
     // a stage that never reached the screen (a failed load from the pause menu) owns none of the

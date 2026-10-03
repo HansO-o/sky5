@@ -18,9 +18,20 @@ import { InstancedSet, prepareForInstancing, type LodLevel } from "../world/inst
 import { CharacterFactory, type Character, type CharacterSpec } from "../world/characters";
 import { CameraRig } from "./camera";
 import type { Physics } from "../physics/Physics";
+import { LightPool } from "../engine/world/LightPool";
+import { enforceLightBudget } from "../engine/render/lightBudget";
+import type { Disposer } from "../engine/core/types";
 
 interface ScatterHeader {
   types: { name: string; count: number; offset: number }[];
+}
+
+/**
+ * A part of the outdoor world owned elsewhere (the town, its fires), hidden and shown with the
+ * terrain. `keep`: the keep building stays (the player is on its ground floor).
+ */
+export interface OutdoorPart {
+  setOutdoorVisible(on: boolean, o: { keep: boolean }): void;
 }
 
 export function meshesUnder(container: AssetContainer, nodeName?: string): Mesh[] {
@@ -45,6 +56,11 @@ export class World {
   rig: CameraRig;
   route!: Route;
   env!: Environment;
+  /**
+   * The light pool: 3 point lights that exist from boot (with the sun and the sky fill the scene
+   * always has exactly 5 lights) shared by every fire, brazier and torch. Created with the environment.
+   */
+  lights!: LightPool;
   factory!: CharacterFactory;
   npcs = new Map<string, Character>();
   private terrainPlugin!: TerrainSplatPlugin;
@@ -53,6 +69,10 @@ export class World {
   private scatter!: { header: ScatterHeader; data: Float32Array };
   private emitters: { panner: PannerNode; pos: () => Vector3 }[] = [];
   private updaters = new Set<(dt: number) => void>();
+  private terrainMeshes: AbstractMesh[] = [];
+  private outdoorParts = new Set<OutdoorPart>();
+  private outdoor = { on: true, keep: false };
+  private offBudget: Disposer;
   disposed = false;
   physics: Physics | null = null;
   /** seconds of world time (pauses with the game) */
@@ -64,6 +84,8 @@ export class World {
     scene.skipPointerMovePicking = true;
     scene.constantlyUpdateMeshUnderPointer = false;
     this.scene = scene;
+    // every lit material compiles for the fixed light set (sun, fill, pool) from the start
+    this.offBudget = enforceLightBudget(scene);
     this.rig = new CameraRig(scene);
   }
 
@@ -71,7 +93,12 @@ export class World {
     const scene = this.scene;
     const [route, env, terrain, fir, scatterBuf, bodyC, animC, rocksA, ferns, hfBuf] = await Promise.all([
       loadJSON<{ x: number[]; y: number[]; z: number[] }>("cart/route"),
-      createEnvironment(scene, this.rig.camera),
+      // the pool lights right after the sun and the fill, before any mesh is in the scene: nothing
+      // ever compiles for another light count
+      createEnvironment(scene, this.rig.camera).then((env) => {
+        this.lights = new LightPool(scene, { name: "pool" });
+        return env;
+      }),
       loadGLB("cart/terrain", scene),
       loadGLB("cart/fir", scene),
       assets.get("cart/scatter"),
@@ -167,6 +194,7 @@ export class World {
       m.isPickable = false;
       m.computeWorldMatrix(true);
       m.freezeWorldMatrix();
+      this.terrainMeshes.push(m);
     }
     for (const mat of c.materials) if (mat !== material) mat.dispose();
   }
@@ -209,8 +237,9 @@ export class World {
     }
   }
 
-  /** Add a scatter type from a loaded container (one InstancedSet per source mesh/type). */
+  /** Add a scatter type from a loaded container (one InstancedSet per source mesh/type); returns the new sets. */
   private addScatter(c: AssetContainer, nodeFor: ((k: number) => string) | undefined, types: string[], maxDist: number, foliage: boolean, reveal = 0) {
+    const added: InstancedSet[] = [];
     c.addAllToScene();
     for (const mat of c.materials) {
       if (foliage && mat instanceof PBRMaterial) {
@@ -228,6 +257,9 @@ export class World {
       if (!meshes.length) return;
       const set = new InstancedSet(this.scatterData(type), [{ meshes, maxDistance: maxDist }], { revealDistance: reveal });
       this.sets.push({ set, kind: foliage ? "foliage" : "rock" });
+      added.push(set);
+      // streamed in while the outdoor world is hidden: stays hidden with it
+      if (!this.outdoor.on) set.setEnabled(false);
       for (const m of meshes) {
         m.receiveShadows = true;
         m.isPickable = false;
@@ -235,6 +267,7 @@ export class World {
       if (!foliage && maxDist < 300) meshes.forEach((m) => this.env.addShadowCaster(m));
     });
     for (const n of c.transformNodes) if (!n.getChildMeshes().length) n.dispose();
+    return added;
   }
 
   private streamScatter(id: string, nodeFor: ((k: number) => string) | undefined, types: string[], maxDist: number) {
@@ -242,8 +275,10 @@ export class World {
       .then(async (c) => {
         if (this.disposed) return c.dispose();
         await nextFrame();
-        this.addScatter(c, nodeFor, types, maxDist, false, 70);
-        for (const m of c.meshes) if (m.material) await m.material.forceCompilationAsync(m).catch(() => {});
+        const sets = this.addScatter(c, nodeFor, types, maxDist, false, 70);
+        // compiled as drawn (thin-instanced, with their shadow pass) before any instance shows
+        await Promise.all(sets.map((s) => s.precompile(this.env.shadows)));
+        if (this.disposed) return;
         this.updateSets(true);
       })
       .catch((e) => console.warn("stream failed", id, e));
@@ -252,6 +287,46 @@ export class World {
   updateSets(force: boolean) {
     const p = this.rig.position;
     for (const { set } of this.sets) set.update(p, force);
+  }
+
+  /**
+   * Compile the scatter sets' shaders as they draw (thin-instanced, with shadows), LODs with no
+   * instances yet included: once the stage is loaded no LOD compiles when it first gets instances.
+   */
+  precompileSets() {
+    return Promise.all(this.sets.map(({ set }) => set.precompile(this.env.shadows)));
+  }
+
+  // ------------------------------------------------------------------ outdoor visibility
+
+  /** False while the outdoor world is hidden (underground). */
+  get outdoorVisible() {
+    return this.outdoor.on;
+  }
+
+  /**
+   * Show or hide the outdoor world: terrain, scattered vegetation and rocks, the sky dome and every
+   * registered {@link OutdoorPart} (the town, its fires). `keep`: while hidden, the keep building
+   * stays (the ground floor's walls and gate are its walls). Toggling never recompiles a shader.
+   */
+  setOutdoorVisible(on: boolean, o: { keep?: boolean } = {}) {
+    const keep = !on && !!o.keep;
+    if (this.outdoor.on === on && this.outdoor.keep === keep) return;
+    this.outdoor = { on, keep };
+    for (const m of this.terrainMeshes) m.setEnabled(on);
+    for (const { set } of this.sets) set.setEnabled(on);
+    this.env?.sky.setEnabled(on);
+    for (const p of this.outdoorParts) p.setOutdoorVisible(on, { keep });
+    if (on) this.updateSets(true);
+  }
+
+  /** Hide and show `part` with the outdoor world (it is told the current state at once when hidden). */
+  addOutdoorPart(part: OutdoorPart): Disposer {
+    this.outdoorParts.add(part);
+    if (!this.outdoor.on) part.setOutdoorVisible(false, { keep: this.outdoor.keep });
+    return () => {
+      this.outdoorParts.delete(part);
+    };
   }
 
   // ------------------------------------------------------------------ NPCs
@@ -340,6 +415,8 @@ export class World {
     const cam = this.rig.camera;
     const f = cam.getDirection(new Vector3(0, 0, -1));
     const p = this.rig.position;
+    this.lights?.update(dt, p, f);
+    this.env?.update(dt, p);
     audio.setListener(p.x, p.y, p.z, f.x, f.y, f.z);
     const ctx = audio.ctx;
     if (ctx)
@@ -358,6 +435,8 @@ export class World {
     if (!this.env || q === this.quality) return;
     this.quality = q;
     this.env.applyQuality(q);
+    // the pool keeps its 3 lights on every tier (no recompiles): low just leaves one dark
+    this.lights?.setSlots(q === "low" ? 2 : 3);
     if (this.terrainPlugin) {
       this.terrainPlugin.useNormals = q !== "low";
       this.terrainPlugin.markAllDefinesAsDirty();
@@ -380,6 +459,9 @@ export class World {
     for (const { set } of this.sets) set.dispose();
     for (const c of this.npcs.values()) c.dispose();
     this.npcs.clear();
+    this.outdoorParts.clear();
+    this.offBudget();
+    this.lights?.dispose();
     this.env?.dispose();
     this.scene.dispose();
   }

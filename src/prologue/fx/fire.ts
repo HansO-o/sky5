@@ -8,17 +8,51 @@ import "@babylonjs/core/Particles/particleSystemComponent";
 import { CreateGround } from "@babylonjs/core/Meshes/Builders/groundBuilder";
 import { CreateSphere } from "@babylonjs/core/Meshes/Builders/sphereBuilder";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
-import { PointLight } from "@babylonjs/core/Lights/pointLight";
+import { SpriteManager } from "@babylonjs/core/Sprites/spriteManager";
+import { Sprite } from "@babylonjs/core/Sprites/sprite";
+import "@babylonjs/core/Sprites/spriteSceneComponent";
+import { Constants } from "@babylonjs/core/Engines/constants";
 import type { Texture } from "@babylonjs/core/Materials/Textures/texture";
 import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { audio } from "../../core/audio";
 import { loadKTX2 } from "../../game/loaders";
+import { applyLightBudget } from "../../engine/render/lightBudget";
+import { precompile } from "../../engine/render/precompile";
+import type { LightClaim } from "../../engine/world/LightPool";
 import type { World } from "../World";
 
 export interface FireHandle {
   pos: Vector3;
+  /** put the fire out (it dies down over its particles' lifetime) */
   stop(): void;
+  /**
+   * Hide the fire at once (particles cleared, sound and light released), e.g. while the outdoor
+   * world is hidden; `resume` lights it again, already burning.
+   */
+  pause(): void;
+  resume(): void;
+  readonly paused: boolean;
 }
+
+/** A handle for a fire that does nothing (asked for after dispose). */
+const deadFire = (pos: Vector3): FireHandle => ({ pos, stop() {}, pause() {}, resume() {}, paused: false });
+
+/** The light a fire asks the scene's light pool for (`true`: the defaults). */
+export interface FireLight {
+  /** default 9 for a fire, 4 for a sconce */
+  intensity?: number;
+  /** metres (default 18 for a fire, 9 for a sconce) */
+  range?: number;
+  /** linear RGB (default warm orange) */
+  color?: readonly [number, number, number];
+  /** metres above the fire's base (default 1.2 for a fire, 0.25 for a sconce) */
+  height?: number;
+  /** wins a pool slot over nearer lower-priority sources (default 0) */
+  priority?: number;
+}
+
+const FIRE_COLOR = [1, 0.55, 0.22] as const;
+const SCONCE_COLOR = [1, 0.6, 0.3] as const;
 
 /**
  * Fire, smoke, dragon breath, falling fireballs and scorch marks. Textures come from the "dragon"
@@ -30,9 +64,10 @@ export class FireFx {
   private fires: FireHandle[] = [];
   private scorchMat: StandardMaterial;
   private ballMat: StandardMaterial;
-  private lights: PointLight[] = [];
-  /** the fire each borrowed light is lighting */
-  private lightOwner = new Map<PointLight, FireHandle>();
+  /** wall-sconce flames: animated sprites from one manager (created on first use or by the warm-up) */
+  private sprites: SpriteManager | null = null;
+  private sconceFlames = new Set<{ sprite: Sprite; cell: number }>();
+  private decalsVisible = true;
   private offs: (() => void)[] = [];
   /** pending after() timers: each forgets itself when it fires */
   private timers = new Set<() => void>();
@@ -40,12 +75,20 @@ export class FireFx {
   private active = new Set<() => void>();
   private disposed = false;
 
-  static async create(world: World) {
+  /**
+   * Loads the textures and compiles every shader the effects use (particles, scorch decal, fireball,
+   * sconce sprites) before resolving, so the first fire never compiles mid-play. FireFx has no lights
+   * of its own: `fire(..., {light})` asks the world's light pool (`world.lights`), so the scene's
+   * light set never changes. (`o.lights` is accepted for old callers and ignored.)
+   */
+  static async create(world: World, _o: { lights?: number } = {}) {
     const s = world.scene;
     const [fire, smoke, flame, spark, scorch] = await Promise.all(
       ["fx/fire_sheet", "fx/smoke_sheet", "fx/flame", "fx/spark", "fx/scorch"].map((id) => loadKTX2(id, s, { wrap: false })),
     );
-    return new FireFx(world, { fire, smoke, flame, spark, scorch });
+    const fx = new FireFx(world, { fire, smoke, flame, spark, scorch });
+    await fx.warm();
+    return fx;
   }
 
   private constructor(
@@ -64,15 +107,7 @@ export class FireFx {
     this.ballMat = new StandardMaterial("fireball", s);
     this.ballMat.disableLighting = true;
     this.ballMat.emissiveColor = new Color3(1, 0.62, 0.25);
-    // a few flickering lights shared by the biggest fires
-    for (let i = 0; i < 2; i++) {
-      const l = new PointLight(`firelight${i}`, new Vector3(0, -100, 0), s);
-      l.diffuse = new Color3(1, 0.55, 0.22);
-      l.specular = Color3.Black();
-      l.intensity = 0;
-      l.range = 18;
-      this.lights.push(l);
-    }
+    applyLightBudget([this.scorchMat, this.ballMat]);
     // particles advance on game time (pause, debug time scale): set on every rendered frame, paused
     // ones included (no world update runs then)
     const ob = s.onBeforeRenderObservable.add(() => {
@@ -80,16 +115,80 @@ export class FireFx {
       for (const ps of this.systems) ps.updateSpeed = k / 60;
     });
     this.offs.push(() => s.onBeforeRenderObservable.remove(ob));
+    // sconce flames animate on game time too (24 fps through the 8x8 sheet)
     let t = 0;
     this.offs.push(
       world.onUpdate((dt) => {
         t += dt;
-        this.lights.forEach((l, i) => {
-          if (l.position.y < -50) return;
-          l.intensity = 9 + Math.sin(t * 13 + i * 2) * 1.6 + Math.sin(t * 29 + i) * 1.1;
-        });
+        const f = Math.floor(t * 24);
+        for (const fl of this.sconceFlames) fl.sprite.cellIndex = (fl.cell + f) % 64;
       }),
     );
+  }
+
+  /**
+   * Compile what the effects draw with, behind the caller's loading: the two particle shaders
+   * (sprite-sheet and plain), the scorch decal and the fireball, and the sconce sprites. Best effort,
+   * capped at a few seconds.
+   */
+  private async warm() {
+    const s = this.world.scene;
+    const far = new Vector3(0, -1000, 0);
+    const sheet = this.system("warm", 1, true);
+    this.flames(sheet, 1);
+    sheet.emitter = far;
+    const plain = this.system("warm", 1, false);
+    plain.particleTexture = this.tex.spark;
+    plain.emitter = far;
+    const decal = CreateGround("warm_scorch", { width: 1, height: 1 }, s);
+    decal.material = this.scorchMat;
+    decal.receiveShadows = true;
+    const ball = CreateSphere("warm_ball", { diameter: 0.5, segments: 4 }, s);
+    ball.material = this.ballMat;
+    for (const m of [decal, ball]) {
+      m.isPickable = false;
+      m.setEnabled(false);
+    }
+    const sprites = this.spriteManager();
+    const end = performance.now() + 4000;
+    try {
+      const shaders = precompile([decal, ball], { timeout: 4 });
+      // (a timer, not a frame: a hidden tab renders no frames)
+      while (performance.now() < end && !this.disposed && !(sheet.isReady() && plain.isReady() && sprites.spriteRenderer.isReady()))
+        await new Promise((r) => setTimeout(r, 16));
+      await shaders;
+    } finally {
+      this.release(sheet);
+      this.release(plain);
+      decal.dispose();
+      ball.dispose();
+    }
+  }
+
+  /** The sconce sprites' manager (one for every flame; it shares the fire sheet texture). */
+  private spriteManager() {
+    if (this.sprites) return this.sprites;
+    const m = new SpriteManager("sconces", "", 64, 128, this.world.scene);
+    m.texture = this.tex.fire;
+    m.blendMode = Constants.ALPHA_ADD;
+    m.disableDepthWrite = true;
+    m.isPickable = false;
+    this.sprites = m;
+    return m;
+  }
+
+  /** A light from the world's pool for a fire at `p` (null without a pool). */
+  private claimLight(p: Vector3, o: FireLight, d: { intensity: number; range: number; height: number; color: readonly [number, number, number]; flicker: number }): LightClaim | null {
+    const pool = this.world.lights;
+    if (!pool || this.disposed) return null;
+    return pool.add({
+      at: p.add(new Vector3(0, o.height ?? d.height, 0)),
+      color: o.color ?? d.color,
+      intensity: o.intensity ?? d.intensity,
+      range: o.range ?? d.range,
+      flicker: d.flicker,
+      priority: o.priority,
+    });
   }
 
   private system(name: string, capacity: number, sheet: boolean) {
@@ -162,13 +261,15 @@ export class FireFx {
   }
 
   /**
-   * A burning spot (roof, rubble, a hit) with a smoke column; `light` borrows one of the flicker
-   * lights (when none is free, the one on the lit fire farthest from the camera, if that is farther).
+   * A burning spot (roof, rubble, a hit, a brazier) with a smoke column; `light` makes it a source
+   * for the world's light pool (lit while among the nearest in view; see {@link FireLight}).
+   * `seconds`: put out by itself after that much game time (on this instance's clock, so a chapter
+   * ending meanwhile does not cut it short).
    */
-  fire(pos: Vector3, scale = 1, o: { smoke?: boolean; light?: boolean; sound?: boolean } = {}): FireHandle {
+  fire(pos: Vector3, scale = 1, o: { smoke?: boolean; light?: boolean | FireLight; sound?: boolean; seconds?: number } = {}): FireHandle {
     const p = pos.clone();
     // a script left running past the chapter's end: nothing to light
-    if (this.disposed) return { pos: p, stop() {} };
+    if (this.disposed) return deadFire(p);
     const f = this.system("fire", Math.round(50 * scale) + 10, true);
     this.flames(f, 1.5 * scale);
     // tongues of flame rising from a disc, shrinking as they climb
@@ -199,27 +300,18 @@ export class FireFx {
       sm.gravity = new Vector3(0.6, 1.4, 0.2);
       sm.start();
     }
-    let light: PointLight | null = null;
-    if (o.light) {
-      light = this.lights.find((l) => !this.lightOwner.has(l)) ?? null;
-      if (!light) {
-        // a scripted fire by the player takes the light from a distant roof
-        const cam = this.world.rig.position;
-        let far = Vector3.Distance(p, cam);
-        for (const [l, owner] of this.lightOwner) {
-          const d = Vector3.Distance(owner.pos, cam);
-          if (d > far) {
-            far = d;
-            light = l;
-          }
-        }
-      }
-      light?.position.copyFrom(p.add(new Vector3(0, 1.2, 0)));
-    }
+    const lightOpts = o.light ? (o.light === true ? {} : o.light) : null;
+    const lit = () => (lightOpts ? this.claimLight(p, lightOpts, { intensity: 9, range: 18, height: 1.2, color: FIRE_COLOR, flicker: 0.3 }) : null);
+    let light: LightClaim | null = null;
     // the stop handle arrives once the loop has loaded: a fire stopped before then still stops it
-    const snd = o.sound !== false ? this.world.loopEmitter("audio/burning", () => p, 0.5 * Math.min(1.5, scale)) : null;
+    const sound = () => (o.sound !== false ? this.world.loopEmitter("audio/burning", () => p, 0.5 * Math.min(1.5, scale)) : null);
+    let snd = sound();
+    let paused = false;
     const h: FireHandle = {
       pos: p,
+      get paused() {
+        return paused;
+      },
       stop: () => {
         // stopped already
         if (!this.fires.includes(h)) return;
@@ -227,21 +319,114 @@ export class FireFx {
         f.stop();
         sm?.stop();
         void snd?.then((s) => s?.stop());
-        // (unless a nearer fire has taken it meanwhile)
-        if (light && this.lightOwner.get(light) === h) {
-          this.lightOwner.delete(light);
-          light.position.y = -100;
-          light.intensity = 0;
-        }
+        snd = null;
+        light?.stop();
+        light = null;
         this.after(6, () => {
           this.release(f);
           if (sm) this.release(sm);
         });
       },
+      pause: () => {
+        if (paused || !this.fires.includes(h)) return;
+        paused = true;
+        for (const ps of [f, sm]) {
+          ps?.stop();
+          ps?.reset();
+        }
+        void snd?.then((s) => s?.stop());
+        snd = null;
+        light?.stop();
+        light = null;
+      },
+      resume: () => {
+        if (!paused || !this.fires.includes(h) || this.disposed) return;
+        paused = false;
+        // back already burning: simulate the flames' and the smoke column's lifetimes first
+        for (const [ps, cycles] of [[f, 20], [sm, 60]] as const) {
+          if (!ps) continue;
+          ps.preWarmStepOffset = 6;
+          ps.preWarmCycles = cycles;
+          ps.start();
+          ps.preWarmCycles = 0;
+        }
+        snd = sound();
+        light = lit();
+      },
     };
-    if (light) this.lightOwner.set(light, h);
     this.fires.push(h);
+    light = lit();
+    if (o.seconds !== undefined) this.after(o.seconds, () => h.stop());
     return h;
+  }
+
+  /**
+   * A small steady flame (wall sconce, torch head, candle cluster): one animated sprite from a
+   * shared manager instead of particle systems, optionally a light-pool source. Cheap enough for a
+   * dozen per room. The handle's `stop` removes it; `pause`/`resume` hide and show it.
+   */
+  sconce(pos: Vector3, o: { size?: number; light?: boolean | FireLight } = {}): FireHandle {
+    const p = pos.clone();
+    if (this.disposed) return deadFire(p);
+    const size = o.size ?? 0.45;
+    const sprite = new Sprite("sconce", this.spriteManager());
+    sprite.width = size * 0.7;
+    sprite.height = size;
+    // the sprite is centred: lift it so the flame's foot sits at `pos`
+    sprite.position.copyFrom(p).addInPlaceFromFloats(0, size * 0.4, 0);
+    sprite.color = new Color4(1, 0.85, 0.65, 1);
+    sprite.isPickable = false;
+    const flame = { sprite, cell: Math.floor(Math.random() * 64) };
+    sprite.cellIndex = flame.cell;
+    this.sconceFlames.add(flame);
+    const lightOpts = o.light ? (o.light === true ? {} : o.light) : null;
+    const lit = () => (lightOpts ? this.claimLight(p, lightOpts, { intensity: 4, range: 9, height: 0.25, color: SCONCE_COLOR, flicker: 0.35 }) : null);
+    let light = lit();
+    let paused = false, stopped = false;
+    const h: FireHandle = {
+      pos: p,
+      get paused() {
+        return paused;
+      },
+      stop: () => {
+        if (stopped) return;
+        stopped = true;
+        this.sconceFlames.delete(flame);
+        sprite.dispose();
+        light?.stop();
+        light = null;
+      },
+      pause: () => {
+        if (paused || stopped) return;
+        paused = true;
+        sprite.isVisible = false;
+        light?.stop();
+        light = null;
+      },
+      resume: () => {
+        if (!paused || stopped || this.disposed) return;
+        paused = false;
+        sprite.isVisible = true;
+        light = lit();
+      },
+    };
+    return h;
+  }
+
+  /** Show or hide the scorch decals (they lie on the town's ground: hidden with the outdoor world). */
+  setDecalsVisible(on: boolean) {
+    if (on === this.decalsVisible) return;
+    this.decalsVisible = on;
+    for (const m of this.meshes) m.setEnabled(on);
+  }
+
+  /** Every fire burning now (paused ones included). */
+  get burning(): readonly FireHandle[] {
+    return this.fires;
+  }
+
+  get isDisposed() {
+    return this.disposed;
   }
 
   /** Ground scorch decal. */
@@ -252,6 +437,7 @@ export class FireFx {
     m.material = this.scorchMat;
     m.isPickable = false;
     m.receiveShadows = true;
+    m.setEnabled(this.decalsVisible);
     this.meshes.push(m);
     return m;
   }
@@ -378,10 +564,7 @@ export class FireFx {
     const d = Vector3.Distance(at, w.rig.position);
     w.rig.shake(Math.min(0.03, 0.35 / Math.max(4, d)) * scale, 0.7);
     void audio.playOneShot(Math.random() < 0.5 ? "audio/collapse_small" : "audio/rubble", 1.1 * scale, at, "sfx", 0.8 + Math.random() * 0.3, 14);
-    if (linger > 0) {
-      const f = this.fire(at, 0.6 * scale, { sound: false });
-      this.after(linger, () => f.stop());
-    }
+    if (linger > 0) this.fire(at, 0.6 * scale, { sound: false, seconds: linger });
   }
 
   /**
@@ -449,7 +632,11 @@ export class FireFx {
     for (const ps of this.systems) ps.dispose(false);
     this.systems.clear();
     for (const m of this.meshes) m.dispose();
-    for (const l of this.lights) l.dispose();
+    for (const f of this.sconceFlames) f.sprite.dispose();
+    this.sconceFlames.clear();
+    // (the manager disposes the fire sheet with it: disposed below with the other textures anyway)
+    this.sprites?.dispose();
+    this.sprites = null;
     this.scorchMat.dispose();
     this.ballMat.dispose();
     for (const t of Object.values(this.tex)) t.dispose();

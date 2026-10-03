@@ -2,10 +2,15 @@
 // Vertex colour = splat weights (dirt, rock, road, snow). Chunk borders get skirts to hide
 // cracks between chunks of different resolution.
 import { WORLD_HALF } from "./world.mjs";
+import { inRenderHole } from "./terrainHoles.mjs";
 
 export const CHUNK = 200;
 
-export function buildTerrainChunks(T, route) {
+/**
+ * @param holes terrain holes to cut (tools/gen/terrainHoles.mjs `activeHoles`): quads whose centre
+ *   lies in a hole's `render` rectangle are left out. Each chunk reports the holes it cut.
+ */
+export function buildTerrainChunks(T, route, holes = []) {
   const chunks = [];
   const n = Math.round((WORLD_HALF * 2) / CHUNK);
   for (let cz = 0; cz < n; cz++)
@@ -20,12 +25,12 @@ export function buildTerrainChunks(T, route) {
         dmin = Math.min(dmin, Math.hypot(dx, dz));
       }
       const spacing = dmin < 40 ? 2 : dmin < 250 ? 5 : dmin < 600 ? 10 : 20;
-      chunks.push(buildChunk(T, x0, z0, spacing, `terrain_${cx}_${cz}`));
+      chunks.push(buildChunk(T, x0, z0, spacing, `terrain_${cx}_${cz}`, holes));
     }
   return chunks;
 }
 
-function buildChunk(T, x0, z0, spacing, name) {
+function buildChunk(T, x0, z0, spacing, name, holes) {
   const N = Math.round(CHUNK / spacing);
   const V = N + 1;
   const pos = [], nrm = [], col = [], idx = [];
@@ -52,8 +57,15 @@ function buildChunk(T, x0, z0, spacing, name) {
       nrm.push(...n);
       col.push(...T.weights(x, z, h, n[1], D[j * V + i]));
     }
+  // holes that reach into this chunk
+  const cut = holes.filter((h) => h.render.x1 > x0 && h.render.x0 < x0 + CHUNK && h.render.z1 > z0 && h.render.z0 < z0 + CHUNK);
+  let skipped = 0;
   for (let j = 0; j < N; j++)
     for (let i = 0; i < N; i++) {
+      if (cut.length && inRenderHole(cut, x0 + (i + 0.5) * spacing, z0 + (j + 0.5) * spacing)) {
+        skipped++;
+        continue;
+      }
       const a = j * V + i, b = a + 1, c = a + V + 1, d = a + V;
       // CCW seen from above (+Y) in a right-handed frame with +Z toward the viewer
       if ((i + j) % 2) idx.push(a, d, c, a, c, b);
@@ -91,5 +103,8 @@ function buildChunk(T, x0, z0, spacing, name) {
     indices: idx,
     heights: H,
     res: V,
+    /** ids of the holes cut into this chunk, and how many quads they removed */
+    holes: cut.map((h) => h.id),
+    skippedQuads: skipped,
   };
 }

@@ -6,13 +6,17 @@ import { Texture } from "@babylonjs/core/Materials/Textures/texture";
 import type { Scene } from "@babylonjs/core/scene";
 import type { Node } from "@babylonjs/core/node";
 import { assets } from "../core/assets/AssetClient";
+import { applyLightBudget } from "../engine/render/lightBudget";
 
 registerBuiltInGLTFExtensions();
 
-/** Load a GLB asset (cache-first) into an AssetContainer; nothing is added to the scene yet. */
+/**
+ * Load a GLB asset (cache-first) into an AssetContainer; nothing is added to the scene yet. Its
+ * materials are set up for the scene's fixed light count before anything compiles them.
+ */
 export async function loadGLB(id: string, scene: Scene): Promise<AssetContainer> {
   const buf = await assets.get(id);
-  return LoadAssetContainerAsync(new Uint8Array(buf), scene, {
+  const c = await LoadAssetContainerAsync(new Uint8Array(buf), scene, {
     pluginExtension: ".glb",
     name: id,
     pluginOptions: {
@@ -24,6 +28,8 @@ export async function loadGLB(id: string, scene: Scene): Promise<AssetContainer>
       },
     },
   });
+  applyLightBudget(c.materials);
+  return c;
 }
 
 /** Load a standalone KTX2 texture asset. Transcoding happens in the KTX2 worker pool. */

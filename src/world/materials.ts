@@ -8,6 +8,7 @@ import { PBRMaterial } from "@babylonjs/core/Materials/PBR/pbrMaterial";
 import { ShadowDepthWrapper } from "@babylonjs/core/Materials/shadowDepthWrapper";
 import type { Scene } from "@babylonjs/core/scene";
 import type { Texture } from "@babylonjs/core/Materials/Textures/texture";
+import { applyLightBudget } from "../engine/render/lightBudget";
 
 export const LAYERS = ["grass", "dirt", "rock", "road", "snow"] as const;
 export type Layer = (typeof LAYERS)[number];
@@ -238,6 +239,7 @@ export function createTerrainMaterial(scene: Scene) {
   m.metallic = 0;
   m.roughness = 0.93;
   m.environmentIntensity = 0.85;
+  applyLightBudget([m]);
   const plugin = new TerrainSplatPlugin(m);
   return { material: m, plugin };
 }

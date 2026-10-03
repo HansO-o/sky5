@@ -132,13 +132,13 @@ New code goes in `src/engine/*` and must not import `src/prologue`. Game content
 - **Root motion**: for each new UAL2 `Sword_*`, `Sword_Dash_RM` and `Sword_Block`:
   - rebase the root track to its first key;
   - write `(t, x, y, z, yaw)` into `chars/anim_rootmotion.json`;
-  - zero the root translation and set the rotation to rest.
+  - zero the root translation and set the rotation to rest (*as built: the rotation goes to rest, but the translation is pinned at the sword set's static offset (0, 0, −0.0758), not zeroed; see below*).
 
-  At runtime the curve delta is applied to the `CapsuleMover` as velocity, clamped to 3 m/s and zeroed within 0.9 m of the target. This also fixes the shipped `Sword_Block` −0.08 m offset.
+  At runtime the curve delta is applied to the `CapsuleMover` as velocity, clamped to 3 m/s and zeroed within 0.9 m of the target. *Correction (as built):* the shipped `Sword_Block` −0.08 m root offset is not a bug. Its pelvis and leg pose bake in a matching +0.0758 m forward offset, as do the other UAL2 `Sword_*` clips, so its feet stand on `Idle_Loop`'s footprint. Zeroing that root moved every sword clip 7.6 cm ahead of the idle footprint and the capsule. The build therefore pins the root at that offset (`Sword_Dash_RM` at 0) and checks the footprints by forward kinematics. `Sword_Block` ships unchanged. See Appendix "Pipeline outputs".
 - Emit the new clips as **`chars/anim_combat`** in segment `keep`, and add `CharacterFactory.addClips(container)`.
 - New clips (44, about 48 s, about 330 KB brotli):
-  - **UAL1:** Sword_Enter, Sword_Exit, Sword_Attack, Hit_Shoulder_L, Hit_Shoulder_R, Push_Enter, Push_Loop, Push_Exit, Punch_Jab, Punch_Cross, Kick, Crouch_Enter, Crouch_Exit, Crouch_Bwd_Loop, Crouch_Left_Loop, Crouch_Right_Loop, Jog_Left_Loop, Jog_Right_Loop, Jog_Bwd_Loop.
-  - **UAL2:** Sword_Light_A, Sword_Light_A_Rec, Sword_Light_B, Sword_Light_B_Rec, Sword_Light_C, SwordLight_C_Rec (no underscore), Sword_Regular_A, Sword_Regular_A_Rec, Sword_Regular_B, Sword_Regular_B_Rec, Sword_Heavy_A, Sword_Heavy_A_Rec, Sword_Dash_RM, Shield_OneShot, Idle_Shield_Break, Walk_L_Loop, Walk_R_Loop, Walk_Bwd_Loop, Bandage_Loop, Chest_Open, PickUp_Table, Consume, Farm_PickingTree, Bow_Aim_Up, Bow_Aim_Down.
+  - **UAL1:** Sword_Enter, Sword_Exit, Sword_Attack, Hit_Shoulder_L, Hit_Shoulder_R, Push_Enter, Push_Loop, Push_Exit, Punch_Jab, Punch_Cross, Kick, Crouch_Enter, Crouch_Exit, Crouch_Bwd_Loop, Crouch_Left_Loop, Crouch_Right_Loop, Jog_Left_Loop, Jog_Right_Loop, Jog_Bwd_Loop, PickUp_Table (*as built: PickUp_Table exists only in UAL1; see Appendix "Pipeline outputs"*).
+  - **UAL2:** Sword_Light_A, Sword_Light_A_Rec, Sword_Light_B, Sword_Light_B_Rec, Sword_Light_C, SwordLight_C_Rec (no underscore), Sword_Regular_A, Sword_Regular_A_Rec, Sword_Regular_B, Sword_Regular_B_Rec, Sword_Heavy_A, Sword_Heavy_A_Rec, Sword_Dash_RM, Shield_OneShot, Idle_Shield_Break, Walk_L_Loop, Walk_R_Loop, Walk_Bwd_Loop, Bandage_Loop, Chest_Open, Consume, Farm_PickingTree, Bow_Aim_Up, Bow_Aim_Down.
   - **Reused shipped clips:** Idle_Loop (armed idle), Sword_Idle, Sword_Block, Idle_Shield_Loop, Hit_Chest/Head/Stomach, Hit_Knockback, LayToIdle, KipUp, Death01/02, Crouch_Idle/Fwd, Idle_Torch_Loop, Idle_Talking_Loop, Idle_Rail_Call, Interact, Fixing_Kneeling, PickUp_Kneeling, Sitting_Idle_Loop, GroundSit_Idle_Loop, Crying, Idle_Tired_Loop, Bow_Notch/Aim_Neutral/Shoot, Sprint_Loop, Surprise.
 - Foot slide (player.ts): normalise walk to the native 0.95 m/s and crouch to 0.6 m/s, not 1.6 and 1.3.
 
@@ -1187,7 +1187,7 @@ Positions are world coordinates. Underground Y comes from anchors or keep-local 
 5. `DragonChapter.skip()` doesn't place Brun or the scribe. Place them at their gate marks (step-0 table).
 6. End card (PrologueStage.ts:285) still says 阵营选择、要塞与出洞将在之后的版本中开放. Replace with §6.2.
 7. `FireFx` constructor always adds 2 PointLights (fire.ts:62). Replace with LightPool claims and fixed lights from boot.
-8. `characters.mjs`: assert that requested clips exist (the Standard fallback silently drops 16), dispose the 63 orphan joints, and rebase root motion (also fixes the `Sword_Block` −0.08 m shift).
+8. `characters.mjs`: assert that requested clips exist (the Standard fallback silently drops 16), dispose the 63 orphan joints, and rebase root motion. (*As built:* `Sword_Block`'s −0.08 m root offset is compensated by its pose, so it is not a shift. It is kept, and the new sword clips are pinned at the same offset; see Appendix "Pipeline outputs".)
 9. Foot sliding: normalise walk/crouch speeds to the native 0.95 / 0.6 m/s.
 10. `execution.ts attachAxe` rotation `(0, 0, π/2)` puts the handle along the palm normal. Use `BoneSocket` with `(0, 0.7071, 0.7071, 0)`.
 11. Credits and provenance:
@@ -1321,3 +1321,120 @@ Framework first. Each item lists its acceptance check.
 | Choice pressure, warrant bluff, unchosen companion leading the pursuers, slab-caused collapse, mead and name-strike payoffs, the scribe's names motif, cocoon letter, rewrite table, balcony vista | cinematic |
 | Faction-mirrored lessons, teaching ladder, tips, adaptive difficulty, soft-lock audit, companion specials, backstab tutorial, satchel risk/reward, letter variant, end-card replay hook, mercenary-interrogator lines (moved into the rebel fight) | gameplay / tech |
 | Done fresh in this synthesis | v4 cave layout and anchors (re-measured); dragon-path and vista clearance checks; door/continuity redesign (main gate + postern, Brun's men as the imperial-route E1, interrogator body at the camp, drain pre-opened); Brun → 铁桦; scribe → 伊沃; dropped the 八条腿 and 趴下 lines |
+---
+
+## Appendix: Pipeline outputs
+
+What the asset pipeline actually emits for these chapters, for the runtime integrator. Each unit adds its own subsection.
+
+### Character animation (`chars/anim_*`)
+
+Built by `tools/gen/characters.mjs`, which holds the clip lists and ids, and `tools/gen/animclips.mjs`, a game-agnostic module for picking clips, retargeting them, checking the clip contract and extracting root motion. Rebuild with `node tools/build-assets.mjs --only=chars/`. That rebuilds `chars/male`, `chars/female` and `chars/horse` too; they come out byte-identical.
+
+| Manifest id | Type | Segment | Priority, `pos` | Raw / brotli | Content |
+|---|---|---|---|---|---|
+| `chars/anim_base` | glb | cart | 96 | 1.57 MB / 683 KB | The same 50 shipped clips in the same order. **Rebuilt, hash changed** only because the 63 orphan UAL2 joint copies are gone (129 → 66 nodes). Every channel of every clip, `Sword_Block` included, was compared key by key with the shipped file and is identical. |
+| `chars/anim_combat` | glb | **keep** | 94, [60, −662] | 1.12 MB / 426 KB | The 44 new clips, 47.8 s in total. |
+| `chars/anim_rootmotion` | json | **keep** | 94, [60, −662] | 6 KB / 1.3 KB | Root-motion curves for 14 clips. Load it with `loadJSON("chars/anim_rootmotion")`; the id has no `.json` suffix, like `cart/route`. |
+
+**GLB structure** (`anim_base` and `anim_combat` are identical in layout):
+- One scene. Its root node is `Armature` (identity transform). Under it is `root`, with rest rotation (−0.7071, 0, 0, 0.7071), then `pelvis` and the rest of the 65 joints of the character skeleton: `spine_01..03`, `neck_01`, `Head`, `clavicle/upperarm/lowerarm/hand_{l,r}`, the fingers `*_01..03` and `*_04_leaf`, and `thigh/calf/foot/ball/ball_leaf_{l,r}`.
+- No meshes, skins or materials. It requires `EXT_meshopt_compression`.
+- Each clip has 67 LINEAR channels: rotation on all 65 joints, plus translation on `root` and `pelvis`.
+- The AnimationGroup name is the clip name. Clip names are unique across `anim_base` and `anim_combat`; the build checks this.
+- `CharacterFactory.addClips(container)` only needs `for (const g of container.animationGroups) this.clips.set(g.name, g)`. `Character.group()` already retargets by node name.
+
+**`anim_combat` clips** (seconds): Crouch_Bwd_Loop 2.000 · Crouch_Enter 0.833 · Crouch_Exit 0.833 · Crouch_Left_Loop 2.000 · Crouch_Right_Loop 2.000 · Hit_Shoulder_L 0.533 · Hit_Shoulder_R 0.500 · Jog_Bwd_Loop 0.933 · Jog_Left_Loop 0.933 · Jog_Right_Loop 0.933 · Kick 1.100 · PickUp_Table 0.833 · Punch_Cross 1.000 · Punch_Jab 0.867 · Push_Enter 0.667 · Push_Exit 1.200 · Push_Loop 2.667 · Sword_Attack 1.533 · Sword_Enter 1.300 · Sword_Exit 1.300 · Bandage_Loop 0.667 · Bow_Aim_Down 1.333 · Bow_Aim_Up 1.333 · Chest_Open 1.367 · Consume 1.333 · Farm_PickingTree 2.233 · Idle_Shield_Break 1.067 · Shield_OneShot 0.833 · Sword_Dash_RM 1.567 · Sword_Heavy_A 0.733 · Sword_Heavy_A_Rec 1.000 · Sword_Light_A 0.367 · Sword_Light_A_Rec 0.500 · Sword_Light_B 0.433 · Sword_Light_B_Rec 0.567 · Sword_Light_C 0.867 · Sword_Regular_A 0.433 · Sword_Regular_A_Rec 0.967 · Sword_Regular_B 0.533 · Sword_Regular_B_Rec 1.033 · SwordLight_C_Rec 0.700 · Walk_Bwd_Loop 1.333 · Walk_L_Loop 1.333 · Walk_R_Loop 1.333.
+
+**`chars/anim_rootmotion` format:**
+```json
+{ "version": 1, "bone": "root", "space": "…", "keys": "[t, x, y, z, yaw]",
+  "clips": { "Sword_Light_A": { "asset": "chars/anim_combat", "duration": 0.36667, "delta": [0, 0, 0.3143, 0],
+                                "keys": [[0, 0, 0, 0, 0], [0.03333, 0, 0, 0, 0], [0.06667, 0, 0, 0.0251, 0], …] }, … } }
+```
+- **Space.** Character model space, which is the local space under the character's root TransformNode (the scene is right-handed, so there is no axis flip). The curve is taken in the root bone's parent space. The build asserts that every node above `root` (`Armature`) is an identity transform, so that this is model space. +Z is forward, +X is the character's left, +Y is up, in metres. `yaw` is in radians about +Y; positive turns +Z toward +X, a left turn. Every clip starts at `[0, 0, 0, 0, 0]` in its own start frame.
+- **Keys.** These are the 30 fps source keys. Keys that linear interpolation already reproduces within 0.1 mm are dropped, so interpolate linearly. `t` is clip time; at `speedRatio` s, wall time is `t / s`. `delta` is the net motion at the end of the clip.
+- **Runtime use** (§3.4). Each frame:
+  1. Take Δ = curve(t₁) − curve(t₀), handling the clip end.
+  2. Rotate (x, z) by the actor's current yaw.
+  3. Feed Δ/dt to the `CapsuleMover` as velocity, clamped to 3 m/s and zeroed within 0.9 m of the target.
+
+  In these clips the root bone holds a fixed translation (the pin, below) and its rest rotation. If the curve is ignored, an attack plays in place and does not teleport.
+
+  **Watch the 3 m/s clamp.** Some lunges are much faster than 3 m/s at their peak:
+  - `Sword_Dash_RM` moves 0.83 m in the single frame 0.200–0.233 s (25 m/s), and 2.8 m by 0.333 s.
+  - `Sword_Heavy_A` peaks at 12.9 m/s around 0.50–0.53 s.
+  - Light and Regular attacks peak at about 3.7 m/s.
+
+  A hard per-frame clamp therefore shortens the travel. At 60 fps, `Sword_Dash_RM` drops from 3.69 m to 1.06 m and `Sword_Heavy_A` from 1.39 m to 0.97 m. Pick one of these:
+  - carry the clamped remainder over to later frames;
+  - clamp only the overshoot past the 0.9 m stop distance.
+- **Entries:**
+
+| Clip | Asset | Duration (s) | Net Δz (m) | Keys |
+|---|---|---|---|---|
+| `Sword_Light_A` | `chars/anim_combat` | 0.3667 | 0.3143 | 12 |
+| `Sword_Light_A_Rec` | `chars/anim_combat` | 0.5 | 0 | 2 |
+| `Sword_Light_B` | `chars/anim_combat` | 0.4333 | 0.3622 | 14 |
+| `Sword_Light_B_Rec` | `chars/anim_combat` | 0.5667 | 0 | 2 |
+| `Sword_Light_C` | `chars/anim_combat` | 0.8667 | 1.4178 | 27 |
+| `SwordLight_C_Rec` | `chars/anim_combat` | 0.7 | 0 | 2 |
+| `Sword_Regular_A` | `chars/anim_combat` | 0.4333 | 0.8245 | 14 |
+| `Sword_Regular_A_Rec` | `chars/anim_combat` | 0.9667 | 0.3088 | 25 |
+| `Sword_Regular_B` | `chars/anim_combat` | 0.5333 | −0.0526 | 17 |
+| `Sword_Regular_B_Rec` | `chars/anim_combat` | 1.0333 | 0.3698 | 28 |
+| `Sword_Heavy_A` | `chars/anim_combat` | 0.7333 | 1.3851 | 23 |
+| `Sword_Heavy_A_Rec` | `chars/anim_combat` | 1 | 0.344 | 30 |
+| `Sword_Dash_RM` | `chars/anim_combat` | 1.5667 | 3.6922 | 20 |
+| `Sword_Block` | `chars/anim_base` | 1.2333 | 0 | 2 |
+
+  - All x, y and yaw values are 0.
+  - The zero-motion entries are kept so that "has an entry" means "the build pinned this clip's root".
+  - `Sword_Block` is all zero, so earlier chapters do not need the keep-segment sidecar.
+- **Root motion left in place.** `Turn90_L` and `Turn90_R` in `anim_base` still turn the root 90° inside the clip. This is unchanged; they are unused, and the build logs them. The other 31 clips in `anim_combat` are checked to be in place (root within 1 mm and 0.1° of rest).
+
+**Root pin and footprints.** The root bone of a curve clip is pinned, not zeroed:
+- `Sword_Dash_RM` is pinned at (0, 0, 0), because it starts at root 0 like `Idle_Loop`.
+- Every other entry is pinned at (0, 0, −0.07584). This is the constant root offset that `Sword_Block` holds in UAL2 and that `Sword_Heavy_A` starts at. The build reads it from `Sword_Block`. The UAL2 sword set bakes a matching +7.58 cm forward offset into its pelvis and leg pose, and its `_Rec` clips end 7.6–7.9 cm ahead of the idle footprint relative to their root. At a pin of 0, all of them would stand 7.6 cm ahead of `Idle_Loop` and of the capsule.
+- The pin does not change the curve. All clips of one chain share a pin, so chain joins are unaffected.
+
+So every attack entry and exit stands on `Idle_Loop`'s frame-0 footprint, which `Sword_Idle` and `Idle_Shield_Loop` share. Idle ↔ attack, `_Rec` → Idle and Idle ↔ `Sword_Block` blends do not slide the feet. The build checks this with forward kinematics on the built files, as the horizontal offset of ball_l / ball_r from `Idle_Loop` frame 0:
+
+| Pose | ball_l / ball_r (cm) | Note |
+|---|---|---|
+| `Sword_Block` at 0, at 0.40 s (held guard) and at the end | 0.2 / 0.0 | Identical to the shipped clip. |
+| `Sword_Heavy_A`, `Sword_Dash_RM` start; `Sword_Dash_RM` end | 0.0 / 0.0 | |
+| `Sword_Light_A` start | 5.9 / 0.3 | At frame 0 the left foot is already 5.9 cm into its step, as in the source. |
+| `Sword_Regular_A` start | 1.2 / 1.0 | From the source: its root track sits about 1 cm off the rest of the set. |
+| `_Rec` ends (Light A/B/C, Regular A/B, Heavy A) | ≤ 0.3 / ≤ 0.3 | Exception: `SwordLight_C_Rec` ends with the left foot 1.2 cm sideways. |
+
+**Chain joins.** These are measured from the end of one clip to the start of the next, in capsule-local space, with the controller carried along the curve. The build logs every declared chain.
+- **Seamless (≤ 0.5 cm):** Light_A → Light_A_Rec, Light_B → Light_B_Rec, Regular_A → Regular_A_Rec, Regular_B → Regular_B_Rec, Heavy_A → Heavy_A_Rec.
+- **One frame apart:** Light_A → Light_B, Light_B → Light_C and Regular_A → Regular_B. UAL2 cut these pieces one frame apart, so fast joints jump by one frame of motion:
+  - the right foot by 6.8 cm in Light_A → B;
+  - the sword hand by 11.5 cm in Light_B → C and by 12.3 cm in Regular_A → B.
+
+  Measured against a one-frame extrapolation, they join within 2.4–6.1 cm. The usual 0.1 s cross-fade hides this.
+- **Pop: `Sword_Light_C` → `SwordLight_C_Rec`.** The source pose is discontinuous: the pelvis jumps 0.21 m (forward and 8 cm down), the left foot 0.18 m and the sword hand 0.42 m. Root-motion extraction cannot fix this; it is not a bug in the curve or the pin.
+  - No frame of `Sword_Light_C` matches the first pose of `SwordLight_C_Rec`, and starting `SwordLight_C_Rec` later does not help.
+  - The other exits are worse. At the body, `Sword_Light_B_Rec` is 0.66 m away and `Idle_Loop` 0.55 m.
+  - **Cross-fade `Sword_Light_C` → `SwordLight_C_Rec` over at least 0.2 s (0.25 s recommended).**
+
+**Build contracts.** The build fails if any of these is broken:
+- Every requested clip exists exactly once in its source file.
+- No clip is requested twice, and `anim_combat` does not repeat an `anim_base` clip.
+- Every `ROOT_MOTION` clip produced a curve.
+- `anim_combat` clips without a curve are in place.
+- An extracted clip does not tilt the root.
+- Every node above the root bone is an identity transform, and a pinned clip has a root translation channel to pin.
+- `Sword_Block`'s root translation in UAL2 is constant, because the sword-set pin is read from it.
+- **Footprints.** On the built files, the nearer foot of each pose in the table above is within 1 cm of `Idle_Loop` frame 0. A wrong pin moves both feet; a swing foot moves only one. Pinning at 0 fails with 6.4–7.9 cm.
+- **Chains.** The clips of a declared chain share a pin. No join pops more than 0.1 m after allowing one frame of motion, except the joins listed in `CHAIN_POPS`. Today that is only Light_C → SwordLight_C_Rec.
+
+Without `assets-src/chars/anim_full/UAL*.glb` the build now fails and tells you to run `node tools/fetch-extra.mjs`. Before, it silently shipped 16 fewer clips.
+
+**Deviations from §3.4:**
+- `PickUp_Table` is a UAL1 clip, not UAL2. It is taken from UAL1, and the count stays 44 (20 UAL1 + 24 UAL2).
+- `anim_combat` is 426 KB brotli, not the ≈ 330 KB estimate. Attacks are fast, so resampling drops fewer keys: 8.9 KB/s here against 6.9 KB/s for `anim_base`. The keep start pack is still far under its limit.
+- `chars/anim_base` had to change, but only for the orphan cleanup. Clip names, order and all clip data are the same, so runtime code is unaffected.
+- §3.4 said to zero the root translation and called `Sword_Block`'s −0.08 m root a bug to fix. Both were wrong. The UAL2 sword pose compensates for that offset, and zeroing it put the feet 7.6 cm ahead of the idle footprint. The root is pinned at the offset instead (see "Root pin and footprints"). The curves are unchanged.

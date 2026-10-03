@@ -7,8 +7,10 @@ import { Ragdoll } from "../../physics/ragdoll";
 import { Cancelled } from "../Director";
 import { faceTo, stand, stopWalk, walkPath } from "../actors";
 import type { Dragon } from "../dragon";
+import type { DragonDirector, RampageSpec } from "../dragonDirector";
 import { shootArrow } from "../fx/arrow";
-import { FireFx } from "../fx/fire";
+import type { FireFx } from "../fx/fire";
+import { RAIDED_HOUSES } from "../fx/townFires";
 import type { PlayerController } from "../player";
 import type { Chapter, ChapterContext } from "./types";
 
@@ -23,6 +25,8 @@ const TOWER_DOOR = { x: T.x - TOWER_HALF - 1.2, z: T.z };
 /** where the scribe waits outside the inn */
 const STREET = LAYOUT.escape[0];
 const KEEP_GATE = { x: LAYOUT.keep.x, z: LAYOUT.keep.z + LAYOUT.keep.d / 2 + 3 };
+/** where the keep chapter starts: the player, Brun and the scribe before the keep gate (keep step 0) */
+const K0 = { player: { x: 60, z: -648 }, brun: { x: 56, z: -649 }, scribe: { x: 60.5, z: -650.8 } };
 
 const rand = (a: number, b: number) => a + Math.random() * (b - a);
 
@@ -36,16 +40,15 @@ export class DragonChapter implements Chapter {
   label = "巨龙袭城";
   seamless = true;
   player!: PlayerController;
+  /** the stage's dragon, fire effects and burning houses: they carry on into the next chapter */
+  private dragons!: DragonDirector;
   private dragon!: Dragon;
   private fx!: FireFx;
   private step = 0;
   private base = 0;
-  /** what the dragon does when no scripted moment needs it */
-  private rampage = false;
   private meteors = false;
   private offs: (() => void)[] = [];
   private ragdolls: Ragdoll[] = [];
-  private houseFires = new Set<number>();
   private alive = true;
   /** run() has started: only then does the chapter own the global prompt/audio state */
   private started = false;
@@ -63,12 +66,13 @@ export class DragonChapter implements Chapter {
     const q = new URLSearchParams(location.search);
     if (q.has("debug") && q.get("from")) this.step = { tower: 1, breach: 2, street: 3 }[q.get("from")!] ?? this.step;
     this.base = w.heightAt(T.x, T.z);
-    const [dragon, fx] = await Promise.all([w.ensureDragon(), FireFx.create(w)]);
-    this.dragon = dragon;
+    const [dragons, fx] = await Promise.all([stage.ensureDragons(), stage.ensureTownFx()]);
+    this.dragons = dragons;
+    const dragon = (this.dragon = dragons.dragon);
     this.fx = fx;
     dragon.root.setEnabled(true);
     if (!continued || this.step > 0) {
-      dragon.stopFlight();
+      dragons.take();
       dragon.root.position.set(T.x, this.base + TOWER_TOP, T.z);
       dragon.setYaw(Math.atan2(-(PL.x - T.x), -(PL.z - T.z)));
       dragon.play("Idle", { blend: 0 });
@@ -128,74 +132,20 @@ export class DragonChapter implements Chapter {
     }
   }
 
-  private houseRoof(i: number) {
-    const h = this.ctx.stage.town!.houses[i].node;
-    const p = h.getAbsolutePosition();
-    return new Vector3(p.x, this.w.heightAt(p.x, p.z) + 5.0, p.z);
+  /** The raid the dragon flies whenever no scripted moment needs it: laps of the town, strafing houses. */
+  private get raid(): RampageSpec {
+    return { center: { x: 72, z: -592 }, r: 58, yMin: this.base + 30, yMax: this.base + 42 };
   }
 
-  /** Set a house alight (each house burns once). */
+  /** Back to the raid (the stage's dragon goes on with it after this chapter, too). */
+  private rampage() {
+    // (undefined only when prepare() failed and the chapter is being passed over)
+    this.dragons?.rampage(this.raid);
+  }
+
+  /** Set a house alight (each house burns once; it keeps burning after this chapter). */
   private burnHouse(i: number) {
-    if (this.houseFires.has(i)) return;
-    this.houseFires.add(i);
-    const r = this.houseRoof(i);
-    this.fx.fire(r, 2.4, { light: this.houseFires.size <= 2 });
-    this.fx.fire(r.add(new Vector3(rand(-2.5, -1), -1.4, rand(-2, 2))), 1.4, { sound: false, smoke: false });
-    this.fx.fire(r.add(new Vector3(rand(1, 2.5), -1.6, rand(-2, 2))), 1.2, { sound: false, smoke: false });
-  }
-
-  /** Circle the town; now and then make a low pass over a house and set it on fire. */
-  private async rampageLoop() {
-    const d = this.ctx.director;
-    const dr = this.dragon;
-    const C = new Vector3(72, this.base, -592);
-    let a = 0;
-    while (this.alive) {
-      if (!this.rampage) {
-        await d.sleep(0.5);
-        continue;
-      }
-      const houses = this.ctx.stage.town?.houses ?? [];
-      const cand = houses.map((_, i) => i).filter((i) => !this.houseFires.has(i));
-      if (cand.length && Math.random() < 0.55) {
-        // strafing run over a house
-        const i = cand[Math.floor(Math.random() * cand.length)];
-        const roof = this.houseRoof(i);
-        const dir = roof.subtract(C).normalize();
-        const side = new Vector3(-dir.z, 0, dir.x);
-        const start = roof.add(side.scale(-55)).add(new Vector3(0, 26, 0));
-        const mid = roof.add(new Vector3(0, 13, 0)).add(side.scale(-8));
-        const end = roof.add(side.scale(50)).add(new Vector3(0, 30, 0));
-        await d.wait(dr.fly([start], 26));
-        if (!this.rampage) continue;
-        const pass = dr.fly([mid, end], 20);
-        await d.sleep(Vector3.Distance(start, mid) / 20 - 1.4);
-        // the script took the dragon over (or the chapter ended) meanwhile: no stray stream
-        if (!this.alive || !this.rampage) continue;
-        void this.fx.breath(() => {
-          const s = dr.breathSource();
-          return { pos: s.pos, dir: roof.subtract(s.pos).normalize() };
-        }, 1.8);
-        await d.sleep(1.6);
-        if (!this.alive) return;
-        this.burnHouse(i);
-        await d.wait(pass);
-      } else {
-        // a stretch of the circuit with a roar
-        const pts: Vector3[] = [];
-        for (let k = 1; k <= 3; k++) {
-          const ang = a + k * 0.7;
-          pts.push(new Vector3(C.x + Math.cos(ang) * 58, this.base + rand(30, 42), C.z + Math.sin(ang) * 58));
-        }
-        a += 2.1;
-        const f = dr.fly(pts, 22);
-        if (Math.random() < 0.5) {
-          await d.sleep(1.5);
-          void audio.playOneShot(`audio/roar_${"abc"[Math.floor(Math.random() * 3)]}`, 1.3, dr.mouth(), "sfx", rand(0.9, 1.05), 40);
-        }
-        await d.wait(f);
-      }
-    }
+    this.ctx.stage.townFires?.burn(i);
   }
 
   /** Archers loose arrows at the dragon while it is near. */
@@ -234,9 +184,9 @@ export class DragonChapter implements Chapter {
     audio.musicTracks = { combat: "audio/music_battle" };
     audio.setMusicState("combat");
     void audio.startBed("panic", "audio/panic", 0.45, 3);
+    // (the wind outlasts the chapter: the next one decides when it stops)
     void audio.startBed("wind", "audio/wind", 0.25, 3);
     void this.meteorLoop().catch((e) => !(e instanceof Cancelled) && console.error(e));
-    void this.rampageLoop().catch((e) => !(e instanceof Cancelled) && console.error(e));
     let mood = this.step === 0 ? 0.2 : 1;
     this.offs.push(
       w.onUpdate((dt) => {
@@ -246,7 +196,7 @@ export class DragonChapter implements Chapter {
     for (const i of [4, 7]) this.burnHouse(i);
     // resumed later in the chapter: the town is already under attack
     if (this.step > 0) this.meteors = true;
-    if (this.step === 1 || this.step === 3) this.rampage = true;
+    if (this.step === 1 || this.step === 3) this.rampage();
 
     if (this.step < 1) {
       // dazed on the platform; the world comes back
@@ -261,7 +211,7 @@ export class DragonChapter implements Chapter {
       // the dragon takes off from the tower
       this.dragon.play("Fly", { blend: 0.8 });
       void audio.playOneShot("audio/wings", 1.2, this.dragon.root.position, "sfx", 1, 40);
-      void this.dragon.fly([new Vector3(T.x + 10, this.base + 30, T.z - 20), new Vector3(60, this.base + 40, -640), new Vector3(20, this.base + 36, -600)], 18).then(() => (this.rampage = true));
+      void this.dragons.pass([new Vector3(T.x + 10, this.base + 30, T.z - 20), new Vector3(60, this.base + 40, -640), new Vector3(20, this.base + 36, -600)], 18, { then: () => this.rampage() });
       w.rig.lookToward(() => this.dragon.root.position, 2.5);
       await d.sleep(1.6);
       const brun = n("brun");
@@ -306,11 +256,10 @@ export class DragonChapter implements Chapter {
       hud.toast("爬上塔楼", 4000);
       await d.until(() => this.inTower(pl.position) && pl.position.y > this.base + T.floor2 - 0.6);
       // the dragon smashes the wall in front of the player
-      this.rampage = false;
       const dr = this.dragon;
       const breach = new Vector3(T.x + TOWER_HALF, this.base + T.floor2 + 1.2, T.z);
       const hover = new Vector3(T.x + 26, this.base + T.floor2 + 9, T.z - 8);
-      await d.wait(dr.fly([hover.add(new Vector3(20, 10, -30)), hover], 30));
+      await d.wait(this.dragons.pass([hover.add(new Vector3(20, 10, -30)), hover], 30));
       dr.setYaw(Math.atan2(-(breach.x - hover.x), -(breach.z - hover.z)));
       void audio.playOneShot("audio/roar_a", 1.4, dr.mouth(), "sfx", 1, 40);
       await d.sleep(0.6);
@@ -320,9 +269,9 @@ export class DragonChapter implements Chapter {
       w.rig.shake(0.03, 1.2);
       hud.flash(0.5, 1);
       this.fx.burst(breach.add(new Vector3(-1.2, 0, 0)), 1.2);
-      const roomFire = this.fx.fire(new Vector3(T.x + 2.2, this.base + T.floor2 + 0.1, T.z - 2.2), 0.5, { smoke: true, light: true });
-      this.offs.push(() => roomFire.stop());
-      void dr.fly([hover.add(new Vector3(30, 12, 40)), new Vector3(110, this.base + 38, -640)], 24).then(() => (this.rampage = true));
+      // the tower room keeps burning (with the town) after this chapter
+      stage.townFires?.track(this.fx.fire(new Vector3(T.x + 2.2, this.base + T.floor2 + 0.1, T.z - 2.2), 0.5, { smoke: true, light: true }));
+      void this.dragons.pass([hover.add(new Vector3(30, 12, 40)), new Vector3(110, this.base + 38, -640)], 24, { then: () => this.rampage() });
       this.step = 2;
       void this.ctx.game.save("auto");
       await d.sleep(1.4);
@@ -330,7 +279,7 @@ export class DragonChapter implements Chapter {
 
     if (this.step < 3) {
       w.env.setMood(1);
-      this.rampage = true;
+      this.rampage();
       await d.say("布伦", "对面旅店的房顶烧穿了——跳！我带领主大人从楼梯绕下去，咱们在楼下碰头！", { npc: n("brun"), duration: 4.3 });
       hud.toast("从缺口跳进旅店的屋顶", 6000);
       hud.prompt("空格 跳跃");
@@ -339,7 +288,7 @@ export class DragonChapter implements Chapter {
       hud.prompt(null);
       if (this.inInn(pl.position)) {
         hud.toast("从地板的破洞下去，找到出口", 5000);
-        void this.fx.fire(new Vector3(INN.x - 3, this.base + INN.floor + 0.3, INN.z + 2.6), 0.6, { light: true });
+        stage.townFires?.track(this.fx.fire(new Vector3(INN.x - 3, this.base + INN.floor + 0.3, INN.z + 2.6), 0.6, { light: true }));
       }
       await d.until(() => !this.inInn(pl.position) || Vector3.Distance(pl.position, g(STREET.x, STREET.z)) < 4);
       this.step = 3;
@@ -364,11 +313,10 @@ export class DragonChapter implements Chapter {
         faceTo(scribe, pl.position);
         scribe.play("Crouch_Idle_Loop", { blend: 0.3 });
         await d.say("书记官", "别动——等它把火喷完！", { npc: scribe, look: () => pl.eye(new Vector3()), duration: 2.0 });
-        this.rampage = false;
         const dr = this.dragon;
         const a = new Vector3(70, this.base + 40, -530), b = new Vector3(66, this.base + 11, -584), c = new Vector3(60, this.base + 16, -630);
-        await d.wait(dr.fly([a], 32));
-        const pass = dr.fly([b, c], 18);
+        await d.wait(this.dragons.pass([a], 32));
+        const pass = this.dragons.pass([b, c], 18);
         await d.sleep(Vector3.Distance(a, b) / 18 - 1.6);
         void this.fx.breath(() => {
           const s = dr.breathSource();
@@ -377,13 +325,12 @@ export class DragonChapter implements Chapter {
         }, 2.4);
         await d.sleep(1.8);
         for (const [x, z] of [[65, -588], [63.5, -594], [62.5, -600]]) {
-          const f = this.fx.fire(g(x, z), 0.9, { sound: x === 63.5 });
-          void d.sleep(9).then(() => f.stop(), () => f.stop());
+          // (burns out on the effects' own clock: the chapter may end meanwhile)
+          this.fx.fire(g(x, z), 0.9, { sound: x === 63.5, seconds: 9 });
           this.fx.scorch(x, z, 3);
         }
         await d.wait(pass);
-        this.rampage = true;
-        void dr; // keeps flying its circuit
+        this.rampage();
         await d.sleep(2.5);
         await d.say("书记官", "走！趁现在！", { npc: scribe, look: () => pl.eye(new Vector3()), duration: 1.4 });
       }
@@ -418,23 +365,36 @@ export class DragonChapter implements Chapter {
     return { step: this.step };
   }
 
+  /**
+   * The chapter's end state: the town burns, the dragon goes on raiding, and the player, Brun and the
+   * scribe stand before the keep gate where the keep chapter starts (its step-0 marks).
+   */
   skip() {
+    const { stage } = this.ctx;
+    const w = this.w;
     this.alive = false;
-    this.rampage = false;
     this.meteors = false;
-    this.ctx.stage.breakBreach();
-    this.dragon.stopFlight();
-    this.player.teleport(new Vector3(KEEP_GATE.x, this.w.heightAt(KEEP_GATE.x, KEEP_GATE.z) + 0.1, KEEP_GATE.z + 2), 0);
+    stage.breakBreach();
+    stage.townFires?.ensure(RAIDED_HOUSES);
+    // the dragon flies on (never frozen mid-air)
+    this.rampage();
+    const pl = K0.player;
+    this.player?.teleport(new Vector3(pl.x, w.heightAt(pl.x, pl.z) + 0.1, pl.z), 0);
+    for (const k of ["brun", "scribe"] as const) {
+      const c = w.npcs.get(k);
+      if (c) stand(w, c, K0[k].x, K0[k].z, pl);
+    }
   }
 
+  /**
+   * Ends only what is this chapter's own. The dragon, the town's fires and the wind bed belong to the
+   * stage and carry on into the next chapter (a seamless handover: nothing pops or freezes).
+   */
   dispose() {
     this.alive = false;
-    this.rampage = false;
     this.meteors = false;
     for (const o of this.offs) o();
     for (const r of this.ragdolls) r.dispose();
-    this.dragon?.stopFlight();
-    this.fx?.dispose();
     if (this.started) {
       hud.prompt(null);
       audio.stopBed?.("panic", 3);

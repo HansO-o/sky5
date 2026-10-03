@@ -1,5 +1,5 @@
 /** Story segments in play order. Asset download order follows this list. */
-export const SEGMENTS = ["menu", "cart", "muster", "execution", "dragon", "choice", "keep", "exit"] as const;
+export const SEGMENTS = ["menu", "cart", "muster", "execution", "dragon", "keep", "exit"] as const;
 export type SegmentId = (typeof SEGMENTS)[number];
 
 export function segmentIndex(s: SegmentId): number {
