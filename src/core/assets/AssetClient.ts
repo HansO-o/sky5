@@ -1,7 +1,9 @@
 import { resolveManifest, type Manifest, type ResolvedEntry, type SegmentId } from "./manifest";
 import type { CacheStats, FromWorker, SegmentProgress, ToWorker } from "./protocol";
 
-type Listener = (p: { segments: SegmentProgress[]; bps: number; active: number; queued: number }) => void;
+/** `caching` is false when downloads cannot be persisted (no IndexedDB, disk full): only requested assets are fetched. */
+type Progress = { segments: SegmentProgress[]; bps: number; active: number; queued: number; caching: boolean };
+type Listener = (p: Progress) => void;
 
 /**
  * Main-thread facade for the asset worker. All network, IndexedDB and hashing happens in the
@@ -15,23 +17,53 @@ export class AssetClient {
   private entries = new Map<string, ResolvedEntry>();
   private readyP: Promise<string[]>;
   private resolveReady!: (ids: string[]) => void;
+  private rejectReady!: (e: Error) => void;
+  private isReady = false;
+  private failed: Error | null = null;
+  /** Messages sent before init(): the worker knows no assets until it has the manifest. */
+  private queue: ToWorker[] | null = [];
   /** Latest progress snapshot. */
-  progress: { segments: SegmentProgress[]; bps: number; active: number; queued: number } | null = null;
+  progress: Progress | null = null;
   readonly cachedAtStart = new Set<string>();
 
   constructor() {
     this.worker = new Worker(new URL("./asset.worker.ts", import.meta.url), { type: "module", name: "assets" });
     this.worker.onmessage = (ev: MessageEvent<FromWorker>) => this.onMessage(ev.data);
-    this.readyP = new Promise((r) => (this.resolveReady = r));
+    // A worker that fails to load or dies before it is ready would leave init() and every request waiting.
+    this.worker.onerror = (ev) => {
+      const err = new Error(`asset worker failed: ${ev.message || "could not be loaded"}`);
+      if (this.isReady) console.error("[assets]", err);
+      else this.fail(err);
+    };
+    this.worker.onmessageerror = () => this.rejectPending(new Error("asset worker message could not be read"));
+    this.readyP = new Promise((resolve, reject) => {
+      this.resolveReady = resolve;
+      this.rejectReady = reject;
+    });
+    this.readyP.catch(() => {}); // reported through init()
   }
 
   private send(m: ToWorker) {
-    this.worker.postMessage(m);
+    // queued until init: a get() would otherwise fail as "unknown asset" and a segment be overwritten
+    if (this.queue && m.t !== "init") this.queue.push(m);
+    else this.worker.postMessage(m);
+  }
+
+  private fail(err: Error) {
+    this.failed = err;
+    this.rejectReady(err);
+    this.rejectPending(err);
+  }
+
+  private rejectPending(err: Error) {
+    for (const p of this.pending.values()) p.reject(err);
+    this.pending.clear();
   }
 
   private onMessage(m: FromWorker) {
     switch (m.t) {
       case "ready":
+        this.isReady = true;
         m.cachedIds.forEach((id) => this.cachedAtStart.add(id));
         this.resolveReady(m.cachedIds);
         break;
@@ -64,6 +96,7 @@ export class AssetClient {
   }
 
   private call<T>(make: (req: number) => ToWorker): Promise<T> {
+    if (this.failed) return Promise.reject(this.failed);
     const req = ++this.seq;
     return new Promise<T>((resolve, reject) => {
       this.pending.set(req, { resolve, reject });
@@ -77,6 +110,9 @@ export class AssetClient {
     const resolved = resolveManifest(manifest, canOpus).map((e) => ({ ...e, url: new URL(e.url, document.baseURI).href }));
     for (const e of resolved) this.entries.set(e.id, e);
     this.send({ t: "init", entries: resolved, segment, concurrency: 6 });
+    const queued = this.queue ?? [];
+    this.queue = null;
+    queued.forEach((m) => this.send(m));
     return this.readyP;
   }
 

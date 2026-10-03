@@ -37,8 +37,12 @@ export class Game {
   private instr: SceneInstrumentation | null = null;
   /** debug: simulation speed multiplier (?timescale=N together with ?debug) */
   timeScale = 1;
-  /** a modal UI (e.g. character creation) owns the mouse: don't pause on pointer unlock */
+  /** a modal UI (e.g. character creation) owns the mouse: no pause menu, no pointer lock */
   modal = false;
+  /** the open modal UI's session (see openModal) */
+  private modalSession: { close: () => void } | null = null;
+  /** 读取 from the pause menu is loading: the old game waits behind the loading hint, paused */
+  private loadingSave = false;
   onExitToMenu: (() => void) | null = null;
 
   constructor(readonly canvas: HTMLCanvasElement) {}
@@ -49,13 +53,22 @@ export class Game {
     this.api = api;
     input.attach(this.canvas);
     this.applyResolution();
-    settings.on(() => {
-      this.applyResolution();
-      this.stage?.applyQuality(settings.value.quality);
+    // graphics are re-applied only when they change, not on every volume or sensitivity slider tick
+    let { quality, renderScale } = settings.value;
+    settings.on((s) => {
+      if (s.renderScale !== renderScale) {
+        renderScale = s.renderScale;
+        this.applyResolution();
+      }
+      if (s.quality !== quality) {
+        quality = s.quality;
+        this.stage?.applyQuality(quality);
+      }
     });
     window.addEventListener("resize", () => this.engine.resize());
     document.addEventListener("visibilitychange", () => {
-      if (document.hidden && this.stage?.gameplay) this.pause(true);
+      // not over a modal UI (character creation): Esc and Tab couldn't close that pause menu
+      if (document.hidden && this.stage?.gameplay && !this.modal) this.pause(true);
     });
     document.addEventListener("pointerlockchange", () => {
       // Esc releases pointer lock in the browser; treat that as "open the pause menu".
@@ -87,7 +100,7 @@ export class Game {
     input.poll(dt);
     const st = this.stage;
     if (st) {
-      if (st.gameplay && !this.transitioning && !this.modal) this.handleGlobalKeys();
+      if (st.gameplay && !this.transitioning && !this.modal && !this.loadingSave) this.handleGlobalKeys();
       if (!this.paused) {
         st.update(dt);
         if (st.gameplay) this.playSeconds += dt;
@@ -115,7 +128,10 @@ export class Game {
 
   private handleGlobalKeys() {
     if (this.paused) {
-      if (input.pressed("menu") || input.padPressed(9) || input.padPressed(1)) {
+      // back: the panel over the pause menu first, then the game. In play Game owns this (main.ts only
+      // on the main menu); the Esc that releases the pointer lock never reaches the page, so an Esc
+      // here was pressed in the pause menu
+      if (input.pressed("menu") || input.pressedCode("Escape") || input.padPressed(9) || input.padPressed(1)) {
         if (!closePanel()) this.pause(false);
       }
       return;
@@ -129,11 +145,28 @@ export class Game {
   async setStage(make: () => Promise<Stage>) {
     this.transitioning = true;
     const old = this.stage;
-    const st = await make();
+    let st: Stage;
+    try {
+      st = await make();
+    } catch (e) {
+      // the old stage stays on; the caller reports the failure
+      this.transitioning = false;
+      throw e;
+    }
+    // what belonged to the old stage: an open modal UI, and its pause menu with any panel over it
+    // (读取 from the pause menu)
+    this.endModal();
+    document.getElementById("pause")?.remove();
+    if (this.paused) {
+      closePanel();
+      audio.resume();
+    }
     this.stage = st;
     old?.dispose();
     st.applyQuality(settings.value.quality);
     this.paused = false;
+    // a loaded game takes global keys as soon as it runs (not after its fade-in)
+    this.loadingSave = false;
     this.transitioning = false;
     // pointer lock needs a fresh user gesture; the stage prompts for a click instead
     if (!st.gameplay) input.releaseLock();
@@ -142,7 +175,8 @@ export class Game {
   }
 
   pause(on: boolean) {
-    if (!this.stage?.gameplay || this.paused === on) return;
+    // no pause menu while the stage changes: it would outlive the stage it belongs to
+    if (!this.stage?.gameplay || this.paused === on || (on && this.transitioning)) return;
     this.paused = on;
     this.stage.setPaused(on);
     if (on) {
@@ -153,7 +187,8 @@ export class Game {
       closePanel();
       document.getElementById("pause")?.remove();
       audio.resume();
-      input.requestLock(this.canvas);
+      // a modal UI keeps the mouse
+      if (!this.modal) input.requestLock(this.canvas);
     }
   }
 
@@ -171,8 +206,8 @@ export class Game {
             void (this.stage as unknown as { skipChapter: () => Promise<void> }).skipChapter();
           }]] as [string, () => void][])
         : []),
-      ["存档", () => void this.save("manual").then(() => hud.toast("已存档"))],
-      ["读取", () => void openLoad((s) => this.loadSave(s), () => {})],
+      ["存档", () => void this.save("manual").then((ok) => ok && hud.toast("已存档"))],
+      ["读取", () => void openLoad((s) => void this.loadFromPause(s), () => {})],
       ["设置", () => openSettings()],
       ["返回主菜单", () => this.exitToMenu()],
     ];
@@ -185,15 +220,66 @@ export class Game {
     document.getElementById("ui")!.appendChild(p);
   }
 
+  /** Resolves with whether the save was written; a failure (storage full or blocked) is reported, never thrown. */
   async save(kind: SaveGame["kind"]) {
-    if (!this.stage?.gameplay) return;
+    if (!this.stage?.gameplay) return false;
     const { label, state } = this.stage.saveState();
     const id = kind === "manual" ? `manual-${Date.now()}` : kind;
-    await writeSave({ id, kind, label, segment: this.stage.segment, createdAt: Date.now(), playSeconds: this.playSeconds, state });
+    try {
+      await writeSave({ id, kind, label, segment: this.stage.segment, createdAt: Date.now(), playSeconds: this.playSeconds, state });
+    } catch (err) {
+      console.warn("save failed", err);
+      hud.toast(kind === "auto" ? "自动存档失败" : "存档失败：无法使用本地存储", 3000);
+      return false;
+    }
     if (kind === "quick") hud.toast("快速存档完成", 2000);
+    return true;
   }
 
-  loadSave: (s: SaveGame) => void = () => {};
+  /** Starts a game from a save (main.ts); resolves once it is running, or has failed and been reported. */
+  loadSave: (s: SaveGame) => Promise<void> = async () => {};
+
+  private async loadFromPause(s: SaveGame) {
+    // the pause menu acts on the game being replaced (继续 would resume it, 返回主菜单 race the load)
+    document.getElementById("pause")?.remove();
+    const old = this.stage;
+    this.loadingSave = true;
+    try {
+      await this.loadSave(s);
+    } finally {
+      this.loadingSave = false;
+    }
+    // the load failed and the old game is still on: back to its pause menu
+    if (this.stage === old && this.paused && !document.getElementById("pause")) {
+      audio.suspend();
+      this.openPauseMenu();
+    }
+  }
+
+  /**
+   * A modal UI (character creation) opens: no pause menu or pointer lock until it ends. `close` takes
+   * the UI down if its stage goes away first (exit to menu, 读取). Call the returned function when the
+   * UI is done.
+   */
+  openModal(close: () => void) {
+    this.endModal();
+    const session = { close };
+    this.modalSession = session;
+    this.modal = true;
+    return () => {
+      if (this.modalSession !== session) return;
+      this.modalSession = null;
+      this.modal = false;
+    };
+  }
+
+  /** Closes the open modal UI, if any. */
+  private endModal() {
+    const session = this.modalSession;
+    this.modalSession = null;
+    this.modal = false;
+    session?.close();
+  }
 
   exitToMenu() {
     document.getElementById("pause")?.remove();

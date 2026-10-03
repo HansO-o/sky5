@@ -7,15 +7,16 @@ import { input } from "../core/input";
 import { settings, type Quality } from "../core/settings";
 import { hud } from "../ui/hud";
 import { heading } from "../ui/widgets";
-import { buildTown, LAYOUT, type Town } from "../world/town";
+import { buildTown, GATE, LAYOUT, type Town } from "../world/town";
 import { L, Physics } from "../physics/Physics";
 import { VertexBuffer } from "@babylonjs/core/Buffers/buffer";
 import { Quaternion, Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { CreateBox } from "@babylonjs/core/Meshes/Builders/boxBuilder";
 import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import type { AbstractMesh } from "@babylonjs/core/Meshes/abstractMesh";
+import type { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import { nextFrame } from "../game/loaders";
-import { Cancelled, Director } from "./Director";
+import { Cancelled, Director, type ScriptScope } from "./Director";
 import { World } from "./World";
 import type { Wagon } from "./wagon";
 import type { Chapter, ChapterContext } from "./chapters/types";
@@ -29,6 +30,8 @@ import { ExecutionChapter } from "./chapters/execution";
 import { MusterChapter } from "./chapters/muster";
 
 type ChapterFactory = (ctx: ChapterContext) => Chapter;
+/** A chapter and the script scope its scripts run in. */
+type ScopedChapter = { chapter: Chapter; scope: ScriptScope };
 
 /** Chapters in play order. Later milestones append to this list. */
 export const CHAPTERS: { id: SegmentId; make: ChapterFactory }[] = [
@@ -53,6 +56,7 @@ export interface PrologueSave {
  */
 export class PrologueStage implements Stage {
   world: World;
+  /** the script clock; every chapter gets its own scope on it */
   director = new Director();
   segment: SegmentId = "cart";
   gameplay = true;
@@ -67,13 +71,18 @@ export class PrologueStage implements Stage {
   physics: Physics | null = null;
   private townP: Promise<void> | null = null;
   private physicsP: Promise<Physics> | null = null;
-  private prepared: { index: number; chapter: Chapter; resume: Record<string, unknown> | null } | null = null;
-  private ctx: ChapterContext;
+  private prepared: (ScopedChapter & { index: number; resume: Record<string, unknown> | null }) | null = null;
+  /** the chapter the story loop is preparing or playing */
+  private running: ScopedChapter | null = null;
+  /** what a save records while no chapter is current: the next one from its start, or the last one's end */
+  private gap: { id: SegmentId; label: string; state: Record<string, unknown> | null } | null = null;
+  private ctx: Omit<ChapterContext, "director">;
   private paused = false;
+  private disposed = false;
 
   constructor(private game: Game) {
     this.world = new World(game.engine);
-    this.ctx = { game, world: this.world, director: this.director, stage: this };
+    this.ctx = { game, world: this.world, stage: this };
   }
 
   get scene() {
@@ -98,12 +107,30 @@ export class PrologueStage implements Stage {
     if (save.appearance !== undefined) this.appearance = save.appearance;
     const index = Math.max(0, CHAPTERS.findIndex((c) => c.id === save.chapter));
     if (this.prepared && this.prepared.index === index && !save.state && !this.prepared.resume) return;
-    this.prepared?.chapter.dispose();
-    const chapter = CHAPTERS[index].make(this.ctx);
+    if (this.prepared) {
+      this.prepared.scope.cancel();
+      this.prepared.chapter.dispose();
+      this.prepared = null;
+    }
+    const { chapter, scope } = this.make(index);
     // chapters after the ride need the town straight away
     if (index > 0) await this.ensureTown();
     await chapter.prepare(save.state);
-    this.prepared = { index, chapter, resume: save.state };
+    // a ride prepared behind the menu leaves its convoy: once the chapter has stood its cast up,
+    // whoever still sits in a wagon goes with it (no disposed Characters left in world.npcs)
+    if (index > 0 && this.wagons.length) {
+      const seated = (n: TransformNode) => this.wagons.some((wg) => n.isDescendantOf(wg.root) || n.isDescendantOf(wg.horseRoot));
+      for (const [k, c] of [...this.world.npcs]) if (seated(c.root)) this.world.removeNpc(k);
+      for (const wg of this.wagons) wg.dispose();
+      this.wagons = [];
+    }
+    this.prepared = { index, chapter, scope, resume: save.state };
+  }
+
+  /** A chapter with its own script scope (cancelling it stops exactly that chapter's scripts). */
+  private make(index: number): ScopedChapter {
+    const scope = this.director.scope();
+    return { chapter: CHAPTERS[index].make({ ...this.ctx, director: scope }), scope };
   }
 
   /** Load and build the town once; shared by every chapter after the gate. */
@@ -129,38 +156,53 @@ export class PrologueStage implements Stage {
   ensurePhysics() {
     this.physicsP ??= (async () => {
       const [ph] = await Promise.all([Physics.create(), this.ensureTown()]);
-      if (this.world.disposed) {
-        ph.dispose();
-        throw new Error("disposed");
-      }
       const w = this.world;
-      // terrain around the town (512 m square, ~2 m spacing)
-      const size = 512;
-      ph.addHeightField(LAYOUT.square.x - size / 2, LAYOUT.square.z - size / 2, size, 256, (x, z) => w.heightAt(x, z));
-      await nextFrame();
-      if (this.town) {
-        // one static mesh body per building, built over several frames
-        const groups = new Map<unknown, AbstractMesh[]>();
-        for (const m of this.town.colliders) {
-          let top: unknown = m;
-          while ((top as AbstractMesh).parent && (top as AbstractMesh).parent !== this.town.root) top = (top as AbstractMesh).parent;
-          if (!groups.has(top)) groups.set(top, []);
-          groups.get(top)!.push(m);
+      // the stage can be disposed during any of the frames this takes: then free the Jolt world
+      const alive = () => {
+        if (w.disposed) throw new Cancelled();
+      };
+      try {
+        alive();
+        // terrain around the town (512 m square, ~2 m spacing)
+        const size = 512;
+        ph.addHeightField(LAYOUT.square.x - size / 2, LAYOUT.square.z - size / 2, size, 256, (x, z) => w.heightAt(x, z));
+        // on foot the town is the whole stage: close the gateway at its outer arch (the terrain collider
+        // ends ~160 m up the road; the gate piece is 7.4 m wide)
+        const gz = GATE.z + 1;
+        ph.addBox(new Vector3(GATE.x, w.heightAt(GATE.x, gz) + 3, gz), new Vector3(3.7, 3.5, 0.3));
+        await nextFrame();
+        alive();
+        if (this.town) {
+          // one static mesh body per building, built over several frames
+          const groups = new Map<unknown, AbstractMesh[]>();
+          for (const m of this.town.colliders) {
+            let top: unknown = m;
+            while ((top as AbstractMesh).parent && (top as AbstractMesh).parent !== this.town.root) top = (top as AbstractMesh).parent;
+            if (!groups.has(top)) groups.set(top, []);
+            groups.get(top)!.push(m);
+          }
+          for (const list of groups.values()) {
+            const pos: number[] = [], idx: number[] = [];
+            for (const m of list) appendWorldGeometry(m, pos, idx);
+            if (idx.length) ph.addStaticMesh(pos, idx);
+            await nextFrame();
+            alive();
+          }
+          const b: number[] = [], bi: number[] = [];
+          for (const m of this.town.breach.meshes) appendWorldGeometry(m, b, bi);
+          if (bi.length) this.breachBody = ph.addStaticMesh(b, bi);
         }
-        for (const list of groups.values()) {
-          const pos: number[] = [], idx: number[] = [];
-          for (const m of list) appendWorldGeometry(m, pos, idx);
-          if (idx.length) ph.addStaticMesh(pos, idx);
-          await nextFrame();
-        }
-        const b: number[] = [], bi: number[] = [];
-        for (const m of this.town.breach.meshes) appendWorldGeometry(m, b, bi);
-        if (bi.length) this.breachBody = ph.addStaticMesh(b, bi);
+      } catch (e) {
+        ph.dispose();
+        throw e;
       }
       this.physics = ph;
       this.world.physics = ph;
       return ph;
-    })();
+    })().catch((e) => {
+      this.physicsP = null; // a later chapter tries again
+      throw e;
+    });
     return this.physicsP;
   }
   breachBody: ReturnType<Physics["addStaticMesh"]> | null = null;
@@ -209,8 +251,11 @@ export class PrologueStage implements Stage {
   /** The on-foot player, created at `pos` facing `yaw` on first use (later calls teleport it). */
   async ensurePlayer(pos: Vector3, yaw: number) {
     const ph = await this.ensurePhysics();
+    if (this.world.disposed) throw new Cancelled();
     if (!this.player) {
       const { body, heightScale } = await createPlayerBody(this.world, this.appearance ?? defaultAppearance());
+      // no character controller in a Jolt world the disposed stage has already freed
+      if (this.world.disposed) throw new Cancelled();
       this.player = new PlayerController(ph, this.world.rig, body, pos, yaw);
       this.player.setEyeHeight(1.62 * heightScale);
     } else this.player.teleport(pos, yaw);
@@ -219,11 +264,16 @@ export class PrologueStage implements Stage {
   }
 
   private skipResolve: (() => void) | null = null;
-  /** Skip the rest of the current chapter (pause menu / hold-to-skip). */
-  async skipChapter() {
-    if (!this.skipResolve || !this.chapter) return;
+  /**
+   * Skip the rest of the current chapter (pause menu / hold-to-skip). `target` is the chapter the
+   * request was made in: if it ends before the screen is black, nothing is skipped.
+   */
+  async skipChapter(target: Chapter | null = this.chapter) {
+    const resolve = this.skipResolve;
+    if (!resolve || !target || target !== this.chapter) return;
     await hud.fade(true, 0.5);
-    this.skipResolve?.();
+    // a chapter that ended meanwhile is followed by one that fades itself in: never skip that one
+    if (this.skipResolve === resolve && this.chapter === target) resolve();
   }
   get canSkip() {
     return !!this.skipResolve;
@@ -239,43 +289,90 @@ export class PrologueStage implements Stage {
     this.prepared = null;
     try {
       for (let i = p.index; i < CHAPTERS.length; i++) {
-        const ch = i === p.index ? p.chapter : CHAPTERS[i].make(this.ctx);
-        if (i !== p.index) {
-          // chapters change behind a black screen (unless one picks up mid-shot); each chapter
-          // fades in when it is ready
-          if (!ch.seamless) await hud.fade(true, 1.0);
-          await ch.prepare(null, true);
-        }
-        this.chapter = ch;
-        this.segment = ch.id;
-        assets.setSegment(ch.id);
-        // checkpoint at the start of every chapter (the ride saves its own progress on new game)
-        if (i !== p.index) await this.game.save("auto");
-        const run = ch.run(i === p.index ? p.resume : null);
-        run.catch((e) => !(e instanceof Cancelled) && console.error(e));
-        const skipped = new Promise<"skip">((r) => (this.skipResolve = () => r("skip")));
-        const how = await Promise.race([run.then(() => "done" as const), skipped]);
+        const first = i === p.index;
+        const cur = first ? p : this.make(i);
+        const ch = cur.chapter;
+        this.running = cur;
+        // saved before it starts, a chapter begins from the top (or where the loaded save left it)
+        this.gap = { id: ch.id, label: ch.label, state: first ? p.resume : null };
+        const how = await this.playChapter(ch, first ? p.resume : null, !first);
+        // the stage was disposed meanwhile: dispose() has ended the chapter
+        if (this.disposed) return;
         this.skipResolve = null;
-        if (how === "skip") {
-          // stop the chapter's scripts, then put the world into the chapter's end state
-          this.director.cancelAll();
-          this.director.reset();
+        if (how !== "done") {
+          // stop the chapter's scripts, then put the world into the chapter's end state (a chapter
+          // that failed is passed over the same way instead of leaving the story stuck)
+          cur.scope.cancel();
           hud.clearSubtitle();
           hud.prompt(null);
-          ch.skip?.();
+          this.world.rig.clearSteer();
+          if (how === "failed") hud.toast("本章出现错误，已跳过", 5000);
+          try {
+            ch.skip?.();
+          } catch (e) {
+            console.error(`chapter ${ch.id}: skip failed`, e);
+          }
         }
+        const end = { id: ch.id, label: ch.label, state: ch.save() };
+        // also ends what a finished chapter left running (detached script branches)
+        cur.scope.cancel();
         ch.dispose();
+        this.running = null;
+        this.chapter = null;
+        this.gap = end;
       }
-      this.chapter = null;
       await this.endCard();
     } catch (e) {
-      if (!(e instanceof Cancelled)) console.error(e);
+      if (!this.disposed && !(e instanceof Cancelled)) console.error(e);
+    }
+  }
+
+  /** Prepare (when `prepare`), start and play one chapter; resolves with how it ended. */
+  private async playChapter(ch: Chapter, resume: Record<string, unknown> | null, prepare: boolean): Promise<"done" | "skip" | "failed"> {
+    try {
+      if (prepare) {
+        // chapters change behind a black screen (unless one picks up mid-shot); each chapter
+        // fades in when it is ready
+        if (!ch.seamless) await hud.fade(true, 1.0);
+        if (this.disposed) return "failed";
+        await ch.prepare(null, true);
+      }
+      // the story never moves on behind the pause menu
+      while (this.paused && !this.disposed) await nextFrame();
+      if (this.disposed) return "failed";
+      this.chapter = ch;
+      this.segment = ch.id;
+      assets.setSegment(ch.id);
+      // checkpoint at the start of every chapter (the ride saves its own progress on new game)
+      if (prepare) await this.autosave();
+      if (this.disposed) return "failed";
+      const run = ch.run(resume);
+      run.catch((e) => !(e instanceof Cancelled) && console.error(`chapter ${ch.id}`, e));
+      const skipped = new Promise<"skip">((r) => (this.skipResolve = () => r("skip")));
+      return await Promise.race([run.then(() => "done" as const, () => "failed" as const), skipped]);
+    } catch (e) {
+      if (!(e instanceof Cancelled)) console.error(`chapter ${ch.id}`, e);
+      return "failed";
+    }
+  }
+
+  /** A failed autosave (storage full or blocked) is reported but never stops the story. */
+  private async autosave() {
+    try {
+      await this.game.save("auto");
+    } catch (e) {
+      console.warn("autosave failed", e);
+      hud.toast("自动存档失败", 3000);
     }
   }
 
   private async endCard() {
-    await this.game.save("auto");
+    await this.autosave();
+    if (this.disposed) return;
     await hud.fade(true, 2);
+    // not behind the pause menu: once gameplay is over, 继续 could no longer close it
+    while (this.paused && !this.disposed) await nextFrame();
+    if (this.disposed) return;
     hud.clearSubtitle();
     audio.stopAllBeds(2);
     audio.stopMusic(3);
@@ -307,17 +404,23 @@ export class PrologueStage implements Stage {
 
   setPaused(p: boolean) {
     this.paused = p;
-    if (p) hud.clearSubtitle();
+    // the line waits under the pause menu (its reading time stops with the game) and comes back on resume
+    hideSubtitle(p);
   }
 
   saveState() {
     const ch = this.chapter ?? this.prepared?.chapter;
-    return { label: ch?.label ?? "序章", state: { chapter: ch?.id ?? "cart", state: ch?.save() ?? null, appearance: this.appearance } as unknown as Record<string, unknown> };
+    // between chapters the next one from its start, after the last one its end: never a restart from the ride
+    const at = ch ? { id: ch.id, label: ch.label, state: ch.save() } : (this.gap ?? { id: CHAPTERS[0].id, label: "序章", state: null });
+    return { label: at.label, state: { chapter: at.id, state: at.state, appearance: this.appearance } as unknown as Record<string, unknown> };
   }
 
   dispose() {
+    this.disposed = true;
+    this.skipResolve = null;
+    // ends every chapter's scripts, including those of a chapter still being prepared
     this.director.cancelAll();
-    this.chapter?.dispose();
+    this.running?.chapter.dispose();
     this.prepared?.chapter.dispose();
     for (const w of this.wagons) w.dispose();
     audio.stopAllBeds(1);
@@ -325,9 +428,16 @@ export class PrologueStage implements Stage {
     this.world.dispose();
     this.physics?.dispose();
     hud.clearSubtitle();
+    hideSubtitle(false);
     hud.loading(false);
     hud.prompt(null);
   }
+}
+
+/** Hide the subtitle line without ending it (hud.clearSubtitle would lose the rest of the line). */
+function hideSubtitle(hidden: boolean) {
+  const s = document.getElementById("subtitle");
+  if (s) s.style.visibility = hidden ? "hidden" : "";
 }
 
 /** Append a mesh's triangles in world space (for static colliders). */

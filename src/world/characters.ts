@@ -5,6 +5,8 @@ import { Matrix, Quaternion, Vector3 } from "@babylonjs/core/Maths/math.vector";
 import type { Scene } from "@babylonjs/core/scene";
 import type { AbstractMesh } from "@babylonjs/core/Meshes/abstractMesh";
 import type { Node } from "@babylonjs/core/node";
+import type { Skeleton } from "@babylonjs/core/Bones/skeleton";
+import type { Observer } from "@babylonjs/core/Misc/observable";
 import { instantiateSubset } from "../game/loaders";
 
 /** Parts available in chars/male (see tools/gen/characters.mjs). */
@@ -82,10 +84,15 @@ export class CharacterFactory {
     };
     inst.rootNodes.forEach(visit);
     for (const r of inst.rootNodes) meshes.push(...r.getChildMeshes(false));
+    // Every part has its own skin (the inverse bind matrices carry that mesh's dequantisation, so
+    // they can't be shared) and all of them get cloned: keep only the ones a kept part uses.
+    const skeletons = new Set<Skeleton>();
+    for (const m of meshes) if (m.skeleton) skeletons.add(m.skeleton);
+    for (const s of inst.skeletons) if (!skeletons.has(s)) s.dispose();
     // skinned bounds are computed in bind pose; characters are few, so skip culling them
     for (const m of meshes) m.alwaysSelectAsActiveMesh = true;
     for (const g of inst.animationGroups) g.dispose();
-    return new Character(this.scene, spec.name, root, nodes, meshes, this.clips);
+    return new Character(this.scene, spec.name, root, nodes, meshes, this.clips, [...skeletons]);
   }
 }
 
@@ -100,10 +107,16 @@ const tmpS = new Vector3();
 export class Character {
   private groups = new Map<string, AnimationGroup>();
   current: AnimationGroup | null = null;
+  /** cross-fade in progress: its per-frame observer and the clip it is fading out */
+  private fade: { obs: Observer<Scene>; out: AnimationGroup } | null = null;
   private head: TransformNode | undefined;
   private lookTarget: Vector3 | null = null;
   private lookYaw = 0;
   private lookPitch = 0;
+  /** head rotation under the look, and the rotation the look wrote last frame (see postAnimate) */
+  private headBase = new Quaternion();
+  private headLook = new Quaternion();
+  private looked = false;
   /** extra downward head tilt (radians), e.g. for a captive staring at the floor */
   headDown = 0;
 
@@ -114,6 +127,7 @@ export class Character {
     private nodes: Map<string, TransformNode>,
     readonly meshes: AbstractMesh[],
     private clips: Map<string, AnimationGroup>,
+    private skeletons: Skeleton[] = [],
   ) {
     this.head = nodes.get("Head");
   }
@@ -134,32 +148,46 @@ export class Character {
     return g;
   }
 
-  play(clip: string, { loop = true, speed = 1, blend = 0.25, offset = Math.random() } = {}) {
+  /** Play a clip, cross-fading from the current one. Loops start at a random phase, one-shots at the start. */
+  play(clip: string, { loop = true, speed = 1, blend = 0.25, offset = loop ? Math.random() : 0 }: { loop?: boolean; speed?: number; blend?: number; offset?: number } = {}) {
     const g = this.group(clip);
-    if (this.current === g) {
+    // a finished one-shot (or a clip stopped from outside) is started again
+    if (this.current === g && g.isStarted) {
       g.speedRatio = speed;
       return g;
     }
-    const prev = this.current;
+    const prev = this.current === g ? null : this.current;
     this.current = g;
-    g.start(loop, speed, g.from, g.to, false);
-    g.goToFrame(g.from + (g.to - g.from) * offset);
+    // settle a cross-fade still in progress: the clip it was fading out stops unless it is wanted again
+    if (this.fade && this.fade.out !== g) this.fade.out.stop();
+    this.endFade();
+    // X→Y→X within the blend: X is still playing (fading out), so pick it up where it is
+    const g0 = g.isStarted ? g.weight : 0;
+    if (g.isStarted) {
+      g.loopAnimation = loop;
+      g.speedRatio = speed;
+      if (!loop) g.goToFrame(g.from + (g.to - g.from) * offset);
+    } else {
+      g.start(loop, speed, g.from, g.to, false);
+      g.goToFrame(g.from + (g.to - g.from) * offset);
+    }
     if (prev && blend > 0) {
-      // linear cross-fade by weights
-      g.weight = 0;
-      prev.weight = 1;
+      // linear cross-fade by weights (from wherever an interrupted fade left them)
+      const p0 = prev.weight;
+      g.weight = g0;
       let t = 0;
       const obs = this.scene.onBeforeAnimationsObservable.add(() => {
         t += this.scene.getEngine().getDeltaTime() / 1000;
         const k = Math.min(1, t / blend);
-        g.weight = k;
-        prev.weight = 1 - k;
+        g.weight = g0 + (1 - g0) * k;
+        prev.weight = p0 * (1 - k);
         if (k >= 1) {
           prev.stop();
           prev.weight = 1;
-          this.scene.onBeforeAnimationsObservable.remove(obs);
+          this.endFade();
         }
       });
+      this.fade = { obs, out: prev };
     } else {
       prev?.stop();
       g.weight = 1;
@@ -182,6 +210,13 @@ export class Character {
   postAnimate(dt: number) {
     const head = this.head;
     if (!head || !head.parent) return;
+    const hq = (head.rotationQuaternion ??= Quaternion.FromEulerVector(head.rotation));
+    // The look is added on top of the animated pose. When nothing re-posed the head since last frame
+    // (a one-shot has ended, the fade weight is 0), start again from the pose under last frame's look,
+    // or the rotation would compound every frame and spin the head.
+    if (this.looked && hq.equals(this.headLook)) hq.copyFrom(this.headBase);
+    this.headBase.copyFrom(hq);
+    this.looked = false;
     let wantYaw = 0, wantPitch = this.headDown;
     head.computeWorldMatrix(true);
     const hw = head.getWorldMatrix();
@@ -218,16 +253,23 @@ export class Character {
     const inv = parentW.clone().invert();
     tmpM2.multiplyToRef(inv, tmpM2);
     tmpM2.decompose(tmpS, tmpQ, tmpV);
-    head.rotationQuaternion ??= new Quaternion();
-    head.rotationQuaternion.copyFrom(tmpQ);
+    hq.copyFrom(tmpQ);
+    this.headLook.copyFrom(tmpQ);
+    this.looked = true;
     head.computeWorldMatrix(true);
   }
 
   /** Stop every clip (e.g. before a ragdoll takes over). */
   stopAnimations() {
+    this.endFade();
     for (const g of this.groups.values()) g.stop();
     this.current = null;
     this.lookTarget = null;
+  }
+
+  private endFade() {
+    if (this.fade) this.scene.onBeforeAnimationsObservable.remove(this.fade.obs);
+    this.fade = null;
   }
 
   /** Skeleton bone (glTF joint node) by name. */
@@ -240,7 +282,9 @@ export class Character {
   }
 
   dispose() {
+    this.endFade();
     for (const g of this.groups.values()) g.dispose();
     this.root.dispose(false, false);
+    for (const s of this.skeletons) s.dispose();
   }
 }

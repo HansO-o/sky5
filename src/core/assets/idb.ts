@@ -20,7 +20,8 @@ export function reqP<T>(r: IDBRequest<T>): Promise<T> {
 export function txDone(tx: IDBTransaction): Promise<void> {
   return new Promise((resolve, reject) => {
     tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
+    // A failed request's error event bubbles here before the abort sets tx.error, so take the request's.
+    tx.onerror = (ev) => reject((ev.target as IDBRequest | null)?.error ?? tx.error ?? new Error("IndexedDB request failed"));
     tx.onabort = () => reject(tx.error ?? new Error("transaction aborted"));
   });
 }

@@ -22,6 +22,11 @@ export function loadJolt() {
 interface Synced {
   id: JoltType.BodyID;
   node: TransformNode;
+  /** body state before and after the last step (the node shows a blend of the two) */
+  p0: Vector3;
+  p1: Vector3;
+  q0: Quaternion;
+  q1: Quaternion;
 }
 
 /**
@@ -38,6 +43,8 @@ export class Physics {
   private synced: Synced[] = [];
   private accumulator = 0;
   private steppers = new Set<(dt: number) => void>();
+  /** height-field squares (the walkable terrain; past them there is nothing to stand on) */
+  private fields: { x0: number; z0: number; size: number }[] = [];
   readonly step = 1 / 60;
   private tmpRay: JoltType.RRayCast;
   private rayCollector: JoltType.CastRayClosestHitCollisionCollector;
@@ -73,6 +80,9 @@ export class Physics {
     bp.MapObjectToBroadPhaseLayer(L.MOVING, BP_MOVING);
     bp.MapObjectToBroadPhaseLayer(L.DEBRIS, BP_MOVING);
     bp.MapObjectToBroadPhaseLayer(L.RAGDOLL, BP_MOVING);
+    // the table keeps copies
+    J.destroy(BP_STATIC);
+    J.destroy(BP_MOVING);
     settings.mObjectLayerPairFilter = pairs;
     settings.mBroadPhaseLayerInterface = bp;
     settings.mObjectVsBroadPhaseLayerFilter = new J.ObjectVsBroadPhaseLayerFilterTable(bp, 2, pairs, NUM_LAYERS);
@@ -83,6 +93,9 @@ export class Physics {
     this.tmpRay = new J.RRayCast();
     this.rayCollector = new J.CastRayClosestHitCollisionCollector();
     this.raySettings = new J.RayCastSettings();
+    // camera rays also stop at back faces: one that starts inside a wall slab (or meets a mirrored,
+    // inside-out mesh) would otherwise pass straight through
+    this.raySettings.mBackFaceModeTriangles = J.EBackFaceMode_CollideWithBackFaces;
     this.bpFilter = new J.DefaultBroadPhaseLayerFilter(this.jolt.GetObjectVsBroadPhaseLayerFilter(), L.MOVING);
     this.objFilter = new J.DefaultObjectLayerFilter(this.jolt.GetObjectLayerPairFilter(), L.MOVING);
     this.bodyFilter = new J.BodyFilter();
@@ -145,8 +158,12 @@ export class Physics {
     const J = this.J;
     const s = new J.HeightFieldShapeSettings();
     const step = size / (samples - 1);
-    s.mOffset = new J.Vec3(x0, 0, z0);
-    s.mScale = new J.Vec3(step, 1, step);
+    // the setters copy
+    const off = new J.Vec3(x0, 0, z0), sc = new J.Vec3(step, 1, step);
+    s.mOffset = off;
+    s.mScale = sc;
+    J.destroy(off);
+    J.destroy(sc);
     s.mSampleCount = samples;
     s.mBlockSize = 4;
     const arr = s.mHeightSamples;
@@ -158,7 +175,13 @@ export class Physics {
     if (res.HasError()) throw new Error("height field: " + res.GetError().c_str());
     const id = this.addBody(res.Get(), Vector3.Zero(), Quaternion.Identity(), J.EMotionType_Static, L.STATIC);
     J.destroy(s);
+    this.fields.push({ x0, z0, size });
     return id;
+  }
+
+  /** Whether (x, z) lies over a height field, at least `margin` inside its edge (always true without one). */
+  inBounds(x: number, z: number, margin = 0) {
+    return !this.fields.length || this.fields.some((f) => x >= f.x0 + margin && x <= f.x0 + f.size - margin && z >= f.z0 + margin && z <= f.z0 + f.size - margin);
   }
 
   addBox(center: Vector3, half: Vector3, rot = Quaternion.Identity(), o: { dynamic?: boolean; mass?: number; node?: TransformNode; layer?: number; friction?: number } = {}) {
@@ -177,10 +200,12 @@ export class Physics {
     return id;
   }
 
-  /** Copy a dynamic body's transform onto a node after every step. */
+  /** Copy a dynamic body's transform onto a node every frame (interpolated between steps). */
   sync(id: JoltType.BodyID, node: TransformNode) {
     node.rotationQuaternion ??= Quaternion.Identity();
-    this.synced.push({ id, node });
+    const p = this.bi.GetPosition(id), q = this.bi.GetRotation(id);
+    const p1 = new Vector3(p.GetX(), p.GetY(), p.GetZ()), q1 = new Quaternion(q.GetX(), q.GetY(), q.GetZ(), q.GetW());
+    this.synced.push({ id, node, p0: p1.clone(), p1, q0: q1.clone(), q1 });
   }
 
   setVelocity(id: JoltType.BodyID, v: Vector3, w?: Vector3) {
@@ -207,6 +232,14 @@ export class Physics {
     return () => this.steppers.delete(fn);
   }
 
+  /**
+   * How far the frame is between the last two fixed steps (0..1). Rendering shows stepped state
+   * blended by this, or motion judders on displays faster than 60 Hz (frames without a step).
+   */
+  get alpha() {
+    return Math.max(0, Math.min(1, this.accumulator / this.step));
+  }
+
   update(dt: number) {
     if (this.disposed) return;
     this.accumulator = Math.min(this.accumulator + dt, this.step * 4);
@@ -216,12 +249,18 @@ export class Physics {
       this.jolt.Step(this.step, 1);
       this.accumulator -= this.step;
       n++;
+      for (const s of this.synced) {
+        const p = this.bi.GetPosition(s.id), q = this.bi.GetRotation(s.id);
+        s.p0.copyFrom(s.p1);
+        s.q0.copyFrom(s.q1);
+        s.p1.set(p.GetX(), p.GetY(), p.GetZ());
+        s.q1.set(q.GetX(), q.GetY(), q.GetZ(), q.GetW());
+      }
     }
-    if (!n) return;
+    const a = this.alpha;
     for (const s of this.synced) {
-      const p = this.bi.GetPosition(s.id), q = this.bi.GetRotation(s.id);
-      s.node.position.set(p.GetX(), p.GetY(), p.GetZ());
-      s.node.rotationQuaternion!.set(q.GetX(), q.GetY(), q.GetZ(), q.GetW());
+      Vector3.LerpToRef(s.p0, s.p1, a, s.node.position);
+      Quaternion.SlerpToRef(s.q0, s.q1, a, s.node.rotationQuaternion!);
     }
   }
 

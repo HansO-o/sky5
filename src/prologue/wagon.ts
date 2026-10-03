@@ -10,7 +10,7 @@ import type { Route } from "../world/route";
 const WHEEL_R = 0.58;
 const AXLE = 1.15;
 /** distance from the wagon centre to the horse's centre along the road */
-const HORSE_AHEAD = 3.7;
+export const HORSE_AHEAD = 3.7;
 /** the 0 A.D. horse is authored ~2.5x life size */
 const HORSE_SCALE = 0.4;
 
@@ -83,11 +83,13 @@ export class Wagon {
     const front = route.pos(s + AXLE, this.tmpA);
     const rear = route.pos(s - AXLE, this.tmpB);
     const dx = front.x - rear.x, dy = front.y - rear.y, dz = front.z - rear.z;
-    const len = Math.hypot(dx, dy, dz) || 1;
-    const yaw = Math.atan2(-dx, -dz);
-    const pitch = Math.asin(dy / len);
     this.root.position.set((front.x + rear.x) / 2, (front.y + rear.y) / 2, (front.z + rear.z) / 2);
-    Quaternion.RotationYawPitchRollToRef(yaw, pitch, 0, this.root.rotationQuaternion!);
+    // past the end of the road both axles clamp to one point: keep the last heading
+    if (Math.hypot(dx, dz) > 1e-3) {
+      const yaw = Math.atan2(-dx, -dz);
+      const pitch = Math.asin(dy / Math.hypot(dx, dy, dz));
+      Quaternion.RotationYawPitchRollToRef(yaw, pitch, 0, this.root.rotationQuaternion!);
+    }
 
     // road roughness: small bumps proportional to speed
     const k = Math.min(1, speed / 2.5);
@@ -106,10 +108,14 @@ export class Wagon {
     // horse: on the road ahead, facing along it
     const hp = route.pos(s + HORSE_AHEAD, this.tmpA);
     this.horseRoot.position.copyFrom(hp);
-    const hy = route.yaw(s + HORSE_AHEAD);
-    const hpitch = Math.asin(Math.max(-1, Math.min(1, route.dir(s + HORSE_AHEAD, this.tmpB).y)));
-    // the 0 A.D. horse faces +Z; our forward is -Z
-    Quaternion.RotationYawPitchRollToRef(hy + Math.PI, -hpitch, 0, this.horseRoot.rotationQuaternion!);
+    const hd = route.dir(s + HORSE_AHEAD, this.tmpB);
+    // (zero past the end of the road: keep the last heading)
+    if (hd.lengthSquared() > 1e-6) {
+      const hy = Math.atan2(-hd.x, -hd.z);
+      const hpitch = Math.asin(Math.max(-1, Math.min(1, hd.y)));
+      // the 0 A.D. horse faces +Z; our forward is -Z
+      Quaternion.RotationYawPitchRollToRef(hy + Math.PI, -hpitch, 0, this.horseRoot.rotationQuaternion!);
+    }
     if (this.horseWalk) {
       // one walk cycle (1.67 s) covers ~2.4 m at life size
       this.horseWalk.speedRatio = Math.max(0.05, speed / 1.45);
@@ -120,6 +126,7 @@ export class Wagon {
   }
 
   dispose() {
+    this.horseWalk?.dispose();
     this.horseRoot.dispose(false, false);
     this.root.dispose(false, false);
   }

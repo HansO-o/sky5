@@ -5,6 +5,7 @@ import type { MaterialDefines } from "@babylonjs/core/Materials/materialDefines"
 import type { UniformBuffer } from "@babylonjs/core/Materials/uniformBuffer";
 import type { BaseTexture } from "@babylonjs/core/Materials/Textures/baseTexture";
 import { PBRMaterial } from "@babylonjs/core/Materials/PBR/pbrMaterial";
+import { ShadowDepthWrapper } from "@babylonjs/core/Materials/shadowDepthWrapper";
 import type { Scene } from "@babylonjs/core/scene";
 import type { Texture } from "@babylonjs/core/Materials/Textures/texture";
 
@@ -299,4 +300,14 @@ export class WindPlugin extends MaterialPluginBase {
 #endif`,
     };
   }
+}
+
+/**
+ * Wind sway in the shadow pass: the shadow generator renders a caster with this material's own vertex
+ * code (wind displacement included) instead of its generic depth shader, so shadows sway with it.
+ */
+export function swayShadows(mat: Material) {
+  // WGSL keeps varyings in vertexOutputs; the injected shadow-depth code expects a plain vNormalW
+  const options = mat.shaderLanguage === ShaderLanguage.WGSL ? { remappedVariables: ["vNormalW", "vertexOutputs.vNormalW"] } : undefined;
+  mat.shadowDepthWrapper = new ShadowDepthWrapper(mat, mat.getScene(), options);
 }

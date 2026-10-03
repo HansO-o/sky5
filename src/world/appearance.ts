@@ -126,10 +126,14 @@ export function applyAppearance(ch: Character, a: Appearance) {
   const h = race.height * (1 + a.height * 0.06);
   ch.root.scaling.setAll(h);
   const build = race.build * (1 + a.build * 0.12);
-  for (const bone of ["spine_02", "spine_03"]) ch.bone(bone)?.scaling.set(build, 1, build);
+  // Build widens the torso only: the spine and neck bend about their X axis, which a scale along X
+  // alone commutes with, so neck_01 can cancel it exactly. A depth scale would not cancel (a bone's
+  // scale acts in its own, differently tilted frame) and would shear the head as it nods.
+  for (const bone of ["spine_02", "spine_03"]) ch.bone(bone)?.scaling.set(build, 1, 1);
   const head = race.head * (1 + a.head * 0.07);
-  // the spine scale also scales its children: compensate so the head keeps its own size
-  ch.bone("neck_01")?.scaling.set(1 / build, 1, 1 / build);
+  // both spine scales carry down to their children (spine_03 sits under spine_02): cancel both so the
+  // head (and the ears on it) keeps its own size
+  ch.bone("neck_01")?.scaling.set(1 / (build * build), 1, 1);
   ch.bone("Head")?.scaling.setAll(head);
   setEars(ch, !!race.ears, clones);
   return { heightScale: h };

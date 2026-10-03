@@ -35,7 +35,7 @@ export type FromWorker =
   | { t: "ready"; cachedIds: string[] }
   | { t: "data"; req: number; id: string; buf: ArrayBuffer; fromCache: boolean }
   | { t: "error"; req: number; id: string; message: string }
-  | { t: "progress"; segments: SegmentProgress[]; bps: number; active: number; queued: number }
+  | { t: "progress"; segments: SegmentProgress[]; bps: number; active: number; queued: number; caching: boolean }
   | { t: "stats"; req: number; stats: CacheStats }
   | { t: "cleared"; req: number }
   | { t: "log"; message: string };

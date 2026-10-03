@@ -58,6 +58,8 @@
       #menu { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7vh; pointer-events: none; transition: opacity .8s; }
       #menu::before { content: ""; position: absolute; inset: 0; pointer-events: none; background: radial-gradient(ellipse 75% 70% at 50% 45%, transparent 35%, rgba(0,0,0,.55) 75%, rgba(0,0,0,.9) 100%); }
       #menu.fade { opacity: 0; }
+      /* fading out for a starting game: no hover ticks or clicks on the invisible buttons */
+      #menu.fade nav { pointer-events: none; }
       body:has(#panel) #menu { opacity: 0.08; }
       .title { position: relative; text-align: center; user-select: none; margin-top: 4vh; }
       .title .seal { position: absolute; left: 50%; top: 50%; width: min(56vh, 92vw); height: min(56vh, 92vw); transform: translate(-50%, -54%); opacity: .075; pointer-events: none; }
@@ -93,9 +95,10 @@
       .panel::before { top: -30px; margin: -30px -56px 28px; }
       .panel::after { bottom: -26px; margin: 22px -56px -26px; }
       .panel .row { display: grid; grid-template-columns: 9em 1fr 4.5em; align-items: center; gap: 16px; padding: 6px 12px; margin: 0 -12px; }
-      .panel .row:hover { background: linear-gradient(90deg, transparent, var(--band) 15%, var(--band) 85%, transparent); }
+      .panel:focus { outline: none; }
+      .panel .row:hover, .panel .row:has(:focus-visible) { background: linear-gradient(90deg, transparent, var(--band) 15%, var(--band) 85%, transparent); }
       .panel .row label { color: var(--ink-dim); letter-spacing: .12em; }
-      .panel .row:hover label { color: var(--ink); }
+      .panel .row:hover label, .panel .row:has(:focus-visible) label { color: var(--ink); }
       .panel .row output { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink-dim); font-size: 13px; }
       .panel .btn, .btn { all: unset; cursor: pointer; font-family: var(--display); letter-spacing: .3em; color: var(--ink-dim); padding: 6px 10px; transition: color .15s, text-shadow .15s; }
       .panel .btn:hover, .btn:hover, .btn:focus-visible { color: #fff; text-shadow: 0 0 12px var(--glow); }
@@ -108,7 +111,7 @@
       .panel h3::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, var(--line), transparent); }
       .stepper { display: inline-flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; }
       .stepper button { all: unset; cursor: pointer; width: 22px; text-align: center; color: var(--ink-dim); font-size: 13px; }
-      .stepper button:hover { color: #fff; }
+      .stepper button:hover, .stepper button:focus-visible { color: #fff; }
       .stepper span { flex: 1; text-align: center; letter-spacing: .3em; padding-left: .3em; }
       .credits { line-height: 1.8; font-size: 13.5px; color: #c9c3b6; }
       .credits a { color: #ece4cf; text-decoration: none; border-bottom: 1px solid var(--line); }

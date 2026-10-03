@@ -120,12 +120,14 @@ const SCALE = new Matrix();
 
 /**
  * Prepare a loaded glTF primitive mesh for thin instancing: detach from its glTF parents and bake
- * the full world transform (incl. quantisation scale/offset) into the vertices.
+ * the full world transform (incl. quantisation scale/offset) into the vertices. `origin` (world XZ)
+ * becomes the instance origin; kit pieces sit side by side in their source file.
  */
-export function prepareForInstancing(mesh: AbstractMesh) {
+export function prepareForInstancing(mesh: AbstractMesh, origin?: Vector3) {
   const m = mesh as Mesh;
   m.computeWorldMatrix(true);
   const world = m.getWorldMatrix().clone();
+  if (origin) world.addTranslationFromFloats(-origin.x, 0, -origin.z);
   m.setParent(null);
   m.rotationQuaternion = null;
   m.position.setAll(0);
