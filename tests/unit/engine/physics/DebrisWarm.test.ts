@@ -1,0 +1,42 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { Vector3 } from "@babylonjs/core/Maths/math.vector";
+import { CreateBox } from "@babylonjs/core/Meshes/Builders/boxBuilder";
+import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
+import { FreeCamera } from "@babylonjs/core/Cameras/freeCamera";
+import { DirectionalLight } from "@babylonjs/core/Lights/directionalLight";
+import { Debris } from "../../../../src/engine/physics/Debris";
+import { ShaderWatch } from "../../../../src/engine/render/shaderWatch";
+import { newPhysics, newScene } from "../../helpers/jolt";
+
+test("warm compiles a burst's box shader ahead of time and leaves nothing behind", async () => {
+  const ph = await newPhysics();
+  const { engine, scene, dispose } = newScene();
+  const cam = new FreeCamera("cam", new Vector3(0, 2, 10), scene);
+  cam.setTarget(Vector3.Zero());
+  new DirectionalLight("sun", new Vector3(0, -1, 0.3), scene);
+  ph.addBox(new Vector3(0, -0.5, 0), new Vector3(10, 0.5, 10));
+  // the wall the stones come from
+  const wall = CreateBox("wall", { width: 4, height: 3, depth: 0.5 }, scene);
+  wall.position.y = 1.5;
+  const stone = new StandardMaterial("stone", scene);
+  wall.material = stone;
+  const watch = new ShaderWatch(engine);
+  const debris = new Debris({ physics: ph, scene, shadows: (m) => m.forEach((x) => (x.receiveShadows = true)) });
+  const meshes = scene.meshes.length;
+  await debris.warm([stone, undefined]);
+  assert.equal(scene.meshes.length, meshes, "warm-up boxes disposed");
+  scene.render();
+  await scene.whenReadyAsync();
+  watch.mark("x:play");
+  debris.burst({ min: new Vector3(-2, 1, 0), max: new Vector3(2, 3, 0.5) }, { count: 6, material: stone });
+  debris.spawn([{ center: new Vector3(3, 2, 0), half: new Vector3(0.3, 0.3, 0.3) }]);
+  scene.render();
+  await scene.whenReadyAsync();
+  scene.render();
+  assert.equal(watch.count((p) => p === "x:play"), 0);
+  debris.dispose();
+  watch.dispose();
+  ph.dispose();
+  dispose();
+});

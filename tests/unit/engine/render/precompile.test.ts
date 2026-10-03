@@ -51,7 +51,7 @@ test("the watch counts each new shader program once, by phase", async () => {
   dispose();
 });
 
-test("glTF-style instances and thin instances compile as they draw, shadow pass included", async () => {
+test("a mesh with glTF-style instances compiles both ways it can draw, shadow pass included", async () => {
   const { engine, scene, sun, dispose } = stage();
   const sg = new ShadowGenerator(256, sun);
   const watch = new ShaderWatch(engine);
@@ -69,6 +69,9 @@ test("glTF-style instances and thin instances compile as they draw, shadow pass 
   assert.ok(compiled >= 2, `material + shadow depth: ${compiled}`);
   watch.mark("x:play");
   src.setEnabled(true);
+  await settle(scene);
+  // only the source in view (no instance): drawn on its own
+  inst.setEnabled(false);
   await settle(scene);
   assert.equal(watch.count((p) => p === "x:play"), 0, watch.compiles.map((c) => `${c.phase} ${c.name}`).join(", "));
   watch.dispose();
