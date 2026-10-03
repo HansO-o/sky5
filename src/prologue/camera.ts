@@ -108,6 +108,12 @@ export class CameraRig {
     this.move = null;
   }
 
+  private steer: { pos: () => Vector3; t: number; dur: number } | null = null;
+  /** Player mode: ease the view toward a point for `seconds` (the player can still look around). */
+  lookToward(pos: Vector3 | (() => Vector3), seconds = 0.8) {
+    this.steer = { pos: typeof pos === "function" ? pos : () => pos, t: 0, dur: seconds };
+  }
+
   shake(amplitude: number, seconds: number) {
     this.shakeAmp = Math.max(this.shakeAmp, amplitude);
     this.shakeT = Math.max(this.shakeT, seconds);
@@ -154,6 +160,18 @@ export class CameraRig {
     const t = this.target!;
     this.yaw -= dx;
     this.pitch = Math.max(-1.35, Math.min(1.35, this.pitch - dy));
+    if (this.steer) {
+      const st = this.steer;
+      st.t += dt;
+      const from = t.firstPerson ? t.eye(this.tmp2) : t.pivot(this.tmp2);
+      const to = st.pos();
+      const ty = Math.atan2(-(to.x - from.x), -(to.z - from.z));
+      const tp = Math.atan2(to.y - from.y, Math.hypot(to.x - from.x, to.z - from.z));
+      const k = Math.min(1, dt * 5);
+      this.yaw += Math.atan2(Math.sin(ty - this.yaw), Math.cos(ty - this.yaw)) * k;
+      this.pitch += (Math.max(-1.35, Math.min(1.35, tp)) - this.pitch) * k;
+      if (st.t >= st.dur) this.steer = null;
+    }
     const dir = this.tmp.set(-Math.sin(this.yaw) * Math.cos(this.pitch), Math.sin(this.pitch), -Math.cos(this.yaw) * Math.cos(this.pitch));
     if (t.firstPerson) {
       t.eye(this.camera.position);

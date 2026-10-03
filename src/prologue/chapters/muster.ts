@@ -15,11 +15,15 @@ import type { Chapter, ChapterContext } from "./types";
 
 /** Where the prisoners line up after leaving the wagons, and who stands where. */
 const LINE_Z = -540;
-const LINE_X = { leader: 57, brun: 59.5, p1: 62, p2: 64.5, rowan: 67, player: 69.5 };
-const OFFICER = { x: 50, z: -538.5 };
-const SCRIBE = { x: 50.6, z: -541.6 };
-const ARCHER = { x: 53, z: -531 };
+/** the prisoners stand side by side facing south; the captain and the scribe face them */
+const LINE_X = { leader: 52, brun: 54.5, p1: 57, p2: 59.5, rowan: 62, player: 64.5 };
+const OFFICER = { x: 57, z: -547.5 };
+const SCRIBE = { x: 59.6, z: -547.2 };
+const ARCHER = { x: 51, z: -531 };
+/** prisoners leave the line west of the captain, then go south to the square */
+const exitPath = (i: number) => [new Vector3(49.5, 0, -544 - i * 0.6), new Vector3(52 + i * 0.5, 0, -575), new Vector3(WAIT(i).x, 0, WAIT(i).z)];
 /** prisoners wait here (in front of the execution platform) */
+const PLAYER_YAW = Math.atan2(LINE_X.player - OFFICER.x, LINE_Z - OFFICER.z) * 0.6;
 export const WAIT = (i: number) => ({ x: 54 + i * 2.2, z: -594 });
 
 /**
@@ -53,19 +57,20 @@ export class MusterChapter implements Chapter {
     const scribe = w.npc("scribe", { outfit: OUTFITS.soldier, hair: ["hair_simpleparted"] });
     const archer = w.npc("archer", { outfit: OUTFITS.soldier });
     const line: [Character, number][] = [[leader, LINE_X.leader], [brun, LINE_X.brun], [p1, LINE_X.p1], [p2, LINE_X.p2], [rowan, LINE_X.rowan]];
-    for (const [c, x] of line) stand(w, c, x, LINE_Z, OFFICER);
+    for (const [c, x] of line) stand(w, c, x, LINE_Z, { x, z: LINE_Z - 10 });
     leader.headDown = 0.35;
-    stand(w, officer, OFFICER.x, OFFICER.z, { x: 63, z: LINE_Z }, "Idle_FoldArms_Loop");
-    stand(w, scribe, SCRIBE.x, SCRIBE.z, { x: 63, z: LINE_Z });
-    stand(w, archer, ARCHER.x, ARCHER.z, { x: 63, z: -520 });
+    stand(w, officer, OFFICER.x, OFFICER.z, { x: 58, z: LINE_Z }, "Idle_FoldArms_Loop");
+    stand(w, scribe, SCRIBE.x, SCRIBE.z, { x: 58, z: LINE_Z });
+    stand(w, archer, ARCHER.x, ARCHER.z, { x: 58, z: -520 });
     for (const n of ["driver", "lead_driver", "escort0", "escort1"]) {
       const c = w.npcs.get(n);
-      if (c) stand(w, c, 56 + Math.random() * 10, -526 - Math.random() * 3, { x: 63, z: LINE_Z }, "Idle_Loop");
+      if (c) stand(w, c, 56 + Math.random() * 10, -526 - Math.random() * 3, { x: 58, z: LINE_Z }, "Idle_Loop");
     }
-    // the player stands at the end of the line facing the officer (west); body is a placeholder
-    // until the creator runs (or the saved appearance)
+    // the player stands at the end of the line facing south toward the captain; the body is a
+    // placeholder until the creator runs (or the saved appearance)
     const start = new Vector3(LINE_X.player, w.heightAt(LINE_X.player, LINE_Z) + 0.05, LINE_Z);
-    this.player = await stage.ensurePlayer(start, Math.PI / 2);
+    this.player = await stage.ensurePlayer(start, PLAYER_YAW);
+    this.player.firstPerson = true;
     this.player.canMove = this.step >= 2;
     w.rig.pitch = -0.05;
   }
@@ -87,17 +92,18 @@ export class MusterChapter implements Chapter {
       await d.say("帝国队长", "名单上的人，听到名字就上前一步。", { npc: n("captain"), look: () => new Vector3(63, 39.5, LINE_Z) });
       await d.say("书记官", "托尔瓦德·霜颌，寒脊领主。", { npc: n("scribe"), look: () => n("leader").root.position.add(new Vector3(0, 1.6, 0)) });
       await d.say("布伦", "能和您一起走到最后，是我的荣幸，领主大人。", { npc: n("brun"), look: () => n("leader").root.position.add(new Vector3(0, 1.6, 0)), gap: 0.4 });
-      void walkPath(w, n("leader"), [new Vector3(55, 0, -548), new Vector3(57, 0, -575), new Vector3(WAIT(0).x, 0, WAIT(0).z)], { ground: true, speed: 1.3 });
+      void walkPath(w, n("leader"), exitPath(0), { ground: true, speed: 1.3 });
       await d.sleep(1.5);
       await d.say("书记官", "布伦·灰鬃，溪谷人。", { npc: n("scribe"), look: () => n("brun").root.position.add(new Vector3(0, 1.6, 0)) });
       await d.say("布伦", "（低声）别怕，朋友。霜誓军的人，死也要站着死。", { npc: n("brun"), look: playerEye, talk: "Idle_Talking_Loop", idle: "Idle_Loop" });
-      void walkPath(w, n("brun"), [new Vector3(56, 0, -549), new Vector3(58, 0, -576), new Vector3(WAIT(1).x, 0, WAIT(1).z)], { ground: true, speed: 1.3 });
+      void walkPath(w, n("brun"), exitPath(1), { ground: true, speed: 1.3 });
       await d.sleep(1.2);
       await d.say("书记官", "罗文，山南来的偷马贼。", { npc: n("scribe"), look: () => n("rowan").root.position.add(new Vector3(0, 1.6, 0)) });
       // the escape attempt
       const rowan = n("rowan");
       await d.say("罗文", "不！我不是霜誓军！你们搞错了！我不能死在这儿！", { npc: rowan, look: scribeLook, duration: 2.6 });
-      const run = walkPath(w, rowan, [new Vector3(68, 0, -532), new Vector3(63, 0, -514), new Vector3(61, 0, -503)], { ground: true, speed: 5.2, clip: "Sprint_Loop" });
+      w.rig.lookToward(() => rowan.root.position.add(new Vector3(0, 1.4, 0)), 3.5);
+      const run = walkPath(w, rowan, [new Vector3(62.5, 0, -534), new Vector3(61, 0, -514), new Vector3(60, 0, -503)], { ground: true, speed: 5.2, clip: "Sprint_Loop" });
       void run;
       await d.say("帝国队长", "站住！", { npc: n("captain"), look: () => rowan.root.position.add(new Vector3(0, 1.5, 0)), duration: 1.0 });
       const archer = n("archer");
@@ -121,13 +127,15 @@ export class MusterChapter implements Chapter {
       if (w.physics) this.ragdolls.push(new Ragdoll(w.physics, rowan, dir.scale(4).add(new Vector3(0, 0.5, 0)), "spine_02"));
       archer.play("Idle_Loop", { blend: 0.4 });
       await d.sleep(1.4);
+      w.rig.lookToward(() => n("captain").root.position.add(new Vector3(0, 1.6, 0)), 1.5);
       await d.say("帝国队长", "还有谁想跑？", { npc: n("captain"), look: playerEye, gap: 0.8 });
       // the other two go without a word
-      void walkPath(w, n("p1"), [new Vector3(60, 0, -550), new Vector3(59, 0, -578), new Vector3(WAIT(2).x, 0, WAIT(2).z)], { ground: true, speed: 1.3 });
+      void walkPath(w, n("p1"), exitPath(2), { ground: true, speed: 1.3 });
       await d.sleep(0.8);
-      void walkPath(w, n("p2"), [new Vector3(62, 0, -551), new Vector3(61, 0, -579), new Vector3(WAIT(3).x, 0, WAIT(3).z)], { ground: true, speed: 1.3 });
+      void walkPath(w, n("p2"), exitPath(3), { ground: true, speed: 1.3 });
       await d.sleep(0.6);
       // "who are you?"
+      w.rig.lookToward(scribeLook, 1.2);
       await d.say("书记官", "等等。你。上前来。", { npc: n("scribe"), look: playerEye });
       await d.say("书记官", "……你是谁？", { npc: n("scribe"), look: playerEye, gap: 0.3 });
       this.step = 1;
@@ -173,11 +181,12 @@ export class MusterChapter implements Chapter {
       const b = body();
       const p = b.root.position;
       const h = b.root.scaling.y;
-      // camera west of the player (who faces west), slightly to the side; frame the upper body
-      w.rig.cut(new Vector3(p.x - 2.4, p.y + 1.45 * h, p.z + 0.5), new Vector3(p.x, p.y + 1.25 * h, p.z));
+      // camera in front of the player, slightly to the side; frame the upper body
+      const fx = -Math.sin(baseYaw), fz = -Math.cos(baseYaw);
+      w.rig.cut(new Vector3(p.x + fx * 2.4 - fz * 0.5, p.y + 1.45 * h, p.z + fz * 2.4 + fx * 0.5), new Vector3(p.x, p.y + 1.25 * h, p.z));
     };
+    const baseYaw = PLAYER_YAW;
     shoot();
-    const baseYaw = Math.PI / 2;
     const applyYaw = () => {
       const b = body();
       const y = baseYaw + spin + Math.PI;
@@ -208,7 +217,7 @@ export class MusterChapter implements Chapter {
     this.player.enabled = true;
     this.player.firstPerson = true;
     w.rig.follow(this.player);
-    w.rig.yaw = Math.PI / 2;
+    w.rig.yaw = PLAYER_YAW;
     w.rig.pitch = -0.05;
     return a;
   }
