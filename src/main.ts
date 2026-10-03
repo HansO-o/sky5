@@ -1,6 +1,5 @@
 // Boot: the menu (plain DOM in index.html) is usable as soon as this small module runs. The engine,
 // the 3D menu background and everything else load lazily behind it.
-import "./ui/fonts.css";
 import { assets } from "./core/assets/AssetClient";
 import type { Manifest } from "./core/assets/manifest";
 import { audio } from "./core/audio";
