@@ -42,6 +42,11 @@ export interface MoveIntent {
   vx: number;
   vz: number;
   jump?: boolean;
+  /**
+   * take the horizontal velocity as given this step instead of easing toward it (root motion: the
+   * clip's travel must not be smoothed away)
+   */
+  snap?: boolean;
 }
 
 export interface MoveResult {
@@ -213,8 +218,9 @@ export class CapsuleMover {
     const cur = this.ch.GetLinearVelocity();
     const v = new Vector3(cur.GetX(), cur.GetY(), cur.GetZ());
     const accel = grounded ? o.accel.ground : o.accel.air;
-    v.x += (intent.vx - v.x) * Math.min(1, accel * dt);
-    v.z += (intent.vz - v.z) * Math.min(1, accel * dt);
+    const k = intent.snap ? 1 : Math.min(1, accel * dt);
+    v.x += (intent.vx - v.x) * k;
+    v.z += (intent.vz - v.z) * k;
     let landed = false, jumped = false, recovered = false;
     if (grounded) {
       const gv = this.ch.GetGroundVelocity();

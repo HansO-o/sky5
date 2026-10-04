@@ -24,6 +24,11 @@ export interface Stage {
   setPaused(paused: boolean): void;
   /** Serializable progress for save games (`kind` "auto" is a checkpoint). */
   saveState(kind?: SaveGame["kind"]): { label: string; state: Record<string, unknown> };
+  /**
+   * The stage's own game-time multiplier this frame (hit-stop, slow motion), applied inside its
+   * `update`; skeletal animation follows it too. Read after `update`. Default 1.
+   */
+  readonly timeScale?: number;
   dispose(): void;
 }
 
@@ -121,7 +126,7 @@ export class Game {
         if (st.gameplay) this.playSeconds += dt;
       }
       // skeletal animation runs on game time too (frozen while paused, follows the debug time scale)
-      st.scene.animationTimeScale = this.paused ? 0 : dt / real;
+      st.scene.animationTimeScale = this.paused ? 0 : (dt / real) * (st.timeScale ?? 1);
       st.scene.render();
     }
     input.endFrame();

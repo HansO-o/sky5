@@ -6,8 +6,8 @@ import type { Scene } from "@babylonjs/core/scene";
 import type { AbstractMesh } from "@babylonjs/core/Meshes/abstractMesh";
 import type { Node } from "@babylonjs/core/node";
 import type { Skeleton } from "@babylonjs/core/Bones/skeleton";
-import type { Observer } from "@babylonjs/core/Misc/observable";
 import { instantiateSubset } from "../game/loaders";
+import { AnimController, type PlayOptions } from "../engine/anim/AnimController";
 
 /** Parts available in chars/male (see tools/gen/characters.mjs). */
 export type Part =
@@ -61,11 +61,28 @@ export class CharacterFactory {
     private body: AssetContainer,
     anims: AssetContainer[],
   ) {
-    for (const c of anims) for (const g of c.animationGroups) this.clips.set(g.name, g);
+    for (const c of anims) this.addClips(c);
+  }
+
+  /**
+   * Make a loaded animation container's clips available to every character (made before or after):
+   * e.g. `chars/anim_combat` once the keep segment has it. Clips retarget by joint name on first use.
+   */
+  addClips(container: AssetContainer) {
+    for (const g of container.animationGroups) this.clips.set(g.name, g);
   }
 
   clipNames() {
     return [...this.clips.keys()];
+  }
+
+  /** A shared source clip (on the animation container's own joints), e.g. to read a pose from. */
+  clip(name: string): AnimationGroup | undefined {
+    return this.clips.get(name);
+  }
+
+  hasClip(name: string) {
+    return this.clips.has(name);
   }
 
   create(spec: CharacterSpec) {
@@ -106,9 +123,8 @@ const tmpS = new Vector3();
 
 export class Character {
   private groups = new Map<string, AnimationGroup>();
-  current: AnimationGroup | null = null;
-  /** cross-fade in progress: its per-frame observer and the clip it is fading out */
-  private fade: { obs: Observer<Scene>; out: AnimationGroup } | null = null;
+  /** clip playback and cross-fades */
+  readonly anim: AnimController;
   private head: TransformNode | undefined;
   private lookTarget: Vector3 | null = null;
   private lookYaw = 0;
@@ -130,6 +146,17 @@ export class Character {
     private skeletons: Skeleton[] = [],
   ) {
     this.head = nodes.get("Head");
+    this.anim = new AnimController(scene, (clip) => this.group(clip));
+  }
+
+  /** The clip playing (or fading in) now. */
+  get current(): AnimationGroup | null {
+    return this.anim.current;
+  }
+
+  /** Whether the clip exists (shared clips arrive with their containers, e.g. the keep's combat set). */
+  hasClip(clip: string) {
+    return this.groups.has(clip) || this.clips.has(clip);
   }
 
   /** Clone a shared clip onto this character's bones (by bone name). */
@@ -149,50 +176,13 @@ export class Character {
   }
 
   /** Play a clip, cross-fading from the current one. Loops start at a random phase, one-shots at the start. */
-  play(clip: string, { loop = true, speed = 1, blend = 0.25, offset = loop ? Math.random() : 0 }: { loop?: boolean; speed?: number; blend?: number; offset?: number } = {}) {
-    const g = this.group(clip);
-    // a finished one-shot (or a clip stopped from outside) is started again
-    if (this.current === g && g.isStarted) {
-      g.speedRatio = speed;
-      return g;
-    }
-    const prev = this.current === g ? null : this.current;
-    this.current = g;
-    // settle a cross-fade still in progress: the clip it was fading out stops unless it is wanted again
-    if (this.fade && this.fade.out !== g) this.fade.out.stop();
-    this.endFade();
-    // X→Y→X within the blend: X is still playing (fading out), so pick it up where it is
-    const g0 = g.isStarted ? g.weight : 0;
-    if (g.isStarted) {
-      g.loopAnimation = loop;
-      g.speedRatio = speed;
-      if (!loop) g.goToFrame(g.from + (g.to - g.from) * offset);
-    } else {
-      g.start(loop, speed, g.from, g.to, false);
-      g.goToFrame(g.from + (g.to - g.from) * offset);
-    }
-    if (prev && blend > 0) {
-      // linear cross-fade by weights (from wherever an interrupted fade left them)
-      const p0 = prev.weight;
-      g.weight = g0;
-      let t = 0;
-      const obs = this.scene.onBeforeAnimationsObservable.add(() => {
-        t += this.scene.getEngine().getDeltaTime() / 1000;
-        const k = Math.min(1, t / blend);
-        g.weight = g0 + (1 - g0) * k;
-        prev.weight = p0 * (1 - k);
-        if (k >= 1) {
-          prev.stop();
-          prev.weight = 1;
-          this.endFade();
-        }
-      });
-      this.fade = { obs, out: prev };
-    } else {
-      prev?.stop();
-      g.weight = 1;
-    }
-    return g;
+  play(clip: string, o: PlayOptions = {}) {
+    return this.anim.play(clip, o);
+  }
+
+  /** Resolves when `g` (from `play`) runs to its end (true), or is replaced or stopped first (false). */
+  ended(g: AnimationGroup) {
+    return this.anim.ended(g);
   }
 
   /** Length of a clip in seconds (at speed 1). */
@@ -261,15 +251,9 @@ export class Character {
 
   /** Stop every clip (e.g. before a ragdoll takes over). */
   stopAnimations() {
-    this.endFade();
+    this.anim.stopAll();
     for (const g of this.groups.values()) g.stop();
-    this.current = null;
     this.lookTarget = null;
-  }
-
-  private endFade() {
-    if (this.fade) this.scene.onBeforeAnimationsObservable.remove(this.fade.obs);
-    this.fade = null;
   }
 
   /** Skeleton bone (glTF joint node) by name. */
@@ -282,7 +266,7 @@ export class Character {
   }
 
   dispose() {
-    this.endFade();
+    this.anim.dispose();
     for (const g of this.groups.values()) g.dispose();
     this.root.dispose(false, false);
     for (const s of this.skeletons) s.dispose();

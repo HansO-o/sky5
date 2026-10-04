@@ -2,10 +2,10 @@ import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import type { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import { audio } from "../../core/audio";
 import { hud } from "../../ui/hud";
-import { loadGLB } from "../../game/loaders";
 import { OUTFITS, type Character } from "../../world/characters";
 import { LAYOUT } from "../../world/town";
 import { faceTo, stand, walkPath } from "../actors";
+import { attachItem, AXE_HAND } from "../gear";
 import type { Dragon } from "../dragon";
 import type { PlayerController } from "../player";
 import type { Chapter, ChapterContext } from "./types";
@@ -54,27 +54,22 @@ export async function castExecution(w: World, place: boolean) {
 /** the axe in each headsman's hand (the muster and the execution both ask for it) */
 const axes = new WeakMap<Character, Promise<TransformNode | null>>();
 
-/** Put the axe in the headsman's right hand, once; null when he is gone by the time it has loaded. */
+/**
+ * Put the axe in the headsman's right hand, once; null when he is gone by the time it has loaded.
+ * It hangs on a socket that follows the hand without the body's spine scaling (which would shear
+ * a child of the hand bone), handle along the grip axis (§13 item 10).
+ */
 function attachAxe(w: World, headsman: Character) {
   let p = axes.get(headsman);
   if (!p) {
-    p = loadGLB("ph/wooden_axe_03", w.scene).then((c) => {
-      const hand = headsman.bone("hand_r");
-      if (!hand || headsman.root.isDisposed()) return null;
-      const inst = c.instantiateModelsToScene((n) => n, false, { doNotInstantiate: true });
-      const axe = inst.rootNodes[0] as TransformNode;
-      axe.parent = hand;
-      // handle along the hand's grip axis, blade out
-      axe.position.set(0.0, 0.08, 0.02);
-      axe.rotationQuaternion = null;
-      axe.rotation.set(0, 0, Math.PI / 2);
-      axe.scaling.setAll(1.25);
-      w.addShadowCasters(axe.getChildMeshes(false));
-      return axe;
-    });
+    p = attachItem(w, headsman, "axe", AXE_HAND);
     axes.set(headsman, p);
     // a failed load is tried again by the next caller
-    p.catch(() => axes.delete(headsman));
+    const q = p;
+    q.then(
+      (axe) => !axe && axes.get(headsman) === q && axes.delete(headsman),
+      () => axes.get(headsman) === q && axes.delete(headsman),
+    );
   }
   return p;
 }

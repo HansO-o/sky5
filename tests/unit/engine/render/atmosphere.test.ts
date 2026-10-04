@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { AtmosphereBlend, climbOut, lerpAtmosphere, smoothstep, type Atmosphere } from "../../../../src/engine/render/atmosphere";
+import { AtmosphereBlend, AtmosphereProfiles, climbOut, lerpAtmosphere, smoothstep, type Atmosphere } from "../../../../src/engine/render/atmosphere";
 
 const OUT: Atmosphere = { env: 0.95, fog: [0.6, 0.64, 0.68], density: 0.0024, exposure: 1.05, sun: 2.1, fill: 0.12 };
 const CAVE: Atmosphere = { env: 0.05, fog: [0.02, 0.025, 0.03], density: 0.04, exposure: 1.6, sun: 0, fill: 0.02 };
@@ -50,4 +50,62 @@ test("a start override (exposure flare) and a function target the blend keeps fo
   b.to(CAVE, 0);
   assert.equal(b.blending, false);
   near(b.step(0).exposure, 1.6);
+});
+
+const HALL: Atmosphere = { env: 0.25, fog: [0.08, 0.06, 0.05], density: 0.02, exposure: 1.25, sun: 0, fill: 0.05 };
+
+function lighting() {
+  let mood = 0;
+  const writes: Atmosphere[] = [];
+  const outdoor = (): Atmosphere => ({ ...OUT, sun: OUT.sun * (1 - mood * 0.35) });
+  const p = new AtmosphereProfiles({ outdoor, profiles: { hall: HALL, cave: CAVE }, write: (a) => writes.push({ ...a, fog: [...a.fog] }) });
+  return { p, writes, setMood: (m: number) => ((mood = m), p.outdoorChanged()) };
+}
+const last = (w: Atmosphere[]) => w[w.length - 1];
+
+test("profiles: outdoors a mood change shows at once; inside it waits for the way out", () => {
+  const { p, writes, setMood } = lighting();
+  assert.equal(p.profile, "outdoor");
+  setMood(1);
+  near(last(writes).sun, 2.1 * 0.65);
+  p.set("hall", 1.5);
+  near(last(writes).sun, 2.1 * 0.65, 1e-6); // the blend starts where it is
+  p.update(1.5, { x: 0, y: 0, z: 0 });
+  assert.deepEqual(last(writes), HALL);
+  const n = writes.length;
+  setMood(0);
+  assert.equal(writes.length, n, "inside: nothing written");
+  p.set("outdoor", 2);
+  p.update(2, { x: 0, y: 0, z: 0 });
+  near(last(writes).sun, 2.1);
+  // settled outdoors: no per-frame writes
+  const m = writes.length;
+  p.update(0.1, { x: 0, y: 0, z: 0 });
+  assert.equal(writes.length, m);
+});
+
+test("profiles: climb-out follows the distance to the mouth; unknown names are ignored", () => {
+  const { p, writes } = lighting();
+  p.set("cave", 0);
+  assert.deepEqual(last(writes), CAVE);
+  const bend = { x: 0, y: 50, z: 0 };
+  p.set("climb-out", 0, { anchor: bend, span: 13 });
+  p.update(0.1, { x: 20, y: 50, z: 0 });
+  near(last(writes).sun, 0);
+  p.update(0.1, { x: 6.5, y: 50, z: 0 });
+  near(last(writes).sun, 2.1 * 0.5);
+  p.update(0.1, { x: 0, y: 50, z: 0 });
+  near(last(writes).sun, 2.1);
+  near(last(writes).exposure, 1.05);
+  // stepping out with an exposure flare
+  p.set("outdoor", 2, { start: { exposure: 1.6 } });
+  near(last(writes).exposure, 1.6);
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    p.set("attic", 1);
+  } finally {
+    console.warn = warn;
+  }
+  assert.equal(p.profile, "outdoor");
 });

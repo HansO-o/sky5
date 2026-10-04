@@ -33,6 +33,8 @@ test("pickSources: nearest in front within range, priority first, lit ones keep 
   assert.deepEqual(pickSources([c[2], c[0]], eye, fwd, 1, none, O), [1]);
   // priority beats distance and facing
   assert.deepEqual(pickSources([...c, { id: 6, x: 0, y: 0, z: 10, priority: 1 }], eye, fwd, 2, none, O), [6, 5]);
+  // a source with its own reach competes from farther away
+  assert.deepEqual(pickSources([c[3], { ...c[3], id: 9, reach: 40 }], eye, fwd, 2, none, O), [9]);
   // hysteresis: a lit source 1 m farther still wins; 2 m farther does not
   const pair = (d: number) => [{ id: 7, x: 0, y: 0, z: -5 }, { id: 8, x: 0, y: 0, z: -5 - d }];
   assert.deepEqual(pickSources(pair(1), eye, fwd, 1, new Set([8]), O), [8]);

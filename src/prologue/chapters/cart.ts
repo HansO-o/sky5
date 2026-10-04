@@ -1,6 +1,7 @@
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import type { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import { loadGLB } from "../../game/loaders";
+import { precompile } from "../../engine/render/precompile";
 import { audio } from "../../core/audio";
 import { input } from "../../core/input";
 import { hud } from "../../ui/hud";
@@ -126,7 +127,10 @@ export class CartChapter implements Chapter {
             r.position.set(0.82, 1.15, 0.6);
             r.rotation.set(0, Math.PI / 2, 0.15);
           }
-          for (const r of [...lantern.rootNodes, ...shield.rootNodes]) w.addShadowCasters(r.getChildMeshes());
+          const meshes = [...lantern.rootNodes, ...shield.rootNodes].flatMap((r) => r.getChildMeshes());
+          w.addShadowCasters(meshes);
+          // attached out of view: compiled before the wagon comes back into it
+          void precompile(meshes, { shadows: w.env.shadows });
         };
         attach();
       })

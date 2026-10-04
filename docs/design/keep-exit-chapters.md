@@ -1438,3 +1438,347 @@ Without `assets-src/chars/anim_full/UAL*.glb` the build now fails and tells you 
 - `anim_combat` is 426 KB brotli, not the ≈ 330 KB estimate. Attacks are fast, so resampling drops fewer keys: 8.9 KB/s here against 6.9 KB/s for `anim_base`. The keep start pack is still far under its limit.
 - `chars/anim_base` had to change, but only for the orphan cleanup. Clip names, order and all clip data are the same, so runtime code is unaffected.
 - §3.4 said to zero the root translation and called `Sword_Block`'s −0.08 m root a bug to fix. Both were wrong. The UAL2 sword pose compensates for that offset, and zeroing it put the feet 7.6 cm ahead of the idle footprint. The root is pinned at the offset instead (see "Root pin and footprints"). The curves are unchanged.
+
+### Keep exterior, interior and terrain holes (`town/buildings`, `keep/interior`, `keep/anchors`, `cart/terrain`)
+
+Built by `tools/gen/townbuildings.mjs` (`buildKeep`, `buildPosternLeaf`), `tools/gen/keepinterior.mjs` (self-contained: layout data, meshing, bake, validation, glTF) and `tools/gen/terrainHoles.mjs` (used by `tools/gen/terrain.mjs`). Rebuild with `node tools/build-assets.mjs --only=cart/terrain,town/buildings,keep/interior`; `--only` now takes a comma-separated list.
+
+| Manifest id | Type | Segment | Priority, `pos` | Raw / brotli | Content |
+|---|---|---|---|---|---|
+| `keep/interior` | glb | **keep** | 95, [60, −662] | 2.36 MB / 2.08 MB | Rooms G1–G5 and B1–B5, the 10 cells, 5 door leaves, colliders, 100 anchor nodes. 37.8k render triangles. |
+| `keep/anchors` | json | **keep** | 95, [60, −662] | 25 KB / 6 KB | Every anchor, door (the postern included), zone, blocker and room in keep-local **and** world coordinates. Load with `loadJSON("keep/anchors")`. |
+| `town/buildings` | glb | muster | 96 (unchanged) | 3.75 MB / 3.67 MB (+0.14 MB) | The keep node changed (below); every other building is byte-for-byte the same geometry. |
+| `cart/terrain` | glb | cart | 100 (unchanged) | 1.62 MB / 1.03 MB | `terrain_4_1` lacks the 96 quads (2 m grid) of `KEEP_HOLE.render`. Manifest field `_holes: ["keep"]`. |
+
+**Frame.** Everything in `keep/interior` is in the keep-local frame of `buildKeep`: +X east, +Y up, −Z north, origin on the keep base at its centre. World = (60 + x, 37.73 + y, −662 + z). The ground-floor top is local 0.4 (world 38.13); the basement floor is local −5.6 (world 32.13). **Parent the GLB's root `keep_interior` under the keep holder** (`town.keep`, placed at `heightAt(60, −662) − 0.2`), so the interior and the shell share one transform. The JSON `world` values use 37.73; the runtime heightfield gives 37.74.
+
+**`town/buildings` keep changes:**
+- The `keep` node is now a **mesh-less group at the origin**, with the children `keep_shell` (mesh) and `keep_postern` (hinge). `keep_postern` has one child, `keep_postern_leaf` (mesh). Before, `keep` was a mesh node. Quantisation had moved its origin to the bbox centre (0, 7.25, 0.1), and `piece()` in town.ts recentres a piece on that node, so the shell stood 0.1 m north of its frame. It now stands exactly in its frame, as the interior does. Other buildings are untouched: `tower_breach` still has its quantisation offset (3.2, 7.55, 0), so `piece()` probably still shifts it by −3.2 m in x. This is a runtime issue to check; it was not changed here.
+- The `dark` box in the gate passage is gone.
+- The gate opening now starts at local 0.42: a stone threshold 2 cm proud of the hall floor. The terrain in the passage reaches 0.40, and the hole stops 1 m short of the outer face, so the threshold stays above it. The runtime door leaves stand with their bottom at about local 0.2, so the threshold hides their lowest 0.22 m. That already shows on the closed gate in the muster, execution and dragon chapters, and the leaves clip while they swing. **Raise the leaves to ≥ 0.42** (item 1 of the integration checklist below).
+- The corner turrets (`TURRET` in `townbuildings.mjs`: 3.2 m boxes on the corners, y 0…15) reach 0.4 m past the inner wall faces, to x ±11.4, z ±7.4. The shell is unchanged. The interior wraps each stub in a 0.4 × 0.4 m pilaster (see the deviations), so no shell stone shows inside a room.
+- **West postern:** opening z 2.3…3.7, y 0.4…2.8 through x −13…−11.8, with a 0.1 m sill outside. `keep_postern` sits at (−11.86, 0.4, 2.3), on the north jamb at the inner face. The closed leaf runs +Z from it. **Rotating `keep_postern` about its local +Y by +π/2 swings the leaf inward (+X).** Textures are `dark_wooden_planks` (512) and `rusty_metal_02` (256).
+  - The leaf is a child of `keep`, so today it merges into the keep's static body: closed, and correct for K0.
+  - To open it, find `keep_postern` under `town.keep` and split the `keep_postern_leaf` meshes out of the keep group in `ensurePhysics`, as is done for `keepDoors`. Give them their own body tagged `postern`, unfreeze their world matrices, and use `BodyFollower`.
+- The main-gate leaves stay the runtime `large_castle_door` instances (`keep_door_hinge_±1`, tags `keep_door_l/r`). No procedural leaves were added, because they would have doubled the existing ones. The passage behind them is clear: the hall keeps x −2…2, z ≥ 6.2 free, and the leaves reach about z 6.35 when open at 85°.
+
+**`keep/interior` node tree** (`keep_interior` → …):
+
+| Node | What | Runtime use |
+|---|---|---|
+| `keep_gf`, `keep_stair`, `keep_bs` | Render meshes, one primitive per material: `ki_castle`, `ki_brick` (stone_brick_wall_001), `ki_floor` (rock_tile_floor), `ki_wood` (dark_wooden_planks), `ki_planks` (old_planks_02), `ki_iron` (rusty_metal_02, metallic). | Show `keep_gf` + `keep_stair` in zone `K_GF`, `keep_stair` + `keep_bs` in `K_BS`. Set `hasVertexAlpha = false` (COLOR_0 is VEC4 UNORM8, alpha 1), `maxSimultaneousLights = 5`, `receiveShadows` as you prefer. |
+| `keep_gf_col`, `keep_stair_col`, `keep_bs_col` | Collider meshes, POSITION only, **no material**. Unsubdivided boxes (walls and ceilings 0.2 m thick behind each face, the ground-floor slab, pillars, corner pilasters, rubble, shelving, cell fronts, vault segments) plus **one ramp per stair flight** (35.54°, through the middle of the treads; the steps themselves have no collider). 2,664 triangles in total. | `setEnabled(false)` every node whose name ends in `_col`. Build static Jolt meshes from their world geometry, as `appendWorldGeometry` does. The ground-floor slab in `keep_gf_col` covers x 47.5…72.5, z −670.5…−653, top 38.13, except over the stairwell, as §3.1 requires. |
+| `door_g2`, `door_store`, `door_stair`, `door_torture`, `door_cells` | Hinge nodes at the hinge axis, at floor level. They are **identity when closed**. Children: `<name>_leaf` (mesh) and `<name>_col` (box collider). | Body tag = JSON `doors.<tag>`. **Open by setting the hinge's `rotationQuaternion = Quaternion.RotationAxis(Vector3.Up(), t · openYaw)`** (t from 0 to 1). The `_col` child moves with it (`BodyFollower`, or toggle the body). The postern works the same way, but its hinge `keep_postern` is in `town/buildings` (JSON `doors.postern`). |
+| `drain_plug` → `drain_plug_mesh`, `drain_plug_col` | A black card plus a box at the far end of the drain mouth (z −688.6). | Remove both once `cave/mesh` is shown (K9). Until then it stops the void showing through, and stops walking into it. Its tag suggestion is `blocker_drain`. |
+| `anchors` → `anchor_<name>` | Empty nodes: translation = local position; rotation = yaw about +Y (local −Z is the facing); zones (`anchor_zone_<id>_<i>`) and blockers carry their **half extents as scale** of a unit cube [−1, 1]³. | Same data as the JSON (prefer the JSON: it has the world values and metadata). |
+
+**Doors** (tags from §3.1; `openYaw` signed, radians, about +Y in the right-handed frame):
+
+| Tag | Node | Opening (local) | Hinge (world) | Closed → opens toward | `openYaw` | Initial |
+|---|---|---|---|---|---|---|
+| `g2_door` | `door_g2` | x −6.6…−6.0, z 4.3…5.7 | (53.95, 38.13, −657.68) | +Z → hall (+X) | +π/2 | closed |
+| `store_door` | `door_store` | x 6.0…6.6, z 3.0…4.4 | (66.54, 38.13, −657.62) | −Z → storeroom (+X) | −π/2 | **locked** |
+| `stair_door` | `door_stair` | x 9.0…10.4, z 0.6…1.2 | (70.38, 38.13, −660.86) | −X → storeroom (+Z) | +π/2 | closed |
+| `torture_door` | `door_torture` | x −1.0…−0.4, z 4.9…6.3 (basement) | (59.06, 32.13, −657.08) | +Z → B3 (−X) | −π/2 | closed |
+| `cell_gate` | `door_cells` (bars) | x −7.1…−4.7, z −2.0…−1.4 (basement) | (52.96, 32.13, −663.95) | +X → cell corridor (−Z) | +88° (1.5359) | **open**: set t = 1 at load. Open, it lies along the corridor's west side (x −7.08…−7.00, z −1.97…−4.28), clear of the masonry and of west cell 1's bars. |
+| `postern` | `town/buildings` `keep_postern` | west wall z 2.3…3.7 | (48.14, 38.13, −659.7) | +Z → G2 (+X) | +π/2 | closed. JSON `doors.postern` has `asset: "town/buildings"` and `collider: null`; build its body from `keep_postern_leaf`'s meshes. |
+
+The G3 barracks doorway (x −0.7…0.7 at z −2.2…−1.6) is open and has no leaf. The cell doors are part of the static bars: all are closed except **west cell 3**, which stands open 70° into the cell for the loot potion.
+
+**`keep/anchors` JSON** (`version: 1`):
+- `frame`: origin, yaw convention, parenting note. `levels`: `gf` / `bs` local and world heights.
+- `anchors.<name>`: `{kind, local, world, yaw?, room, …}`.
+  - `yaw` uses the game convention, atan2(−dx, −dz) of the facing: −Z = 0, west = π/2, east = −π/2.
+  - `room` is the air box the anchor stands in, or `"outside"`.
+  - Kinds:
+    - `light` (25): has `light` (sconce / brazier / fire / candle) and `lightHint` `{intensity, range, color}`. Sconces add `wall` (the bracket point, local and world) and `normal`. The position is the flame, 0.22 m off the wall.
+    - `prop` (17) and `use` (9, interactables): have `prop`, a *suggested* asset. `kit/<Model>` is the FPM kit, `ph/<id>` an existing manifest id, `procprops/<name>` the procedural-props unit. Some also have `items` and `route`.
+    - `spawn` (4), `mark` (22), `cp` (8): `cp_*` carry `companion`, a **world** [x, y, z].
+    - `camera` (2): the K1 bonds shots, with `lookAt` in world coordinates.
+    - `blocker` (3): `half` extents and a `tag`.
+    - `ext` (5): the outdoor K0 marks from §4.1.
+- `doors.<tag>`: `{asset, node, leaf, collider, hinge{local, world}, closedDir, openDir, openYaw, width, height, initial, opening{min, max}}`. `asset` is `keep/interior` for the five interior doors and `town/buildings` for `postern`, whose `collider` is `null`.
+- `zones`: `K_GF`, `K_BS`, `E1`, `E2`, `E3`, as lists of `{min, max, worldMin, worldMax}`. The `K_GF` / `K_BS` boundary is local y −1.0 (world 36.73), halfway down flight A, so the tremor point is already in `K_BS`.
+- `rooms`: every air box, local and world. **For `cave.mjs`:** B5 is x 49…59, z −688…−682, floor 32.13, ceiling 35.53. The drain mouth is x 52.9…55.3, z −688.6…−688, y 32.13…34.73. The cave tunnel should start beyond z −688.6 or subtract these boxes.
+- `vault`, `stairs`, `stats`.
+
+**Names you will look up** (all in `anchors`):
+- **Lights:** `light_brazier_w/e`, `light_hall_w/e/n1/n2`, `light_g2_fire`, `light_g2_s/e`, `light_g3_1/2`, `light_g4`, `light_g5_top/mid`, `light_b1`, `light_b2_1/2`, `light_brazier_b3`, `light_b3_s/w`, `light_b4_1/2`, `light_b5_s/e`, `light_j_candle`.
+- **Interactables:** `use_weaponstand_imp`, `use_locker_imp`, `use_chest_reb`, `use_weaponstand_reb`, `use_footlocker`, `use_store_potions`, `use_records`, `use_cell_potion`, `use_j_chest`.
+- **Spawns:** `spawn_e1r_shield/captain`, `spawn_e1i_axe/leader`.
+- **Checkpoints:** `cp_k1_reb/imp`, `cp_k2_reb/imp`, `cp_k3` … `cp_k6`.
+- **Bond spots:** `mark_bond_*`.
+- **Retry marks:** `mark_e1r_retry_*`, `mark_e1i_retry_*`, `mark_e2_retry_player`.
+- **Torture room:** `mark_interrog`, `mark_assistant`, `mark_b3_companion`, `mark_key_land`.
+- **Cells and J:** `mark_oldman`, `mark_whisper`, `mark_jailer`, `mark_fugitive`, `mark_dead_jailer`, `mark_drain`.
+- **Other marks:** `mark_tremor`, `mark_crushed_guard`, `mark_postern_inside`.
+- **Blockers:** `blocker_gate` (4 × 5 × 0.3 at z −653.9), `blocker_postern` (the K1 beam), `blocker_drain`.
+
+**Baked vertex colour.** COLOR_0 = AO × (0.35 cool ambient + warm falloff) × grime × noise, clamped to [0, 1].
+- **AO:** 5 probes at 0.15–1.3 m against a union-of-boxes SDF, including the vault and solid objects.
+- **Warm falloff:** from every `light` anchor, (1 − d/R)^1.6. Radii: sconce 6.5 m, brazier 9, fire 8, candle 3. Each contribution is occlusion-tested, so no light leaks through walls.
+- **Grime:** walls are 40 % darker at the floor, fading out by 0.6 m. Floors are ×0.86, ceilings ×0.82. Soot lies above sconces and braziers.
+
+The bake assumes the anchors' lights are lit. Mean vertex luminance is about 0.3.
+
+**Build validation** (fails the build):
+- Anchor names are unique.
+- Every mark, spawn, cp, use and prop anchor stands in a room, on a floor (probed, ±6 cm). Marks, spawns and cps have a clear 0.25 m body at 0.9 m height.
+- Prop footprints do not overlap. Props from different routes may share a spot.
+- Door hinges lie inside their openings.
+- **Doors swing clear.** This covers every interior leaf and the postern, at t = 0, ¼, ½, ¾ and 1. More than 0.12 m from the hinge axis, the leaf's collider box must not overlap any static collider box (oriented-box SAT, 3 mm tolerance). Every leaf vertex must stay in room air: not in masonry, not inside a solid and not inside a static collider. At the hinge the leaf may turn into its jamb by at most half its thickness, because its axis lies on the jamb face. No prop or interactable footprint may lie in the sweep.
+- **Ground floor over the terrain hole.** Every 0.25 m sample of the keep's effective collider hole (x 48…72, z −670…−654) is probed down from GF + 5 cm. The first collider must be the floor at GF (± 3 cm), or something standing on it. Inside the G5 stairwell it must be a ramp, the mid landing, the core, the railing or the NE pilaster. The bare stairwell floor at BS counts only at the foot of flight B.
+- **The keep shell stays outside the rooms.** `buildKeep()` is run, and its triangles are sampled at ≤ 0.1 m. No sample may lie in room, door or passage air outside every solid.
+- These checks were mutation-tested. Each of the following fails the build: no pilasters, the slab lowered 1.4 m, no slab, no ramp A, and the old cell-gate pose at 100° or at 90°.
+- Render triangles are 25–45k. Outside 30–40k gives a warning.
+
+**Checked after the build** (scripts in the session scratchpad, not shipped):
+- First build: all 75 previous manifest ids existed. Only `cart/terrain` and `town/buildings` changed hash. Review fixes (`--only=keep/interior`): all 77 ids exist, and only `keep/interior` and `keep/anchors` changed hash. `town/buildings` is unchanged: `TURRET` only names the existing numbers, and the `buildKeep` output hash is the same.
+- `terrain_4_1` has 0 triangles left inside the hole.
+- Walk test with ray casts against the decoded `*_col` triangles, doors open: gate → hall → storeroom → both flights → B1 → B2 → B3 → cell gate → B4 → B5 → drain, plus G2/postern, the barracks and west cell 3. Every sample has a floor. The largest step up is 0.107 m and step down 0.178 m (limits 0.45 / 0.5). Head room is ≥ 2.10 m, and nothing blocks at 0.5/1.0/1.6 m. The main path was re-run after the fixes: step up 0.107, step down 0.143, head room 2.40, nothing blocks.
+- Corner renders from the decoded GLBs: the shell is drawn in a flag colour, and the doors are optionally opened by `openYaw`. G5 (from flight A, from the mid landing, and looking up the NE corner), G2 SW, G2n NW and G4 SE all show 0 shell pixels. The only shell visible from inside is the postern's own jamb reveal (3.5 cm deep beside the closed leaf), and the cell gate lies flush along the corridor wall.
+
+**Runtime integration checklist (keep).** These are the runtime changes the pipeline outputs need, in `src/**`, owned by the runtime engineer:
+1. **Main-gate leaves:** raise the `large_castle_door` instances in `src/world/town.ts` (`keep_door_hinge_±1`, tags `keep_door_l/r`) so their bottom is at ≥ keep-local 0.42, the top of the new gate threshold. Today it is ≈ 0.2. This fixes the hidden bottom on the shipped closed gate and the clipping while they swing.
+2. **Interior parenting:** parent `keep_interior` under `town.keep`, then `setEnabled(false)` every `*_col` node and build static bodies from them.
+3. **Doors:** register one body per `doors.<tag>` (tags from §3.1) and open via the hinge node's `RotationAxis(Up, t · openYaw)`. `cell_gate` starts at t = 1. `store_door` starts locked.
+4. **Postern:** in `ensurePhysics`, split `keep_postern_leaf` out of the keep's static body, tag it `postern`, and drive it from `doors.postern` (hinge, `openYaw`). Use no hard-coded numbers.
+5. **Drain:** remove `drain_plug` when `cave/mesh` is shown (K9).
+6. **Materials:** on the `ki_*` materials set `hasVertexAlpha = false` and `maxSimultaneousLights = 5`. Show `keep_gf` / `keep_stair` / `keep_bs` per zone `K_GF` / `K_BS`.
+
+**Terrain holes.** `tools/gen/terrainHoles.mjs` mirrors `src/world/terrainHoles.ts`; keep the two tables identical.
+- `cart/terrain` cuts a hole only when its `cover` asset ships. That set is the `HOLE_COVERS` constant in `build-assets.mjs`, and today it holds only `keep/interior`. This matches `activeTerrainHoles` at runtime.
+- A gate fails the build when the manifest ships a cover whose hole is not cut, or the reverse.
+- When `cave/mesh` ships, add `"cave/mesh"` to `HOLE_COVERS` and rebuild with `--only=cart/terrain,cave/…`. Until then `EXIT_HOLE` is closed in both the render mesh and the collider. *(Done: `cave/mesh` now ships, `HOLE_COVERS` holds it and `cart/terrain` cuts `EXIT_HOLE`. See "Cave and balcony outcrop" below.)*
+
+**Deviations:**
+- **Asset ids** are `keep/interior` + `keep/anchors`, as in §10.1 and the runtime's `KEEP_HOLE.cover`. The pipeline task had named it `town/keep_interior`.
+- **Main-gate leaves** were not rebuilt (see above). The task asked for procedural leaves in `buildKeep`, but the runtime already has openable leaves.
+- **Moved marks:**
+  - Brun's E1 rebel retry mark (§5.4) moved from (53.6, −656.0), which lies inside the G1/G2 partition, to (55.4, −656.6).
+  - The imperial WeaponStand moved from (64.6, −655.0), which overlapped the east brazier at (64.8, −655.4), to (65.55, −656.75) against the east partition, still facing −X.
+- **Wall thickness:**
+  - The design had a zero-thickness wall at x −1.0 between B2 and B3. B2 now starts at x −0.4, giving the 0.6 m wall the torture door sits in.
+  - The same applies at z −1.4 between B3 and B4. The cell corridor now starts at z −2.0, and the cell gate sits in that wall.
+- **Corner pilasters.** The shell's corner turrets reach 0.4 m inside the walls. The interior adds a pilaster at each corner: `pilaster_sw` in G2, `pilaster_nw` in G2n, `pilaster_se` in G4, and `pilaster_ne` + `pilaster_ne_low` in G5. Each is 0.4 × 0.4 m, sits 2 cm proud of the stub, runs floor to ceiling, is baked, and has a collider. G5's stands on the mid landing; it is brick below GF and castle above, like the stairwell walls. The exterior silhouette is unchanged.
+- **Cell gate:** it opens 88°, not past perpendicular. The hinge is 6 cm in from the corridor's west face (x −7.04), and the leaf is 2.31 m wide.
+- **Heights the design left open:** the hall is 6.0 m clear (ceiling 6.4, plank ceiling on joists, a girder over the pillars). G2, G3, G4 and G5 are 4.0 m clear. G2's collapsed bay (z < −665) is open to 6.0 m, with broken boards, rubble and fallen beams, and no roof hole.
+- **Cell bars and the barred cell gate are in `keep/interior`.** §10.1 lists "cell bars" under `procprops.mjs`, so that unit only needs the cage, shackles and the other loose props.
+- **Postern leaf textures** add 0.14 MB to the `muster` start pack, which is now 12.14 MB.
+
+### Cave and balcony outcrop (`cave/*`, `fx/water_n`)
+
+Built by `tools/gen/cave.mjs`. It is self-contained: layout data, the rock field, meshing, validation and glTF. Two helpers sit beside it: `tools/gen/webtex.mjs` makes the web atlas and `tools/gen/watertex.mjs` makes the water normal map. Rebuild with `node tools/build-assets.mjs --only=cave/`, which takes about 35 s. The `cave/` step also emits `fx/water_n`. `cart/terrain` now cuts `EXIT_HOLE`, because `HOLE_COVERS` holds `cave/mesh`. Rebuild it only when `terrainHoles` changes.
+
+The cave reads the keep's drain room from `keepinterior.mjs` when it builds. If the drain changes, rebuild both: `--only=keep/,cave/`. A gate in `build-assets.mjs` fails the build otherwise (see Joins). The build is reproducible: identical sources give byte-identical outputs, `cave/anchors` included, because it carries no timings. `node tools/check-cave-mutations.mjs` (`npm run check-cave`) re-runs the mutation test of the validator (see Validation).
+
+| Manifest id | Type | Segment | Priority, `pos` | Raw / brotli | Content |
+|---|---|---|---|---|---|
+| `cave/mesh_a` | glb | **keep** | 93, [50, −715] | 124 KB / 94 KB | Zone A (the entry tunnel and the gallery), its collider, the water ribbon and the perch steps. 8.1k render triangles (7.5k cave, 0.56k water). |
+| `cave/mesh` | glb | **exit** | 95, [−10, −730] | 469 KB / 370 KB | Zones B–E and their colliders, the terraced stair, web walls A/B, corner webs, cocoons, egg sacs and the den fissure. The 1024² web atlas is embedded. 20.0k render triangles (17.4k cave, 2.6k dressing). **This is `EXIT_HOLE.cover`.** |
+| `cave/outcrop` | glb | **muster** | 90, [−17, −673] | 77 KB / 60 KB | The outcrop's skin, including the platform, plus the rails and the mouth plug. 4.4k render and 1.9k collider triangles. Its only textured material is `outcrop_rock`, which uses the moss set. |
+| `cave/anchors` | json | **keep** | 95, [50, −715] | 26 KB / 9 KB | Anchors, walk paths, zones, volumes, webs, stair, perch, outcrop, dressing, lights, materials, joins and build stats. Load it with `loadJSON("cave/anchors")`. |
+| `cave/tex/{rock,ground,pebbles}_{d,n,arm}` | ktx2 | keep | 92 / 90 / 88, [50, −725] | 1.07 MB | Poly Haven CC0 `rock_face_03`, `rocks_ground_08` and `ganges_river_pebbles`. `_d` is 1024² colour, `_n` is 512² normal (OpenGL / `nor_gl`), `_arm` is 512² linear (R = AO, G = roughness, B = metal). |
+| `cave/tex/moss_{d,n,arm}` | ktx2 | **muster** | 92 / 90 / 88, [−17, −673] | 0.35 MB | `mossy_rock`, in the same layout. It ships with `cave/outcrop`, which binds it. `cave/mesh` (exit) uses it from there. |
+| `fx/water_n` | ktx2 | keep | 90, [48, −731] | 50 KB | 512² normal map that tiles in u and v (integer-wavevector sines, OpenGL convention). |
+
+The start packs after this build are:
+- keep 3.79 MB (+1.22 MB),
+- exit 0.38 MB,
+- muster 12.55 MB (+0.41 MB: the outcrop is 0.06 MB and the moss set 0.35 MB).
+
+Cart stays at 8.54 MB: the hole changes `cart/terrain` by +1.5 KB, and its hash changed. `cart/scatter` and `cart/heightfield` are byte-identical, and all 77 earlier ids still exist.
+
+**Frame.** Everything is in **world coordinates**. Add each container at the origin. Do not parent it, and do not use `piece()`, which recentres. Mesh nodes carry a translation and a uniform scale from `KHR_mesh_quantization`, so build bodies from world geometry, as `appendWorldGeometry` does. Every anchor `y` is the shipped collider's height at that x/z, so a `place3` ray lands within 3 mm of it. The build checks this against the decoded GLBs.
+
+**Rock field.** The rock is a signed distance field, meshed once with surface nets at 0.5 m, so the cave, the outcrop skin and the mouth share edges. Its parts:
+- **v4 air:** the design §4.3 splines, chambers and stream, with noise 0.55 m on walls and 0.12 m on floors.
+- **Extra air:** the chimney (a capsule Ø2.5 m from y 34.8 to 39 at (18, −750.5)) and the drain junction.
+- **Perch:** the rock box.
+- **Ground:** everything below the terrain − 0.5 m.
+- **Outcrop:** see below.
+
+Each triangle is classified by the term that makes it:
+- cave → zones A–E;
+- outcrop → `cave/outcrop`;
+- ground → dropped (the terrain mesh renders it).
+
+Simplification is joint, to 35 % for render and 12 % for colliders, then the result is split. Every render mesh **and** every collider also carries a one-triangle ring of its neighbours' triangles. Each mesh is quantised on its own, and the ring covers the millimetre cracks that leaves at the seams. Do not filter those duplicates out.
+
+**`cave/mesh_a`** (`cave_a` → …), **`cave/mesh`** (`cave` → …), **`cave/outcrop`** (`outcrop` → …):
+
+| Node | What | Runtime use |
+|---|---|---|
+| `cave_A` … `cave_E` | Render meshes, one primitive per material: `cave_rock`, `cave_floor` (normal.y ≥ 0.72, stair and perch treads), `cave_bed` (A only), `cave_moss` (D/E: the last 25 m of the climb, stair risers, and every triangle that touches the outcrop, floor included). `cave_E` also has an `outcrop_rock` primitive, which is its ring of outcrop triangles. They carry POSITION, NORMAL, TEXCOORD_0 and COLOR_0, where COLOR_0 = baked SDF AO × variation × wet darkening near the stream, VEC4 UNORM8 with alpha 1. | Visibility set `cave_X` per zone (see Zones). Set `hasVertexAlpha = false`. |
+| `cave_A_col` … `cave_E_col` | Collider meshes, POSITION only, no material: the 12 % mesh plus explicit pieces. The stair has one ramp height field, through the tread middles (19 risers of 0.352 m, s 76 → 92.4, ramp ≤ 30°). The perch has one 40° ramp through its 8 steps (rise 0.378 m) and no step colliders. | `setEnabled(false)`, then build one static mesh body per node. They are permanent. |
+| `cave_water` | The stream ribbon at y 23.7, 0.6 m wider than the channel and 2 m past both ends into the rock. TEXCOORD_0 = (arc length / 2, across / 2) m. TEXCOORD_1 = (0…1 along the flow, 0…1 across), where foam is near v 0 and 1. There is no COLOR_0 and no collider. The flow runs from x 64 to x 32, which is **west**. | Material `cave_water`, alpha blend 0.75. Bind `fx/water_n` and scroll it (below). The slow and splash volume is `volumes.water`. |
+| `web_A`, `web_B` → `web_X_cards`, `web_X_col` | Three alpha cards 0.15 m apart, the middle one an orb web and the outer two sheets, plus one box collider (12 triangles). They are sized to the measured section, not 4.4 × 3.6: A is 5.9 × 5.15 m and B is 7.45 × 5.55 m. | Body tag `web_A` / `web_B`. To cut: dissolve the cards, then remove the body. JSON `webs.<id>` gives the box centre, half extents, axes, normal and size. |
+| `cave_webs` | 16 corner webs: orb or corner cards in pockets of the spider chamber and both doors. | Cosmetic. |
+| `cocoon_courier` → `cocoon_courier_mesh`, `cocoon_courier_col` | The courier's cocoon, lying along the wall at anchor `cocoon` (r 0.38, 1.8 m), plus a box collider. | Hold-E target. Hide or replace it when cut open, and remove its body. |
+| `cave_cocoons`, `cave_eggs` | Four hanging cocoons, and five egg sacs by `burrow_s` (material `cave_eggsac`, emissive teal, `KHR_materials_emissive_strength` 1.8). | Cosmetic. Light hint `lights.light_eggs`. |
+| `den_fissure` | An emissive 6 × 1.2 m card on the den ceiling (material `cave_fissure`). | Pair it with the spot light `lights.light_den_fissure`. Cosmetic. |
+| `outcrop_rock` | The outcrop skin and the flat platform, plus a one-triangle ring of zone E triangles at the mouth. It has one material, `outcrop_rock`, on the ring as well. The E triangles under the ring are `cave_moss`, which has the same textures, tile, UVs and vertex colours, so the doubled triangles render identically. | **Show with the town (outdoor set) from the muster chapter on.** It covers `EXIT_HOLE`, which `cart/terrain` cuts from the start. Its textures `cave/tex/moss_*` ship in muster too, so it is fully textured from the first frame it is shown. Keep it visible in zones D–E. |
+| `outcrop_col` | The outcrop's collider, including the platform deck (flat at 56.05, within 4 cm). | Static body. Build it with the town. |
+| `outcrop_rails_col` | Invisible 1.2 m rails along the platform's S edge (z −667, x −19…−11) and E edge (x −11, z −674…−667). | Static body. |
+| `outcrop_mouth_plug` → `_mesh`, `_col` | A black card 8.3 × 6.55 m plus a box, 3.5 m inside the mouth, facing out. | Shown until `cave/mesh` is in: it hides the empty tunnel from the town. Remove both (tag suggestion `blocker_mouth`) when `cave/mesh` is shown. In the fallback (cut #6) keep it as the void card. |
+
+**Materials and textures.** The rock materials in the GLBs are **untextured**. Their `baseColorFactor` is the mean colour of their diffuse, roughness is 1 and metallic is 0. TEXCOORD_0 is world position ÷ tile, in texture repeats, box-projected:
+- floors, the bed and ceilings use XZ;
+- walls use X or Z, following the tunnel direction (radially in chambers), and switch to the face's own axis where that would stretch.
+
+Each material's glTF `extras`, which Babylon puts in `material.metadata.gltf.extras`, read `{textures: {albedo, normal, orm}, tile, source}`. The ids are `cave/tex/*`, and `outcrop_rock` uses the moss set. To bind:
+- `albedoTexture` = `loadKTX2(albedo)`, and `albedoColor` = white.
+- `bumpTexture` = `loadKTX2(normal)`, with **`invertNormalMapX = false`, `invertNormalMapY = true`**. That is what the glTF loader sets for `nor_gl` maps in this right-handed scene, but it does so only when the file has a normal texture.
+- `metallicTexture` = `loadKTX2(orm)`, with `useAmbientOcclusionFromMetallicTextureRed`, `useRoughnessFromMetallicTextureGreen` and `useMetallnessFromMetallicTextureBlue` all true.
+
+The textures are shared by `cave/mesh_a`, `cave/mesh` and `cave/outcrop`, so load each id once. The moss set ships in muster with the outcrop. Every texture a GLB binds ships in its own segment or an earlier one. A triplanar plugin (like `TerrainSplatPlugin`) can use the same ids and ignore the UVs. Floor and wall are separate materials, so give both materials the same N.y blend so that their shared edges match.
+
+`cave_water` has `extras.textures.normal = "fx/water_n"`: bind it as `bumpTexture` with the same inversion flags and scroll `uOffset` at about 0.3/s along u. Ideally use two samples at different scales.
+
+The webs material `cave_web` has its atlas embedded: alpha blend, double-sided, emissive 0.05. Turn off depth write at runtime. `cave_cocoon` uses the same atlas, opaque. `loadGLB` already applies the light budget.
+
+**`cave/anchors` JSON** (`version: 1`):
+- **`anchors.<name>`:** `{kind, pos [x, y, z], zone, sdfFloor?, clear?, yaw?, faces?, use?}`.
+  - `yaw` is the game convention atan2(−dx, −dz).
+  - `pos.y` is the collider floor. On the stair that is the ramp, 0.2–0.45 m above the rock floor `sdfFloor`.
+  - `breach` stands in the keep's drain passage, so it has no cave collider under it.
+  - `bones_3` moved 0.5 m from (−23.5, −712.8), which is inside the den wall, to (−23.53, −713.3); see `stats.movedAnchors`.
+- **`paths.walk.<tunnel>`:** the tunnel centre floors every 2 m, as collider heights. Chain entry → toSpider → toDen → exit. The chain runs from `breach` to `balcony_mouth` with no gap over 2 m, except one crossing of `paths.chasm` (x 30…66, z −735.7…−727.3, the drawbridge gap). The build checks this. Use the points for breadcrumbs and `walkPath`. `paths.den_path` holds the 4 den sneak points; the closest approach to the wolf is **5.17 m**, not 5.5.
+- **`zones.A`…`E`:** `{boxes: [{min, max}], neighbours, show: ["cave_X"], profile}`. Define them **in order A, B, C, D, E with equal priority**, because overlaps resolve to the earlier zone. Neighbours are A–B, B–C, C–D and D–E. The profile is "cave", except E, which is "climb-out". The boxes are binned along the tunnels; the build checks that every walk sample resolves to its own zone, or to the neighbour within 4 m of a seam. Zone E's last box covers the outcrop top (x −26…−9, y 50…64, z −684…−664). Hand off to K_BS / `drain_plug` at `breach`.
+- **`volumes`:**
+  - `respawn_gallery`: y < 25.5 over the chasm, to the bank last stood on (`lever_stance`/`gal_s_cp`).
+  - `respawn_outcrop`: y < 50, to `platform`.
+  - `water`: the slow and splash box, surface 23.7, bed 23.1.
+  - `spider_arena` and `chasm`.
+- **`webs`, `stair`, `perch`** (`box`, `steps`, `ramp`) **and `outcrop`:**
+  - `platform`: y 56.05, x −19…−11, z −674…−667.
+  - `rails`, `mouthPlug`, `hole`, `scatterExclusion`.
+  - `vista`: per target the distance, yaw, clearance and where the line leaves the deck.
+  - `viewCorridor`.
+  - `props`: the `brow` suggestion `ph/rock_face_02` at (−19, 60.5, −674.6), and 5 `lip_*` boulder positions on the S/E edges, outside the view corridor.
+- **`dressing`** (cocoons, eggs, fissure), **`lights`** (`light_camp_fire`, `light_eggs`, `light_den_fissure`, with `hint` intensity, range and colour), **`materials`** and **`nodes`** (node → asset, kind, zone).
+- **`joins.drain`:** the keep's drain rectangle the cave was clipped to (world `keep.min`/`keep.max`, plus `clipZ`). `build-assets.mjs` compares it with `keep/anchors` `rooms.drain`.
+- **`stats`:** validator measurements. These include `probes` (minimum clearance and half-width, with where they occur) and `connectivity` (centreline samples and the chasm crossing). Timings are only logged, so the file is reproducible.
+
+**Anchors** (world; y = collider floor):
+
+| Anchor | x, y, z | Clear | Note |
+|---|---|---|---|
+| `breach` | 54, 32.15, −688.5 | 2.6 | in the keep's drain (keep floor) |
+| `ramp_foot` | 54, 30.24, −697 | 4.3 | |
+| `cp_gallery` / `comp_gallery` | 51, 28.15, −714 / 52.2, 28.43, −713 | 4.85 | CP7, yaw −0.25 |
+| `gal_entry_mouth` | 49.5, 27.01, −721.5 | 5.3 | |
+| `camp_fire` | 53.5, 27.97, −724 | 4.4 | prop; light `light_camp_fire` |
+| `sitA` / `standB` | 52, 27.75, −722.8 / 54, 28.01, −725.5 | 4.1 / 5.05 | both face `camp_fire` |
+| `interrog_body` | 51, 27.29, −724.8 | 6.2 | design said 27.9: the ledge falls to the west |
+| `perch` / `perch_foot` | 55, 30.11, −727.6 / 49.85, 27.05, −727.2 | 3.6 / 7.65 | perch faces `gal_entry_mouth` |
+| `lever` / `lever_stance` / `comp_lever` | 44, 27.98, −725 / 44, 27.98, −724 / 45.5, 27.51, −723.5 | | stance yaw 0 (CP8) |
+| `winch` | 44.8, 27.73, −725.8 | | |
+| `bridge_n` / `bridge_s` | 48, 26.95, −726.5 / 48, 27.11, −736.5 | 7.55 / 7.2 | |
+| `bridge_hinge` / `slab_drop` | 48, 27.0, −735.6 / 48, 34.8, −731.5 | | fixed y; crown 35.56 above the raised tip |
+| `gal_s_cp` / `comp_s` | 47.5, 27.06, −738.5 / 49.2, 27.14, −739 | 6.0 | exit CP0, yaw 0.2 |
+| `web_A` / `cp_spider` / `comp_spider` | 27, 27.63, −749.5 / 31.5, 27.73, −749 / 33, 27.70, −748.5 | | CP1 yaw 1.57 |
+| `spider_c` | 18, 27.55, −750 | 12.5 | open up the chimney |
+| `chimney_mouth` / `chimney_top` | 18, 34.8, −750.5 / 18, 39, −750.5 | | the giant drops from the mouth |
+| `burrow_n` / `burrow_s` / `cocoon` | 15, 28.42, −745.5 / 21, 28.52, −755 / 22, 28.45, −754 | | |
+| `web_B` / `cp_spider_done` / `comp_spider_done` | 10.5, 27.86, −749.2 / 12, 27.79, −749.5 / 13.5, 27.72, −749 | | CP2 yaw 1.57 |
+| `cp_den` / `comp_den` | −16.5, 31.56, −729 / −15.5, 31.40, −730.2 | 4.25 | CP3 yaw 2.45 |
+| `wolf_bed` / `satchel` / `den_centre` | −22, 32.85, −718 / −20.5, 33.47, −716.5 / −24, 32.47, −720 | | the wolf faces `cp_den` |
+| `bones_1..3` | (−24.5, 32.48, −721), (−26.8, 32.79, −715.5), (−23.53, 33.12, −713.3) | | props |
+| `den_path_1..4` | (−19, 32.06, −726), (−25.5, 33.13, −723.5), (−27.5, 33.00, −718), (−27, 33.13, −712.5) | | |
+| `cp_climb` / `comp_climb` | −28, 33.73, −709 / −27, 33.41, −711 | 4.5 | CP4 yaw 2.7 |
+| `climb_s23` / `climb_mid` | −33, 35.53, −699 / −46, 40.73, −681 | | leash limit; wind bed |
+| `cp_light` / `stub84` | −25, 51.28, −684 / −21.9, 53.32, −681.3 | 5.9 / 5.75 | stair (ramp heights) |
+| `bend` | −21, 54.08, −680 | 5.75 | zone D/E seam |
+| `balcony_mouth` / `platform` / `comp_platform` | −17.5, 56.05, −673.5 / −15, 56.05, −670.5 / −17.6, 56.05, −672 | | platform yaw −1.68 (CP5) |
+| `vista_eye` | −15, 57.7, −670.5 | | camera |
+
+**Joins this module owns.** The build fails if any of these breaks:
+- **Drain mouth.** The cave is clipped exactly at z −688.58, 2 cm into the keep's drain passage. Its opening is the keep's rectangle (x 52.9…55.3, y 32.13…34.73) inset by 1 cm, so the two neither crack nor share a coplanar strip. 2.5 m into the cave, the drain-box floor (32.15) drops 0.34 m onto the tunnel floor.
+- **`EXIT_HOLE`.**
+  - The tunnel meets the terrain only inside `EXIT_HOLE.render`.
+  - Every point of the hole is under the outcrop. The outcrop adds a cap over the hole that follows the terrain + 1.3 m; the terrain inside the hole reaches 68 m, above the hood.
+  - The runtime height field survives a few triangles outside `samples`, along the mouth's west wall. The pipeline models it exactly (4 m `heightAt`, 512/255 m sample grid, either quad diagonal) and the tunnel floor there follows those triangles + 3 cm, so none of them reaches into the tunnel.
+- **Openings.** The cave opens to the sky only at the mouth. Every walk sample has rock overhead except the last 1.5 m.
+- **Walkability, on the field and its colliders.** The centreline is sampled every 0.5 m. Each sample takes the **largest vertical air gap** of its column, from 2.5 m below the design floor to 2.5 m above its clear height. A sample fails if:
+  - its column has no air (**sealed**);
+  - the gap has no floor in the window (**hole**);
+  - the gap is under 2.6 m (**low**);
+  - the half-width is under 0.9 m (**narrow**). Half-width is measured **across the tunnel tangent**, at 1.2 m above the floor, to the nearer wall;
+  - there is no collider on the floor.
+
+  Only `paths.chasm` and the keep's drain passage (entry, z > −688.88) are exempt. Lines 1 m to either side are also checked where they stand in the open. Everywhere: steps are ≤ 0.45 up and ≤ 0.5 down, head room is ≥ 2.2 m, and there is rock overhead except in the last 1.5 m.
+- **Connectivity.** The centreline samples are chained breach → entry → toSpider → toDen → exit. Every run of failed samples is an error, except two: the drain passage at the very start, and **one** chasm run whose banks are ≤ 12 m apart with the line between them over the water. Tunnels must meet end to start (≤ 0.75 m apart, step ≤ 0.45 m). The chain must start within 1 m of `breach` and end within 1 m of `balcony_mouth`.
+- **Walkability, on the decoded GLBs.** This check runs before anything is emitted. It uses the shipped colliders, quantised, without the removable web, cocoon and plug bodies. Every anchor must sit within 3 cm of a collider. The walk chain is sampled every 0.25 m, ending at `balcony_mouth`. There must be a collider everywhere, the same step and head-room limits apply, and the only gap allowed is one bank-to-bank crossing of `paths.chasm`. Any other gap over 2.05 m fails; there is no distance-based skip.
+- **Drain join, across steps** (`tools/build-assets.mjs`, `tools/lib/joins.mjs`). This gate runs before the manifest is written. `cave/anchors` `joins.drain.keep` must equal `keep/anchors` `rooms.drain` within 2 mm. The cave's opening (`stats.breach.bbox`) must also fill that room within 8 cm. This catches a `--only=keep/` build that changes the drain while reusing the old cave, and the reverse. The error message gives the fix: `--only=keep/,cave/`.
+- **Drawbridge and slab envelope** (procprops). Raised 0–60°, broken at −35°, and the slab's drop all stay ≥ 0.48 m from the rock. The slab's top may touch the dome, which it breaks out of.
+- **Vista.** Lines to the keep top, square, tower and inn clear the outcrop by ≥ 0.31 m. They leave the deck at its SE corner, 0.8–1.4 m above it, so keep tall props 1.5 m from `outcrop.viewCorridor`.
+- **Scatter.** The outcrop lies inside `SCATTER_EXCLUDE` (`tools/gen/scatter.mjs`, r 19 m around (−18, −676)). It is applied after each instance's random draws, so `cart/scatter` is byte-identical.
+
+**Validation** (fails the build):
+- **Design §4.3 limits:**
+  - cover ≥ 1.5 m outside x > −27, z > −686 (measured 6.62);
+  - clearance ≥ 2.6 m, as the largest air gap of the centreline column (measured 4.02 at entry s 4.5; the keep's 2.6 m drain is exempt);
+  - half-width ≥ 0.9 m across the tangent, to the nearer wall (1.15, at entry s 2 just inside the drain);
+  - untreated slope ≤ 35° (entry 27.8°, toSpider 14.0°, toDen 15.2°, exit 24.2°; the stair is treated);
+  - wrong winding ≤ 1 % (0.26 %).
+- **Plus:**
+  - the walk path continuous from `breach` to `balcony_mouth` except across the chasm;
+  - anchors on floors;
+  - riser ≤ 0.4;
+  - perch ramp ≤ 45°;
+  - platform flat within 8 cm;
+  - chimney open;
+  - the joins above.
+- **Mutation-tested** by `node tools/check-cave-mutations.mjs`. Each mutation edits a copy of `cave.mjs` and runs `buildCave` up to its first emit. The build must fail **with the expected message**, and the unmutated source must pass. Four run at a time, about 35 s each, and nothing is written to `public/`. Each of these fails the build:
+  - no cap over the hole (`EXIT_HOLE is not covered`);
+  - no mouth constraint (`the runtime terrain collider reaches into the tunnel`);
+  - no stair ramp (`stair ramp … vs rock floor`);
+  - a drain box 10 cm too wide (`cave vertices at the drain plane lie outside the keep's opening`);
+  - the hood lowered to 56.5 (`no ceiling above the floor`);
+  - **sealed exit:** an 0.8 m wall at s ≈ 50 (`walk path breach → balcony_mouth broken: exit s 50…50.5 (sealed ×2)`);
+  - **sealed toDen:** a 1 m wall at (−6, −741) (`… toDen s 26…26.5 (sealed ×2)`);
+  - **sealed exit with the field validator off:** the decoded-GLB walk alone fails (`walk: gap of … m outside the chasm between exit …`, `no decoded collider`);
+  - **narrowed toSpider:** control half-width 0.45 between the chambers (`half-width 0.60 m < 0.9 across the tunnel at toSpider`);
+  - **pinched toDen:** two rock pillars leave a 1.4 m waist (`half-width 0.75 m < 0.9`);
+  - **low toDen:** the ceiling at 2.2 m over 3 m (`clearance 2.02 m < 2.6`).
+
+**Raw → shipped:** 70.7k triangles → 29.4k render (A 7.5k, B 3.6k, C 4.0k, D 7.6k, E 2.1k, outcrop 4.4k) → 10.0k collider. The build takes about 31 s, plus about 4 s to encode the GLBs.
+
+**Runtime integration checklist (cave).** These are runtime changes in `src/**`:
+1. **Outcrop with the town.**
+   - Load `cave/outcrop` in `ensureTown`. Add `outcrop_rock` to the outdoor visibility set. Bind its material's `extras.textures` (`cave/tex/moss_*`, which ship in muster with it).
+   - Build `outcrop_col`, `outcrop_rails_col` and `outcrop_mouth_plug_col` with the town's static bodies.
+   - `cart/terrain` already has the hole, and `activeTerrainHoles` opens the collider as soon as `cave/mesh` is in the manifest, which it now is.
+2. **`ensureUnderground`.**
+   - Load `cave/mesh_a` (keep) and `cave/mesh` (exit) plus `cave/anchors`.
+   - `setEnabled(false)` every `*_col`, and build one static body per collider node.
+   - Tags: `web_A`, `web_B`, the courier cocoon and `blocker_mouth` for the plug.
+3. **Textures.** Bind `extras.textures` per material as above, sharing the textures between both GLBs. Set `hasVertexAlpha = false` on the rock materials.
+4. **Zones.** Define A–E from `zones`, in order. `show: cave_X` toggles the render node, and the neighbours stay shown. Colliders stay on.
+5. **Mouth.** When `cave/mesh` is shown, hide `outcrop_mouth_plug` and remove its body, and remove `drain_plug` in the keep (K9).
+6. **Water.** Bind and scroll `fx/water_n`. Use the volumes for respawn and slow.
+
+**Deviations:**
+- **Moss textures in muster.** §10.6 lists `mossy_rock` under exit. It ships in **muster**, because the outcrop, shown with the town from muster on, binds it. Muster's start pack grows by 0.35 MB and exit's shrinks by the same. The rock, ground and pebble sets stay in keep, and the outcrop binds none of them.
+- **Asset split.** §10.1 has one `cave/mesh` (zones A–E). It ships as:
+  - `cave/mesh_a`, zone A, in segment keep;
+  - `cave/mesh`, zones B–E, in exit (it keeps the id that `EXIT_HOLE.cover` names);
+  - `cave/outcrop`, in **muster**. The hole is cut in `cart/terrain` from the first chapter, and the outcrop is visible from the square, so it has to come with the town.
+- **Textures.**
+  - The cave textures are standalone `cave/tex/*` assets, bound from material extras. They are not embedded, because embedding would have duplicated them in two segments.
+  - The web atlas is embedded in `cave/mesh` (material `cave_web`). There is no separate `fx/webs` asset.
+- **Outcrop shape.**
+  - The box reaches down to y 36. With the design's 46.5 bottom it floats over the SE terrain, which falls to 40.
+  - It has a large warp, a taper and bedding.
+  - It adds a **west shoulder** (to y 58.6) that walls the platform's west side, and a **cap over the whole hole**.
+  - At the terrain its skin spans x −25.8…−8.1 and z −683.6…−663.4, which is the design footprint plus 0.9 m on the east.
+- **Perch.** The ledge falls from 27.95 at the box to 27.1 at x 50, so the flight is 8 risers of 0.378 m starting at x 50.35, not 0.4 m steps from 52.8. Its collider is a 40° ramp.
+- **Web walls** are sized to the tunnel section (A 5.9 × 5.15 m, B 7.45 × 5.55 m), not 4.4 × 3.6.
+- **Water** flows west, along the channel from x 64 to x 32. §4.3 says "flowing south".
+- **Anchor values.** `den_path` passes the wolf at 5.17 m, not 5.5. `interrog_body` stands at 27.29, not 27.9. `bones_3` is moved, as noted above. `chimney_base` is split into `chimney_mouth` and `chimney_top`.
+- **Scatter exclusion** is 19 m, not 10, to cover the outcrop's footprint. No scatter stood within 25 m of it, so nothing changed.
+- **Not built here:**
+  - the brow `ph/rock_face_02` and the lip boulders (anchors and suggestions only, for the props unit);
+  - the drawbridge, lever, winch, slab, bones and camp fire (procprops and props units; anchors only);
+  - the `roots` den texture (optional, cut).

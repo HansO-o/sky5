@@ -49,6 +49,11 @@ export interface FireLight {
   height?: number;
   /** wins a pool slot over nearer lower-priority sources (default 0) */
   priority?: number;
+  /**
+   * competes for a pool slot within this distance of the camera (default 60 m for a fire: a burning
+   * roof lights its street seen from afar; the pool's 18 m for a sconce). Indoors give braziers 18.
+   */
+  reach?: number;
 }
 
 const FIRE_COLOR = [1, 0.55, 0.22] as const;
@@ -67,6 +72,8 @@ export class FireFx {
   /** wall-sconce flames: animated sprites from one manager (created on first use or by the warm-up) */
   private sprites: SpriteManager | null = null;
   private sconceFlames = new Set<{ sprite: Sprite; cell: number }>();
+  /** sconces not stopped yet (dispose stops them: sprite and light claim) */
+  private sconces = new Set<FireHandle>();
   private decalsVisible = true;
   private offs: (() => void)[] = [];
   /** pending after() timers: each forgets itself when it fires */
@@ -178,7 +185,7 @@ export class FireFx {
   }
 
   /** A light from the world's pool for a fire at `p` (null without a pool). */
-  private claimLight(p: Vector3, o: FireLight, d: { intensity: number; range: number; height: number; color: readonly [number, number, number]; flicker: number }): LightClaim | null {
+  private claimLight(p: Vector3, o: FireLight, d: { intensity: number; range: number; height: number; color: readonly [number, number, number]; flicker: number; reach?: number }): LightClaim | null {
     const pool = this.world.lights;
     if (!pool || this.disposed) return null;
     return pool.add({
@@ -188,6 +195,7 @@ export class FireFx {
       range: o.range ?? d.range,
       flicker: d.flicker,
       priority: o.priority,
+      reach: o.reach ?? d.reach,
     });
   }
 
@@ -301,7 +309,7 @@ export class FireFx {
       sm.start();
     }
     const lightOpts = o.light ? (o.light === true ? {} : o.light) : null;
-    const lit = () => (lightOpts ? this.claimLight(p, lightOpts, { intensity: 9, range: 18, height: 1.2, color: FIRE_COLOR, flicker: 0.3 }) : null);
+    const lit = () => (lightOpts ? this.claimLight(p, lightOpts, { intensity: 9, range: 18, height: 1.2, color: FIRE_COLOR, flicker: 0.3, reach: 60 }) : null);
     let light: LightClaim | null = null;
     // the stop handle arrives once the loop has loaded: a fire stopped before then still stops it
     const sound = () => (o.sound !== false ? this.world.loopEmitter("audio/burning", () => p, 0.5 * Math.min(1.5, scale)) : null);
@@ -391,6 +399,7 @@ export class FireFx {
       stop: () => {
         if (stopped) return;
         stopped = true;
+        this.sconces.delete(h);
         this.sconceFlames.delete(flame);
         sprite.dispose();
         light?.stop();
@@ -410,6 +419,7 @@ export class FireFx {
         light = lit();
       },
     };
+    this.sconces.add(h);
     return h;
   }
 
@@ -632,8 +642,7 @@ export class FireFx {
     for (const ps of this.systems) ps.dispose(false);
     this.systems.clear();
     for (const m of this.meshes) m.dispose();
-    for (const f of this.sconceFlames) f.sprite.dispose();
-    this.sconceFlames.clear();
+    for (const h of [...this.sconces]) h.stop();
     // (the manager disposes the fire sheet with it: disposed below with the other textures anyway)
     this.sprites?.dispose();
     this.sprites = null;

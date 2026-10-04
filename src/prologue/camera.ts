@@ -19,6 +19,11 @@ export interface CameraTarget {
   /** distance to the nearest surface along a ray within maxDist, or Infinity */
   rayDist?(from: Vector3, dir: Vector3, maxDist: number): number;
   firstPerson: boolean;
+  /**
+   * seconds the camera takes to move between the eye and the third-person boom when `firstPerson`
+   * changes (read at the change; 0 or missing: a cut)
+   */
+  povBlend?: number;
 }
 
 const ease = (t: number) => t * t * (3 - 2 * t);
@@ -43,6 +48,12 @@ export class CameraRig {
   distance = 3.2;
   /** player mode, third person: walls brought the camera into the body (the follow target hides it) */
   closeUp = false;
+  /**
+   * player mode: 0 at the eye (first person), 1 on the third-person boom, in between while a
+   * point-of-view change blends (see `CameraTarget.povBlend`)
+   */
+  povMix = 1;
+  private pov: { fp: boolean | null; t: number; dur: number; from: number } = { fp: null, t: 0, dur: 0, from: 0 };
   lookEnabled = true;
   private target: CameraTarget | null = null;
   private move: { from: Vector3; to: Vector3; lookFrom: Vector3; lookTo: Vector3; t: number; dur: number; resolve: () => void } | null = null;
@@ -124,6 +135,8 @@ export class CameraRig {
 
   follow(target: CameraTarget) {
     this.mode = "player";
+    // a new target starts at its own point of view (no blend from the last one)
+    if (this.target !== target) this.pov.fp = null;
     this.target = target;
     this.camera.parent = null;
     this.endMove();
@@ -231,7 +244,8 @@ export class CameraRig {
       }
     }
     const dir = this.tmp.set(-Math.sin(this.yaw) * Math.cos(this.pitch), Math.sin(this.pitch), -Math.cos(this.yaw) * Math.cos(this.pitch));
-    if (t.firstPerson) {
+    const mix = this.povStep(t, dt);
+    if (mix <= 0) {
       this.closeUp = false;
       t.eye(this.camera.position);
     } else {
@@ -244,11 +258,36 @@ export class CameraRig {
       const back = dir.scale(-1);
       const d = t.clip ? t.clip(piv, back, this.distance) : this.distance;
       this.camera.position.copyFrom(piv).addInPlace(back.scaleInPlace(d));
-      // (right and back are perpendicular)
-      this.closeUp = Math.hypot(s, d) < CLOSE_UP;
-      this.clearNearPlane(t);
+      if (mix < 1) {
+        // between the eye and the boom while the point of view changes
+        Vector3.LerpToRef(t.eye(this.tmp4), this.camera.position, mix, this.camera.position);
+        this.closeUp = false;
+      } else {
+        // (right and back are perpendicular)
+        this.closeUp = Math.hypot(s, d) < CLOSE_UP;
+        this.clearNearPlane(t);
+      }
     }
     this.camera.rotation.set(this.pitch + sy, this.yaw + sx, 0);
+  }
+
+  /** Advance the point-of-view blend; returns {@link povMix}. */
+  private povStep(t: CameraTarget, dt: number) {
+    const fp = t.firstPerson;
+    const pv = this.pov;
+    const to = fp ? 0 : 1;
+    if (pv.fp !== fp) {
+      const blend = pv.fp === null ? 0 : (t.povBlend ?? 0);
+      pv.fp = fp;
+      pv.t = 0;
+      pv.dur = blend > 0 ? blend : 0;
+      pv.from = this.povMix;
+    }
+    if (pv.dur > 0 && pv.t < pv.dur) {
+      pv.t = Math.min(pv.dur, pv.t + dt);
+      this.povMix = pv.from + (to - pv.from) * ease(pv.t / pv.dur);
+    } else this.povMix = to;
+    return this.povMix;
   }
 
   /**

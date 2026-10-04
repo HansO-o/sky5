@@ -10,6 +10,8 @@ export interface PrecompileOptions {
   shadows?: ShadowGenerator | null;
   /** give up waiting after this many seconds (default 8): compiling is best effort, never a hang */
   timeout?: number;
+  /** meshes set going per task before yielding to the frame loop (default 12): no long stall */
+  chunk?: number;
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -52,6 +54,15 @@ export async function precompile(meshes: Iterable<AbstractMesh>, o: PrecompileOp
   const seen = new Set<AbstractMesh>();
   const casters = new Set(o.shadows?.getShadowMap()?.renderList ?? []);
   const jobs: Promise<unknown>[] = [];
+  // one compile at a time per material (Babylon's forceCompilation saves and restores the
+  // material's hot-swapping flag: overlapping calls would leave it off)
+  const chains = new Map<Material, Promise<void>>();
+  const compile = (mat: Material, m: AbstractMesh, useInstances: boolean) => {
+    const next = (chains.get(mat) ?? Promise.resolve()).then(() => Promise.race([mat.forceCompilationAsync(m, { useInstances }).catch(() => {}), giveUp]));
+    chains.set(mat, next);
+  };
+  const chunk = Math.max(1, o.chunk ?? 12);
+  let started = 0;
   for (const m0 of meshes) {
     const m = m0 instanceof InstancedMesh ? m0.sourceMesh : m0;
     if (seen.has(m) || m.isDisposed() || !m.subMeshes?.length) continue;
@@ -60,8 +71,7 @@ export async function precompile(meshes: Iterable<AbstractMesh>, o: PrecompileOp
     // them is in view and on its own when only it is: both variants
     const instanced = drawsInstanced(m);
     const variants = instanced && !m.hasThinInstances ? [true, false] : [instanced];
-    for (const useInstances of variants)
-      for (const mat of materialsOf(m)) jobs.push(Promise.race([mat.forceCompilationAsync(m, { useInstances }).catch(() => {}), giveUp]));
+    for (const useInstances of variants) for (const mat of materialsOf(m)) compile(mat, m, useInstances);
     const sg = o.shadows;
     if (sg && (casters.has(m) || casters.has(m0))) {
       const subs: SubMesh[] = m.subMeshes;
@@ -79,7 +89,8 @@ export async function precompile(meshes: Iterable<AbstractMesh>, o: PrecompileOp
         ),
       );
     }
+    if (++started % chunk === 0) await sleep(0);
   }
-  await Promise.all(jobs);
+  await Promise.all([...jobs, ...chains.values()]);
   clearTimeout(timer);
 }

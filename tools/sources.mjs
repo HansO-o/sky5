@@ -27,6 +27,11 @@ export const PH_TEXTURES = {
   stone_brick_wall_001: { res: "1k", maps: ["Diffuse", "nor_gl", "arm"] },
   rock_tile_floor: { res: "1k", maps: ["Diffuse", "nor_gl", "arm"] },
   dark_wooden_planks: { res: "1k", maps: ["Diffuse", "nor_gl", "arm"] },
+  // cave (tools/gen/cave.mjs → cave/tex/*): walls, floors, the stream bed, the last 25 m of the climb + the outcrop
+  rock_face_03: { res: "1k", maps: ["Diffuse", "nor_gl", "arm"] },
+  rocks_ground_08: { res: "1k", maps: ["Diffuse", "nor_gl", "arm"] },
+  ganges_river_pebbles: { res: "1k", maps: ["Diffuse", "nor_gl", "arm"] },
+  mossy_rock: { res: "1k", maps: ["Diffuse", "nor_gl", "arm"] },
 };
 
 /** Extra texture maps that live inside a model asset (fir twig cards). */

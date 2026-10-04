@@ -36,7 +36,8 @@
         animation: drift 28s ease-in-out infinite alternate; filter: blur(18px); }
       #smoke.off { opacity: 0; }
       @keyframes drift { from { transform: translate3d(-4%, 2%, 0) scale(1.05); } to { transform: translate3d(4%, -3%, 0) scale(1.15); } }
-      #ui { position: fixed; inset: 0; pointer-events: none; }
+      /* its own stacking context: the gameplay HUD's negative z-index stays above the canvas */
+      #ui { position: fixed; inset: 0; pointer-events: none; isolation: isolate; }
       #ui > * { pointer-events: auto; }
       .hidden { display: none !important; }
       button { font: inherit; }
@@ -163,6 +164,61 @@
       #toast.on::after { width: 120%; }
       #dlstatus { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); font-size: 11px; color: var(--ink-faint); pointer-events: none; letter-spacing: .2em; }
       #prompt { position: fixed; left: 50%; bottom: 26vh; transform: translateX(-50%); font-size: 14px; letter-spacing: .2em; color: var(--ink-dim); text-shadow: 0 0 4px #000; pointer-events: none; }
+
+      /* ---------------- gameplay HUD: hairline frames with diamond ends, bars that shrink toward their centre */
+      /* under everything else in #ui whenever it was built: the fade to black covers it (deaths, retries,
+         chapter changes), as do the pause menu and panels; only #death (moved after the fade) shows over black */
+      #use, #vitals, #vignette, #target, #boss, #objective, #tip, #stealth { z-index: -1; }
+      #use { position: fixed; left: 50%; top: calc(50% + 44px); transform: translateX(-50%); padding: 4px 18px 9px; font-family: var(--display); font-size: 16px; letter-spacing: .18em; color: var(--ink); text-shadow: 0 0 6px #000, 0 0 2px #000; white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity .15s; }
+      #use.on { opacity: 1; }
+      #use kbd { margin-right: .35em; font-size: 12px; letter-spacing: 0; vertical-align: 2px; box-shadow: 0 0 8px rgba(0,0,0,.8); }
+      #use .hold { position: absolute; left: 18px; right: 18px; bottom: 0; height: 1px; background: var(--line); opacity: 0; }
+      #use.holding .hold { opacity: 1; }
+      #use .hold i { display: block; height: 100%; width: 0; background: var(--ink); box-shadow: 0 0 6px var(--glow); }
+      .hbar { position: absolute; height: 10px; border: 1px solid var(--line-strong); background: rgba(0,0,0,.6); box-shadow: 0 0 10px rgba(0,0,0,.9); }
+      .hbar::before, .hbar::after { content: ""; position: absolute; top: 50%; width: 5px; height: 5px; border: 1px solid var(--line-strong); background: #000; transform: translateY(-50%) rotate(45deg); }
+      .hbar::before { left: -5px; }
+      .hbar::after { right: -5px; }
+      .hbar i, .hbar b { position: absolute; top: 1px; bottom: 1px; left: 50%; width: calc(var(--k, 1) * (100% - 2px)); transform: translateX(-50%); }
+      .hbar b { background: rgba(240, 214, 190, .4); transition: width .6s .4s ease-out; }
+      .hbar i { background: linear-gradient(180deg, #d2594c, #8e2a22 55%, #5c1611); transition: width .15s; }
+      .hbar.st i { background: linear-gradient(180deg, #a3b971, #5f7a37 55%, #3a4e1f); }
+      #vitals { position: fixed; left: 0; right: 0; bottom: 36px; height: 10px; pointer-events: none; opacity: 0; transition: opacity 1s; }
+      #vitals.on { opacity: 1; transition-duration: .25s; }
+      #vitals .hp { left: 50%; width: min(320px, 34vw); transform: translateX(-50%); }
+      #vitals .st { right: max(34px, 7vw); width: min(220px, 22vw); }
+      #vitals.low .hp i { animation: lowhp 1.15s ease-out infinite; }
+      @keyframes lowhp { 0%, 60%, 100% { filter: none; } 10%, 32% { filter: brightness(1.7); } }
+      #target, #boss { position: fixed; left: 50%; top: 34px; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none; opacity: 0; transition: opacity .6s, top .3s; }
+      #target.on, #boss.on { opacity: 1; transition-duration: .2s, .3s; }
+      #target .name, #boss .name { font-family: var(--display); font-size: 14px; letter-spacing: .3em; padding-left: .3em; color: var(--ink); text-shadow: 0 0 6px #000, 0 0 2px #000; white-space: nowrap; }
+      #target .hbar { position: relative; width: min(260px, 40vw); height: 8px; }
+      #boss .name { font-size: 18px; letter-spacing: .45em; padding-left: .45em; }
+      #boss .hbar { position: relative; width: min(520px, 64vw); height: 11px; }
+      body:has(#boss.on) #target { top: 100px; }
+      #objective { position: fixed; right: 34px; top: 30px; max-width: min(440px, 46vw); text-align: right; font-family: var(--display); font-size: 15px; line-height: 1.6; letter-spacing: .2em; color: var(--ink-dim); text-shadow: 0 0 6px #000, 0 0 2px #000; pointer-events: none; opacity: 0; transition: opacity .6s, color 1.6s, text-shadow 1.6s; }
+      #objective::before { content: ""; display: inline-block; width: 5px; height: 5px; margin: 0 12px 3px 0; border: 1px solid currentColor; transform: rotate(45deg); vertical-align: middle; }
+      #objective.on { opacity: 1; }
+      #objective.new { color: #fff; text-shadow: 0 0 12px var(--glow), 0 0 2px #000; transition: opacity .6s; }
+      #tip { position: fixed; left: 34px; top: 34vh; max-width: min(380px, calc(100vw - 68px)); padding: 12px 20px 12px 22px; font-size: 14px; line-height: 1.75; letter-spacing: .06em; color: var(--ink); text-shadow: 0 0 4px #000; background: linear-gradient(90deg, rgba(0,0,0,.62), rgba(0,0,0,.32) 75%, transparent); border-left: 1px solid var(--line-strong); pointer-events: none; opacity: 0; transform: translateX(-8px); transition: opacity .5s, transform .5s; }
+      #tip::before { content: ""; position: absolute; left: -4px; top: 18px; width: 5px; height: 5px; background: var(--ink-dim); transform: rotate(45deg); }
+      #tip.on { opacity: 1; transform: none; }
+      #tip p { margin: 0; }
+      #stealth { position: fixed; left: 50%; top: calc(50% - 76px); width: 60px; height: 30px; transform: translateX(-50%); color: var(--ink-dim); filter: drop-shadow(0 0 3px #000); pointer-events: none; opacity: 0; transition: opacity .4s, color .4s; }
+      #stealth.on { opacity: .9; }
+      #stealth svg { display: block; width: 100%; height: 100%; overflow: visible; }
+      #stealth .open { transform-box: fill-box; transform-origin: center; transform: scaleY(var(--open, 0)); transition: transform .25s; }
+      #stealth.stir { color: #d6a35a; animation: stir 1.1s ease-in-out infinite; }
+      #stealth.alert { color: #d2594c; animation: none; }
+      @keyframes stir { 50% { opacity: .5; } }
+      #vignette { position: fixed; inset: 0; pointer-events: none; }
+      #vignette i { position: absolute; inset: 0; opacity: 0; background: radial-gradient(ellipse 78% 72% at 50% 50%, transparent 48%, rgba(150, 14, 8, .34) 80%, rgba(105, 0, 0, .72)); }
+      #vignette.low .beat { animation: heartbeat 1.15s ease-out infinite; }
+      @keyframes heartbeat { 0%, 60%, 100% { opacity: 0; } 9% { opacity: .55; } 20% { opacity: .12; } 31% { opacity: .42; } }
+      #death { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; opacity: 0; transition: opacity .8s; }
+      #death::before { content: ""; position: absolute; inset: 0; background: radial-gradient(ellipse 70% 62% at 50% 50%, transparent 30%, rgba(55, 0, 0, .6)); }
+      #death.on { opacity: 1; transition: opacity 1.4s ease-in; }
+      #death span { position: relative; font-family: var(--display); font-size: clamp(28px, 3.4vw, 46px); letter-spacing: .6em; padding-left: .6em; color: #cfc5b4; text-shadow: 0 0 18px rgba(130, 12, 0, .65), 0 0 3px #000; }
       #endcard { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; font-family: var(--display); pointer-events: auto; background: radial-gradient(ellipse at center, rgba(0,0,0,.2), #000 75%); }
       #endcard .heading { width: min(560px, 88vw); margin: 0; }
       #endcard .heading h2 { font-size: clamp(26px, 3.2vw, 40px); }
@@ -176,6 +232,10 @@
         .panel .row { grid-template-columns: 6.5em 1fr 3.5em; gap: 10px; }
         .panel .keys { grid-template-columns: 1fr; }
         #keyhints { display: none !important; }
+        #vitals .hp { width: 56vw; }
+        #vitals .st { right: auto; left: 50%; bottom: -16px; width: 40vw; transform: translateX(-50%); }
+        #objective { right: 16px; top: 16px; font-size: 13px; letter-spacing: .1em; max-width: 60vw; }
+        #tip { left: 16px; top: 28vh; }
       }
     </style>
   </head>

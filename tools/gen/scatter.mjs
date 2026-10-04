@@ -2,9 +2,21 @@
 // Output: Map<typeName, Float32Array [x, y, z, yaw, scale] * n>
 import { fbm, rng, smoothstep, TOWN, GATE } from "./world.mjs";
 
+/**
+ * Circles kept free of scatter (world x/z, radius in metres). Applied when an instance is pushed,
+ * after all its random draws, so excluding one never shifts the others.
+ */
+export const SCATTER_EXCLUDE = [
+  // the balcony outcrop over the cave mouth (tools/gen/cave.mjs, design §4.4): 10 m around
+  // (−18, −676) in the design, widened to 19 m so it covers the outcrop's whole footprint down to
+  // the terrain (cave.mjs validates that)
+  { x: -18, z: -676, r: 19 },
+];
+
 export function scatter(T, route) {
   const out = new Map();
   const push = (type, x, y, z, yaw, s) => {
+    for (const e of SCATTER_EXCLUDE) if (Math.hypot(x - e.x, z - e.z) < e.r) return;
     if (!out.has(type)) out.set(type, []);
     out.get(type).push(x, y, z, yaw, s);
   };

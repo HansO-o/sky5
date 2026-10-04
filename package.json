@@ -6,6 +6,7 @@
   "scripts": {
     "fetch-sources": "node tools/fetch-sources.mjs && node tools/fetch-extra.mjs",
     "build-assets": "node tools/build-assets.mjs",
+    "check-cave": "node tools/check-cave-mutations.mjs",
     "dev": "vite",
     "build": "tsc --noEmit && node tools/check-lines.mjs && vite build",
     "preview": "node tools/serve.mjs",

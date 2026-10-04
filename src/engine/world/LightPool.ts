@@ -20,6 +20,11 @@ export interface LightSource {
   flicker?: number;
   /** ranks before distance: a higher priority always wins a slot over a lower one (default 0) */
   priority?: number;
+  /**
+   * competes for a slot only within this distance of the eye (default: the pool's `maxDistance`,
+   * 18 m); a big fire seen from afar can reach farther
+   */
+  reach?: number;
 }
 
 /** A source added to the pool. */
@@ -42,6 +47,8 @@ export interface PoolCandidate {
   y: number;
   z: number;
   priority?: number;
+  /** its own maximum distance (default `PickOptions.maxDistance`) */
+  reach?: number;
 }
 
 export interface PickOptions {
@@ -56,16 +63,16 @@ export interface PickOptions {
 /**
  * The `n` sources to light, best first: higher priority first, then the ones in front of the eye
  * (within `behind` metres of its plane), then the nearest (a lit source counts `hysteresis` metres
- * nearer); ties by id. Only sources within `maxDistance` qualify.
+ * nearer); ties by id. Only sources within `maxDistance` (or their own `reach`) qualify.
  */
 export function pickSources(cands: readonly PoolCandidate[], eye: XYZ, forward: XYZ, n: number, lit: ReadonlySet<number>, o: PickOptions): number[] {
   if (n <= 0) return [];
-  const max2 = o.maxDistance * o.maxDistance;
   const scored: { id: number; pri: number; front: boolean; d: number }[] = [];
   for (const c of cands) {
     const dx = c.x - eye.x, dy = c.y - eye.y, dz = c.z - eye.z;
     const d2 = dx * dx + dy * dy + dz * dz;
-    if (d2 > max2) continue;
+    const max = c.reach ?? o.maxDistance;
+    if (d2 > max * max) continue;
     const front = dx * forward.x + dy * forward.y + dz * forward.z >= -o.behind;
     scored.push({ id: c.id, pri: c.priority ?? 0, front, d: Math.sqrt(d2) - (lit.has(c.id) ? o.hysteresis : 0) });
   }
@@ -105,6 +112,7 @@ interface Source {
   range: number;
   flicker: number;
   priority: number;
+  reach: number | undefined;
   phase: number;
   alive: boolean;
   /** where it was last seen (a stopped source fades out there) */
@@ -199,6 +207,7 @@ export class LightPool {
       range: src.range ?? 10,
       flicker: src.flicker ?? 0,
       priority: src.priority ?? 0,
+      reach: src.reach,
       phase: (id * 2.399963) % (Math.PI * 2),
       alive: !this.disposed,
       pos: new Vector3(),
@@ -280,7 +289,7 @@ export class LightPool {
     for (const s of this.sources.values()) {
       if (locked.has(s) || s.intensity <= 0) continue;
       s.pos.copyFrom(this.where(s));
-      cands.push({ id: s.id, x: s.pos.x, y: s.pos.y, z: s.pos.z, priority: s.priority });
+      cands.push({ id: s.id, x: s.pos.x, y: s.pos.y, z: s.pos.z, priority: s.priority, reach: s.reach });
     }
     const lit = new Set<number>();
     for (const sl of slots) {

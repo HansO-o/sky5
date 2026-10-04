@@ -21,6 +21,7 @@ import type { Physics } from "../physics/Physics";
 import { LightPool } from "../engine/world/LightPool";
 import { enforceLightBudget } from "../engine/render/lightBudget";
 import type { Disposer } from "../engine/core/types";
+import { RootMotionLibrary } from "../engine/anim/rootMotion";
 
 interface ScatterHeader {
   types: { name: string; count: number; offset: number }[];
@@ -62,6 +63,11 @@ export class World {
    */
   lights!: LightPool;
   factory!: CharacterFactory;
+  /**
+   * Root-motion curves of the attack clips (`chars/anim_rootmotion`); empty until
+   * {@link ensureCombat} has loaded them, and when the sidecar is missing (attacks then play in place).
+   */
+  rootMotion = new RootMotionLibrary();
   npcs = new Map<string, Character>();
   private terrainPlugin!: TerrainSplatPlugin;
   private sets: { set: InstancedSet; kind: string }[] = [];
@@ -343,6 +349,53 @@ export class World {
         throw e;
       });
     return this.femaleP;
+  }
+
+  private combatP: Promise<RootMotionLibrary> | null = null;
+  private combatHave = { clips: false, motion: false };
+  /**
+   * The combat clip set (`chars/anim_combat`, keep segment: draw/sheathe, sword chains, hits,
+   * chest, potion, lever...) and its root-motion sidecar, loaded once. An asset the build does not
+   * ship is skipped with a warning (its clips are missing, attacks play in place); a failed load is
+   * tried again by the next call. Resolves with {@link rootMotion}.
+   */
+  ensureCombat(): Promise<RootMotionLibrary> {
+    this.combatP ??= (async () => {
+      let failed = false;
+      const load = async <T>(id: string, have: boolean, get: () => Promise<T>): Promise<T | null> => {
+        if (have) return null;
+        if (!assets.has(id)) {
+          console.warn(`combat: ${id} is not in this build`);
+          return null;
+        }
+        try {
+          return await get();
+        } catch (e) {
+          console.warn(`combat: ${id} failed to load`, e);
+          failed = true;
+          return null;
+        }
+      };
+      const [clips, motion] = await Promise.all([
+        load("chars/anim_combat", this.combatHave.clips, () => loadGLB("chars/anim_combat", this.scene)),
+        load("chars/anim_rootmotion", this.combatHave.motion, () => loadJSON<unknown>("chars/anim_rootmotion")),
+      ]);
+      if (this.disposed) {
+        clips?.dispose();
+        return this.rootMotion;
+      }
+      if (clips) {
+        this.factory.addClips(clips);
+        this.combatHave.clips = true;
+      }
+      if (motion) {
+        this.rootMotion.merge(motion);
+        this.combatHave.motion = true;
+      }
+      if (failed) this.combatP = null;
+      return this.rootMotion;
+    })();
+    return this.combatP;
   }
 
   private dragonP: Promise<Dragon> | null = null;

@@ -5,7 +5,7 @@ import { assets } from "../core/assets/AssetClient";
 import type { SegmentId } from "../core/assets/manifest";
 import { audio } from "../core/audio";
 import { input } from "../core/input";
-import { settings, type Quality } from "../core/settings";
+import { keyLabel, settings, type Quality } from "../core/settings";
 import { hud } from "../ui/hud";
 import { heading } from "../ui/widgets";
 import { buildTown, GATE, LAYOUT, type Town } from "../world/town";
@@ -25,6 +25,12 @@ import type { Chapter, ChapterContext } from "./chapters/types";
 import { defaultAppearance, type Appearance } from "../world/appearance";
 import { PlayerController } from "./player";
 import { createPlayerBody } from "./playerBody";
+import { PlayerGear } from "./gear";
+import { PrologueCombat } from "./combat";
+import { CombatHud } from "./combatHud";
+import { Interactables, type InteractablesOptions } from "../engine/world/Interactables";
+import { TimeScale } from "../engine/core/timeScale";
+import { ReleaseGate } from "../engine/core/releaseGate";
 import { CartChapter } from "./chapters/cart";
 import { RoamChapter } from "./chapters/roam";
 import { DragonChapter } from "./chapters/dragon";
@@ -83,8 +89,22 @@ export interface PrologueSave {
  */
 export class PrologueStage implements Stage {
   world: World;
-  /** the script clock; every chapter gets its own scope on it */
-  director = new Director();
+  /**
+   * the script clock; every chapter gets its own scope on it. Holding activate skips a line (not
+   * while a modal UI such as the character creator takes the keys, nor with a press that closed a
+   * menu: see `activate`).
+   */
+  director = new Director({ skipHeld: () => !this.game.modal && this.activate.open && input.down("activate") });
+  /**
+   * The activate button as gameplay reads it (interactables, hold-to-skip): after the pause menu,
+   * a modal UI or the stage's start it counts only once it has been let go, so the E that picks
+   * 继续 doesn't also use the prompted interactable (or skip the line) on the first frame back.
+   */
+  private activate = new ReleaseGate();
+  /** the interactables `createInteractables` made (whatever a chapter leaves is disposed when it ends) */
+  private interactables = new Set<Interactables>();
+  /** the objective line as the chapter set it (`objective()`), re-applied when the stage begins */
+  private hudObjective: string | null = null;
   segment: SegmentId = "cart";
   gameplay = true;
   chapter: Chapter | null = null;
@@ -95,6 +115,8 @@ export class PrologueStage implements Stage {
   appearance: Appearance | null = null;
   /** on-foot player (created by the first chapter that needs it, kept across chapters) */
   player: PlayerController | null = null;
+  /** the player's kit: weapon, shield, outfit, cuffs (created by `ensureGear()`, kept with the player) */
+  gear: PlayerGear | null = null;
   physics: Physics | null = null;
   /** loose pieces that tumble and freeze into scenery (set with the physics) */
   debris: Debris | null = null;
@@ -112,6 +134,15 @@ export class PrologueStage implements Stage {
   townFx: FireFx | null = null;
   townFires: TownFires | null = null;
   dragons: DragonDirector | null = null;
+  /**
+   * The stage's game-time multiplier (combat hit-stop, slow-motion beats): `update` runs each
+   * frame's game time through it, and Game slows the animations to match (`timeScale`).
+   */
+  readonly time = new TimeScale();
+  /** the player's combat (made by `ensureCombat()`, kept with the player) */
+  combat: PrologueCombat | null = null;
+  /** the combat HUD (vitals, target and boss bars, death screen, combat tips), made with the combat */
+  combatHud: CombatHud | null = null;
   /** hides the town (not the keep while on its ground floor) with the outdoor world */
   private townHider = new NodeHider();
   private townFxP: Promise<FireFx> | null = null;
@@ -187,6 +218,8 @@ export class PrologueStage implements Stage {
       this.prepared.scope.cancel();
       this.prepared.chapter.dispose();
       this.prepared = null;
+      this.disposeInteractables();
+      this.hudObjective = null;
     }
     const { chapter, scope } = this.make(index);
     // chapters after the ride need the town straight away
@@ -201,6 +234,8 @@ export class PrologueStage implements Stage {
       this.wagons = [];
     }
     this.prepared = { index, chapter, scope, resume: save.state };
+    // a loaded chapter's content compiles behind the loading screen, not in its first frames
+    if (index > 0) await whenReady(this.scene, 15);
   }
 
   /** A chapter with its own script scope (cancelling it stops exactly that chapter's scripts). */
@@ -459,6 +494,116 @@ export class PrologueStage implements Stage {
     return this.player;
   }
 
+  /**
+   * The player's kit (made on first use; the player must exist): call `gear.sync(flags.inv)` to
+   * match the inventory. Also starts loading the combat clips and their root motion
+   * (`world.ensureCombat()`), which the draw and sheathe clips come from.
+   */
+  ensureGear(): PlayerGear {
+    if (!this.player) throw new Error("ensureGear: no player yet (ensurePlayer first)");
+    void this.world.ensureCombat();
+    this.gear ??= new PlayerGear(this.world, this.player, () => this.appearance ?? defaultAppearance());
+    return this.gear;
+  }
+
+  /** This frame's game-time multiplier (Game applies it to the animations too). */
+  get timeScale() {
+    return this.time.value;
+  }
+
+  /**
+   * The player's combat (made on first use, kept with the player; the player must exist and the
+   * gear is made with it): the combat system, the player's combatant and controls (attack, block,
+   * potion, draw), hit feedback, and fights wired to the story state (`combat.encounter(spec)`).
+   * Resolves once the combat clips and root motion have loaded (or failed to load: the actions
+   * then happen unseen).
+   */
+  async ensureCombat(): Promise<PrologueCombat> {
+    if (this.combat) return this.combat;
+    const gear = this.ensureGear();
+    await this.world.ensureCombat().catch(() => {});
+    if (this.world.disposed) throw new Cancelled();
+    this.combat ??= new PrologueCombat(this, this.player!, gear);
+    const pc = this.player!;
+    this.combatHud ??= new CombatHud({ combat: this.combat, armed: () => pc.armed, bus: this.world, time: this.time });
+    return this.combat;
+  }
+
+  /**
+   * Things the player uses with the activate button (design §3.7), wired to this stage: the nearest
+   * target within 2 m and 35° of the camera's view is prompted (`hud.use("E 打开箱子")`), a press
+   * uses it, hold targets kneel (`Fixing_Kneeling`) for 1.5 s. Nothing is usable while a line is
+   * spoken, without an enabled player, or while `o.blocked()`. Line of sight comes from the static
+   * colliders. A press that closed the pause menu (or a modal UI) never counts: the button must be
+   * let go first. The chapter owns the result: `dispose()` it (the prompt goes with it); the stage
+   * also disposes whatever the chapter left when the chapter ends.
+   */
+  createInteractables(o: Omit<InteractablesOptions, "bus"> & { blocked?: () => boolean } = {}) {
+    const { blocked, ...opts } = o;
+    const w = this.world;
+    const eye = new Vector3();
+    const dir = new Vector3();
+    /** the hold clip this set started (only that one is ended again) */
+    let kneel: string | null = null;
+    const set = new Interactables(
+      {
+        view: () => {
+          const p = this.player;
+          return p && p.enabled ? { pos: p.position, yaw: w.rig.yaw } : null;
+        },
+        pressed: () => this.activate.open && input.pressed("activate"),
+        held: () => this.activate.open && input.down("activate"),
+        blocked: () => this.director.speaking || this.game.modal || (blocked?.() ?? false),
+        show: (text, progress) => hud.use(text, progress),
+        hold: (clip) => {
+          const p = this.player;
+          if (!p) return;
+          if (clip) {
+            kneel = clip;
+            void p.playScripted(clip, { loop: true });
+          } else {
+            if (kneel && p.scripted === kneel) p.clearScripted();
+            kneel = null;
+          }
+        },
+        key: () => (input.usingPad ? "A" : keyLabel(settings.value.keys.activate)),
+        sight: (from, to) => {
+          const ph = this.physics;
+          if (!ph) return true;
+          // from the player's chest to the target's middle (not through bars, doors or walls)
+          eye.set(from.pos.x, from.pos.y + 1.3, from.pos.z);
+          dir.set(to.x - eye.x, to.y + 0.6 - eye.y, to.z - eye.z);
+          const d = dir.length();
+          // (stops short of the target: its own collider, the wall a lever sits on, don't count)
+          const reach = d - Math.min(0.5, d * 0.35);
+          if (reach < 0.3) return true;
+          dir.scaleInPlace(1 / d);
+          return ph.rayCastStatic(eye, dir, reach) >= reach;
+        },
+      },
+      { holdClip: "Fixing_Kneeling", ...opts, bus: w },
+    );
+    this.interactables.add(set);
+    return set;
+  }
+
+  /** Dispose every interactable set still around (a chapter ended; its own dispose may have missed one). */
+  private disposeInteractables() {
+    for (const set of this.interactables) set.dispose();
+    this.interactables.clear();
+  }
+
+  /**
+   * The objective line (`hud.objective`, null clears it), kept by the stage. A chapter may set it
+   * while it prepares (a resumed step): the line shows once the stage is on screen (`begin`, after
+   * the replaced game or the menu has cleared the HUD; a toast asked for before that is dropped).
+   * Cleared when the chapter ends. Chapters use this rather than `hud.objective` directly.
+   */
+  objective(text: string | null, o?: { toast?: boolean | number }) {
+    this.hudObjective = text;
+    if (this.begun) hud.objective(text, o);
+  }
+
   private skipResolve: (() => void) | null = null;
   /**
    * Skip the rest of the current chapter (pause menu / hold-to-skip). `target` is the chapter the
@@ -481,6 +626,15 @@ export class PrologueStage implements Stage {
   /** Called by Game.setStage when this stage becomes active. */
   begin() {
     this.begun = true;
+    // the key that started or loaded the game (or closed the menu over it) is not a gameplay press
+    this.activate.close();
+    // the replaced stage cleared the HUD after this one's chapter had prepared: put its objective back
+    if (this.hudObjective) hud.objective(this.hudObjective);
+    // tutorial tips are shown once per story: recorded in the flags (saved with the game)
+    hud.setTipStore({
+      has: (id) => this.flags.tips.includes(id),
+      add: (id) => this.state.update("tips", (t) => void (t.includes(id) || t.push(id))),
+    });
     void this.play();
   }
 
@@ -503,6 +657,7 @@ export class PrologueStage implements Stage {
           // stop the chapter's scripts, then put the world into the chapter's end state (a chapter
           // that failed is passed over the same way instead of leaving the story stuck)
           cur.scope.cancel();
+          this.time.clear();
           hud.clearSubtitle();
           hud.prompt(null);
           this.world.rig.clearSteer();
@@ -517,8 +672,19 @@ export class PrologueStage implements Stage {
         // also ends what a finished chapter left running (detached script branches)
         cur.scope.cancel();
         ch.dispose();
-        // every chapter starts with no music states (it registers its own tracks)
+        // interactables the chapter didn't dispose would go on picking (and using) its targets
+        this.disposeInteractables();
+        // its speakers' bark pacing (and the actors it holds) go with it
+        this.director.resetBarks();
+        // what a chapter put on the HUD ends with it (the next one sets its own objective)
+        hud.use(null);
+        this.objective(null);
+        hud.stealth(null);
+        this.combatHud?.clear();
+        // every chapter starts with no music states (it registers its own tracks), and at normal
+        // speed (a slow-motion hold a cancelled or skipped chapter's script left must not outlive it)
         audio.resetMusicState();
+        this.time.clear();
         this.running = null;
         this.chapter = null;
         this.gap = end;
@@ -616,6 +782,13 @@ export class PrologueStage implements Stage {
 
   update(dt: number) {
     if (this.paused) return;
+    // a modal UI (the character creator) has the keys: activate counts again once let go after it
+    if (this.game.modal) this.activate.close();
+    this.activate.update(input.down("activate"));
+    // tips and highlights are read at the frame's pace, also through slow motion
+    hud.tick(dt);
+    // hit-stop and slow motion: the frame's game time runs through the stage clock
+    dt *= this.time.step(dt);
     this.director.update(dt);
     this.player?.update(dt);
     this.chapter?.update?.(dt);
@@ -628,6 +801,8 @@ export class PrologueStage implements Stage {
 
   setPaused(p: boolean) {
     this.paused = p;
+    // a hold breaks at the pause, and the key that closes the menu (E on 继续) is the menu's
+    this.activate.close();
     // the line waits under the pause menu (its reading time stops with the game) and comes back on resume
     hideSubtitle(p);
   }
@@ -652,12 +827,19 @@ export class PrologueStage implements Stage {
     this.director.cancelAll();
     this.running?.chapter.dispose();
     this.prepared?.chapter.dispose();
+    this.disposeInteractables();
     // the stage's world events (their sound loops would outlive the world otherwise)
     this.dragons?.dispose();
     this.townFires = null;
     this.townFx?.dispose();
     this.townFx = null;
     for (const w of this.wagons) w.dispose();
+    this.combatHud?.dispose();
+    this.combatHud = null;
+    this.combat?.dispose();
+    this.combat = null;
+    this.gear?.dispose();
+    this.gear = null;
     this.player?.dispose();
     this.debris?.dispose();
     this.world.dispose();
@@ -666,12 +848,18 @@ export class PrologueStage implements Stage {
     // global audio/HUD state: that still belongs to the game being played
     if (this.begun) {
       audio.stopAllBeds(1);
-      hud.clearSubtitle();
+      // subtitle, prompts, vitals, bars, objective, tips, stealth eye, death screen
+      hud.reset();
+      hud.setTipStore(null);
       hideSubtitle(false);
       hud.loading(false);
-      hud.prompt(null);
     }
   }
+}
+
+/** Every mesh's shaders ready (or `seconds` passed: a mesh that never gets ready must not hold the load). */
+function whenReady(scene: { whenReadyAsync(): Promise<void> }, seconds: number) {
+  return Promise.race([scene.whenReadyAsync().catch(() => {}), new Promise<void>((r) => setTimeout(r, seconds * 1000))]);
 }
 
 /** Hide the subtitle line without ending it (hud.clearSubtitle would lose the rest of the line). */

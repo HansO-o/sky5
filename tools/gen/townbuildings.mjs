@@ -22,6 +22,12 @@ export const KEEP = { w: 26, d: 18, h: 12, wall: 1.2, gateW: 4, gateH: 5, floorY
  * swings inward (+X) for a positive rotation about +Y.
  */
 export const POSTERN = { z0: 2.3, z1: 3.7, y0: 0.4, y1: 2.8, hinge: [-11.86, 0.4, 2.3], leafT: 0.09, openYaw: Math.PI / 2 };
+/**
+ * Corner turrets: size × h boxes centred on the keep's corners, y 0…h. They reach size/2 − wall
+ * (0.4 m) past the inner wall faces, to x ±11.4, z ±7.4; keepinterior.mjs wraps those stubs in
+ * pilasters and checks that no shell geometry shows inside a room.
+ */
+export const TURRET = { size: 3.2, h: KEEP.h + 3 };
 
 /** A wall slab along X (thickness along Z) with optional rectangular openings. */
 function wallX(mb, x0, x1, y0, y1, z, t, openings = [], tile = 2) {
@@ -214,7 +220,7 @@ export function buildKeep() {
     box(stone, [-hw + 0.4, K.h + 0.8, z], [0.8, 1.0, 0.9]);
   }
   // corner turrets
-  for (const x of [-hw, hw]) for (const z of [-hd, hd]) box(stone, [x, K.h / 2 + 1.5, z], [3.2, K.h + 3, 3.2], [0, 0, 0], { tile: 2.5 });
+  for (const x of [-hw, hw]) for (const z of [-hd, hd]) box(stone, [x, TURRET.h / 2, z], [TURRET.size, TURRET.h, TURRET.size], [0, 0, 0], { tile: 2.5 });
   // (the dark box that used to fill the gate passage is gone: the interior asset is behind the gate)
   // stone steps in front of the gate
   for (let i = 0; i < 3; i++) box(stone, [0, 0.1 + i * 0.15 - 0.15, hd + 1.4 - i * 0.4], [K.gateW + 2, 0.3, 0.8]);

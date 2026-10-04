@@ -16,7 +16,8 @@ import { readHDR, downsample, writeHDR } from "./lib/hdr.mjs";
 import { buildRoute, makeTerrain, fbm } from "./gen/world.mjs";
 import { buildTerrainChunks } from "./gen/terrain.mjs";
 import { TERRAIN_HOLES, activeHoles } from "./gen/terrainHoles.mjs";
-import { buildKeepInterior } from "./gen/keepinterior.mjs";
+import { buildKeepInterior, AIR as KEEP_AIR, ORIGIN as KEEP_ORIGIN } from "./gen/keepinterior.mjs";
+import { checkDrainJoin } from "./lib/joins.mjs";
 import { buildFirTextures, buildFirMesh, buildImpostor } from "./gen/fir.mjs";
 import { buildCart, SEATS, CART } from "./gen/cart.mjs";
 import { buildHouse, HOUSE_VARIANTS } from "./gen/houses.mjs";
@@ -126,9 +127,10 @@ await step("cart/route", async () => {
 
 // Asset ids this build ships that cover a terrain hole (tools/gen/terrainHoles.mjs `cover`). The render
 // terrain is cut only under a cover that ships, as the runtime cuts the collider only then
-// (activeTerrainHoles); a gate before the manifest is written checks the two agree. When a generator
-// for another cover starts shipping (cave/mesh: EXIT_HOLE), add its id here and rebuild cart/terrain.
-const HOLE_COVERS = new Set(["keep/interior"]);
+// (activeTerrainHoles); a gate before the manifest is written checks the two agree. A new cover's id
+// goes here, then rebuild cart/terrain. EXIT_HOLE's cover cave/mesh ships in segment exit, but the hole
+// is cut from the start: the outcrop over it (cave/outcrop, segment muster) is shown with the town.
+const HOLE_COVERS = new Set(["keep/interior", "cave/mesh"]);
 
 await step("cart/terrain", async () => {
   const holes = activeHoles((id) => HOLE_COVERS.has(id));
@@ -336,6 +338,12 @@ await step("town/buildings", async () => {
 // keep/interior (glb: rooms, *_col colliders, door leaves, anchor_* nodes) + keep/anchors (json)
 await step("keep/interior", () => buildKeepInterior({ emit, SRC }));
 
+// ------------------------------------------------------------------ cave + balcony outcrop (segments keep, exit, muster)
+// cave/mesh_a (zone A, keep), cave/mesh (zones B–E, exit; covers EXIT_HOLE), cave/outcrop (muster,
+// shown with the town), cave/anchors (json), cave/tex/* and fx/water_n. Imported lazily: the module
+// builds its terrain caches on load (about a second) and only this step needs it.
+await step("cave/", async () => (await import("./gen/cave.mjs")).buildCave({ emit, SRC }));
+
 // ------------------------------------------------------------------ Poly Haven models
 const PH = {
   boulder_01: { ratio: 0.06, permissive: true, tex: 1024, segment: "cart", priority: 80 },
@@ -417,6 +425,23 @@ manifest.assets = manifest.assets.filter((a) => !a.id.endsWith("#aac"));
           : `terrain hole "${h.id}": cart/terrain cuts it but ${h.cover} does not ship; remove "${h.cover}" from HOLE_COVERS and rebuild cart/terrain`,
       );
 }
+// The drain join: cave/ clips the cave to the keep's drain opening (keep/interior's room "drain") as it
+// was when cave/ ran. --only can rebuild one step and reuse the other, so the two shipped records must
+// agree (else a crack or an overlap at the breach; checked before anything is written).
+{
+  const readJSON = async (id) => {
+    const a = manifest.assets.find((x) => x.id === id);
+    return a ? JSON.parse(await fs.readFile(path.join(ROOT, "public", a.url), "utf8")) : null;
+  };
+  const caveAnchors = await readJSON("cave/anchors"), keepAnchors = await readJSON("keep/anchors");
+  if (caveAnchors && keepAnchors) {
+    const d = KEEP_AIR.find((a) => a.name === "drain");
+    const source = d && { min: d.min.map((v, i) => v + KEEP_ORIGIN[i]), max: d.max.map((v, i) => v + KEEP_ORIGIN[i]) };
+    const r = checkDrainJoin(caveAnchors, keepAnchors, source);
+    if (!r.ok) throw new Error(r.message);
+    console.log(r.message);
+  }
+}
 manifest.assets.sort((a, b) => a.id.localeCompare(b.id));
 manifest.version = sha(Buffer.from(JSON.stringify(manifest.assets.map((a) => [a.id, a.hash])))).slice(0, 12);
 const summary = {};
@@ -440,7 +465,7 @@ console.log("manifest version", manifest.version);
 // credits page data (only assets that actually ship)
 const phIds = new Set(Object.keys(PH));
 for (const k of Object.keys(TERRAIN_LAYERS)) phIds.add(TERRAIN_LAYERS[k]);
-["pine_bark", "weathered_brown_planks", "rusty_metal_02", "plastered_stone_wall", "medieval_wood", "thatch_roof_angled", "fir_tree_01", "kloofendal_overcast_puresky", "rough_block_wall", "castle_wall_slates", "old_planks_02", "rough_wood", "stone_brick_wall_001", "rock_tile_floor", "dark_wooden_planks"].forEach((x) => phIds.add(x));
+["pine_bark", "weathered_brown_planks", "rusty_metal_02", "plastered_stone_wall", "medieval_wood", "thatch_roof_angled", "fir_tree_01", "kloofendal_overcast_puresky", "rough_block_wall", "castle_wall_slates", "old_planks_02", "rough_wood", "stone_brick_wall_001", "rock_tile_floor", "dark_wooden_planks", "rock_face_03", "rocks_ground_08", "ganges_river_pebbles", "mossy_rock"].forEach((x) => phIds.add(x));
 const ph = JSON.parse(await fs.readFile(path.join(SRC, "credits-polyhaven.json"), "utf8")).filter((c) => phIds.has(c.id));
 await fs.mkdir(path.join(ROOT, "src/generated"), { recursive: true });
 await fs.writeFile(path.join(ROOT, "src/generated/credits.json"), JSON.stringify({ polyhaven: ph, extra: EXTRA_CREDITS }, null, 1));

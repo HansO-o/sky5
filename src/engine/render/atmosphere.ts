@@ -106,3 +106,81 @@ export class AtmosphereBlend {
     return lerpAtmosphere(this.from, this.target(), k, this.current);
   }
 }
+
+type XYZ = { readonly x: number; readonly y: number; readonly z: number };
+
+export interface ProfileOptions {
+  /** "climb-out": the tunnel mouth (fully outdoor there) */
+  anchor?: XYZ;
+  /** "climb-out": metres before the anchor over which the blend happens (default 13) */
+  span?: number;
+  /** "climb-out": the profile it starts from (default "cave") */
+  from?: string;
+  /** the blend starts from these values instead of the ones shown (e.g. an exposure flare) */
+  start?: Partial<Atmosphere>;
+}
+
+/**
+ * Named lighting profiles over an {@link AtmosphereBlend}. Two names are built in: "outdoor" (the
+ * open-air values, a function: they follow the weather or a fire mood) and "climb-out" (a profile
+ * blended to outdoor by the viewer's distance to an anchor, {@link climbOut}). Every change of the
+ * values goes out through `write`.
+ */
+export class AtmosphereProfiles {
+  private name = "outdoor";
+  private climb: { anchor: XYZ; span: number; from: Atmosphere } | null = null;
+  private eye: XYZ = { x: 0, y: 0, z: 0 };
+  private blend: AtmosphereBlend;
+
+  constructor(private o: { outdoor: () => Atmosphere; profiles: Readonly<Record<string, Atmosphere>>; write: (a: Atmosphere) => void }) {
+    this.blend = new AtmosphereBlend(o.outdoor());
+  }
+
+  /** The profile last set. */
+  get profile() {
+    return this.name;
+  }
+
+  /** The values shown now. */
+  get current(): Readonly<Atmosphere> {
+    return this.blend.current;
+  }
+
+  private target = (): Atmosphere => {
+    if (this.name === "outdoor") return this.o.outdoor();
+    if (this.name === "climb-out") {
+      const c = this.climb;
+      if (!c) return this.o.profiles.cave ?? this.o.outdoor();
+      const d = Math.hypot(this.eye.x - c.anchor.x, this.eye.y - c.anchor.y, this.eye.z - c.anchor.z);
+      return lerpAtmosphere(c.from, this.o.outdoor(), smoothstep(climbOut(d, c.span)));
+    }
+    return this.o.profiles[this.name];
+  };
+
+  /** Blend to `profile` over `seconds`; an unknown name is reported and ignored. */
+  set(profile: string, seconds: number, opts: ProfileOptions = {}) {
+    if (profile !== "outdoor" && profile !== "climb-out" && !this.o.profiles[profile]) {
+      console.warn(`unknown lighting profile ${profile}`);
+      return;
+    }
+    this.name = profile;
+    const from = this.o.profiles[opts.from ?? "cave"];
+    this.climb = profile === "climb-out" && opts.anchor && from ? { anchor: { ...opts.anchor }, span: opts.span ?? 13, from } : null;
+    this.blend.to(this.target, seconds, opts.start);
+    this.o.write(this.blend.step(0));
+  }
+
+  /** The outdoor values changed (mood, quality): outdoors and settled they are written at once. */
+  outdoorChanged() {
+    if (this.name !== "outdoor" || this.blend.blending) return;
+    this.blend.to(this.target, 0);
+    this.o.write(this.blend.step(0));
+  }
+
+  /** Per frame: advances a blend and follows "climb-out" (and outdoor values while blending). */
+  update(dt: number, eye: XYZ) {
+    this.eye = eye;
+    if (this.name === "outdoor" && !this.blend.blending) return;
+    this.o.write(this.blend.step(dt));
+  }
+}

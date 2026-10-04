@@ -15,7 +15,7 @@ import type { Camera } from "@babylonjs/core/Cameras/camera";
 import type { AbstractMesh } from "@babylonjs/core/Meshes/abstractMesh";
 import type { Quality } from "../core/settings";
 import { blobURL, loadKTX2 } from "../game/loaders";
-import { AtmosphereBlend, climbOut, lerpAtmosphere, smoothstep, type Atmosphere } from "../engine/render/atmosphere";
+import { AtmosphereProfiles, type Atmosphere } from "../engine/render/atmosphere";
 import { applyLightBudget } from "../engine/render/lightBudget";
 
 export const FOG_COLOR = new Color3(0.6, 0.64, 0.68);
@@ -175,7 +175,9 @@ export async function createEnvironment(scene: Scene, camera: Camera): Promise<E
   /** the sun's shadow map renders only while the sun shines (inside it is frozen) */
   const refreshShadows = () => {
     const map = shadows?.getShadowMap();
-    if (map) map.refreshRate = sun.intensity > 1e-3 ? 1 : 0;
+    const rate = sun.intensity > 1e-3 ? 1 : 0;
+    // (only on a change: setting the rate re-arms one more render)
+    if (map && map.refreshRate !== rate) map.refreshRate = rate;
   };
 
   const pipeline = new DefaultRenderingPipeline("post", true, scene, [camera]);
@@ -221,18 +223,6 @@ export async function createEnvironment(scene: Scene, camera: Camera): Promise<E
       fill: OUTDOOR_FILL,
     };
   };
-  let interior: LightingProfile = "outdoor";
-  let climb: { anchor: Vector3; span: number; from: Atmosphere } | null = null;
-  const eye = new Vector3();
-  const target = (): Atmosphere => {
-    if (interior === "outdoor") return outdoor();
-    if (interior === "climb-out") {
-      if (!climb) return INTERIORS.cave;
-      return lerpAtmosphere(climb.from, outdoor(), smoothstep(climbOut(Vector3.Distance(eye, climb.anchor), climb.span)));
-    }
-    return INTERIORS[interior];
-  };
-  const blend = new AtmosphereBlend(outdoor());
   /** write blended values into the scene (all uniforms) */
   const write = (a: Atmosphere) => {
     scene.environmentIntensity = a.env;
@@ -244,6 +234,7 @@ export async function createEnvironment(scene: Scene, camera: Camera): Promise<E
     fill.intensity = a.fill;
     refreshShadows();
   };
+  const profiles = new AtmosphereProfiles({ outdoor, profiles: INTERIORS, write });
   /** the mood's parts that are not blended: sun tint, sky dome */
   const tint = () => {
     Color3.LerpToRef(sunBase.c, FIRE_SUN, mood, sun.diffuse);
@@ -253,10 +244,7 @@ export async function createEnvironment(scene: Scene, camera: Camera): Promise<E
   /** the mood changed: tint, and outdoors (no blend under way) the blended values at once */
   const applyMood = () => {
     tint();
-    if (interior === "outdoor" && !blend.blending) {
-      blend.to(outdoor, 0);
-      write(blend.step(0));
-    }
+    profiles.outdoorChanged();
   };
   const env3: Environment = {
     sun,
@@ -307,26 +295,17 @@ export async function createEnvironment(scene: Scene, camera: Camera): Promise<E
       return mood;
     },
     setInterior(profile, seconds = 1.5, o = {}) {
-      interior = profile;
-      climb =
-        profile === "climb-out" && o.anchor
-          ? { anchor: new Vector3(o.anchor.x, o.anchor.y, o.anchor.z), span: o.span ?? 13, from: INTERIORS[o.from ?? "cave"] }
-          : null;
       if (o.mood !== undefined) {
         mood = Math.max(0, Math.min(1, o.mood));
         tint();
       }
-      blend.to(target, seconds, o.start);
-      write(blend.step(0));
+      profiles.set(profile, seconds, o);
     },
     get interior() {
-      return interior;
+      return profiles.profile as LightingProfile;
     },
-    update(dt, e) {
-      eye.copyFrom(e);
-      // outdoors and settled: setMood writes straight away, nothing to follow
-      if (interior === "outdoor" && !blend.blending) return;
-      write(blend.step(dt));
+    update(dt, eye) {
+      profiles.update(dt, eye);
     },
     dispose() {
       shadows?.dispose();

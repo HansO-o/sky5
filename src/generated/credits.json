@@ -92,6 +92,17 @@
    "licenseUrl": "https://polyhaven.com/license"
   },
   {
+   "id": "ganges_river_pebbles",
+   "kind": "texture",
+   "name": "Ganges River Pebbles",
+   "authors": [
+    "Amal Kumar"
+   ],
+   "source": "https://polyhaven.com/a/ganges_river_pebbles",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
    "id": "kite_shield",
    "kind": "model",
    "name": "Kite Shield",
@@ -143,6 +154,17 @@
     "Rico Cilliers"
    ],
    "source": "https://polyhaven.com/a/modular_fort_01",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
+   "id": "mossy_rock",
+   "kind": "texture",
+   "name": "Mossy Rock",
+   "authors": [
+    "Rob Tuytel"
+   ],
+   "source": "https://polyhaven.com/a/mossy_rock",
    "license": "CC0 1.0",
    "licenseUrl": "https://polyhaven.com/license"
   },
@@ -203,6 +225,18 @@
    "licenseUrl": "https://polyhaven.com/license"
   },
   {
+   "id": "rock_face_03",
+   "kind": "texture",
+   "name": "Rock Face 03",
+   "authors": [
+    "Dario Barresi",
+    "Rico Cilliers"
+   ],
+   "source": "https://polyhaven.com/a/rock_face_03",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
    "id": "rock_moss_set_01",
    "kind": "model",
    "name": "Rock Moss Set 01",
@@ -232,6 +266,17 @@
     "Charlotte Baglioni"
    ],
    "source": "https://polyhaven.com/a/rock_tile_floor",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
+   "id": "rocks_ground_08",
+   "kind": "texture",
+   "name": "Rocks Ground 08",
+   "authors": [
+    "Rob Tuytel"
+   ],
+   "source": "https://polyhaven.com/a/rocks_ground_08",
    "license": "CC0 1.0",
    "licenseUrl": "https://polyhaven.com/license"
   },

@@ -22,6 +22,8 @@ export interface Chapter {
   /**
    * Build chapter content (may run while the menu is still up). Must not advance time.
    * `continued`: the previous chapter just ended in this session (actors are already in place).
+   * HUD state from here: the objective through `stage.objective(...)` (shown once the stage is on
+   * screen); everything else on the HUD is set in `run()`.
    */
   prepare(resume: Record<string, unknown> | null, continued?: boolean): Promise<void>;
   /**

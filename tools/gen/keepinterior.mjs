@@ -13,8 +13,11 @@
 //                          anchors -> anchor_<name>  empty nodes: lights, spawns, marks, interactables,
 //                                                    props, cameras, checkpoints (local −Z = facing);
 //                                                    zones/blockers carry their half extents as scale
-//   keep/anchors   json  the same anchors, doors, zones, blockers and rooms in keep-local and world
-//                        coordinates (see docs/design/keep-exit-chapters.md, "Pipeline outputs")
+//   keep/anchors   json  the same anchors, doors (plus the town/buildings postern), zones, blockers and
+//                        rooms in keep-local and world coordinates (docs/design/keep-exit-chapters.md,
+//                        "Pipeline outputs")
+// validate() fails the build on misplaced anchors, doors that swing into walls/colliders/props, a
+// terrain hole not floored at GF, or keep shell geometry (buildKeep) showing inside a room.
 //
 // Frame: keep-local, +X east, +Y up, −Z north, origin on the keep's base at its centre. World =
 // ORIGIN + local (the keep's yaw is 0): parent keep_interior under the keep's holder node.
@@ -25,7 +28,7 @@ import { Document } from "@gltf-transform/core";
 import { MeshBuilder, makePrimitive, pbr, ktxTexture, finalize } from "../lib/gltf.mjs";
 import { euler, apply, cylinder } from "./shapes.mjs";
 import { fbm } from "./world.mjs";
-import { KEEP, POSTERN } from "./townbuildings.mjs";
+import { KEEP, POSTERN, TURRET, buildKeep, buildPosternLeaf } from "./townbuildings.mjs";
 import { KEEP_HOLE } from "./terrainHoles.mjs";
 
 // ------------------------------------------------------------------ frame and levels
@@ -273,6 +276,24 @@ const S = (...a) => SOLIDS.push(solid(...a));
   S("rail_mid", [(6.6 + 8.5) / 2, G(0.5), -1.24], [8.5 - 6.6, 0.05, 0.05], "wood", { node: "stair", col: false, cell: 3, occlude: false });
   // ---- basement: transverse ribs over the cell corridor, a step of masonry at the drain
   for (let k = 1; k <= 4; k++) S(`rib_b4_${k}`, [-5.9, CELLS.ceil - 0.15, CELLS.bandTop - CELLS.band * k], [2.4, 0.3, 0.35], "brick", { node: "bs", col: false, cell: 1, occlude: false });
+  // ---- corner pilasters: buildKeep's corner turrets reach 0.4 m past the inner wall faces (to x ±11.4,
+  // z ±7.4, y 0…15), into the corners of G2, G2n, G4 and G5. Each pilaster wraps that stub 2 cm proud
+  // of it, floor to ceiling, so the lining turns the corner with baked faces. G5's stands on the mid
+  // landing (it runs from BS through the landing) and is brick below GF like the stairwell walls.
+  // validate() checks that no shell geometry is left in free room air.
+  const TIX = KEEP.w / 2 - TURRET.size / 2 - 0.02, TIZ = KEEP.d / 2 - TURRET.size / 2 - 0.02;
+  for (const sx of [-1, 1])
+    for (const sz of [-1, 1]) {
+      const x = [TIX, SX].map((v) => v * sx).sort((a, b) => a - b), z = [TIZ, SZ].map((v) => v * sz).sort((a, b) => a - b);
+      const c = [(x[0] + x[1]) / 2, (z[0] + z[1]) / 2];
+      const room = AIR.find((r) => r.kind === "room" && inBox(r, [c[0], G(1), c[1]]));
+      const name = `pilaster_${sz < 0 ? "n" : "s"}${sx < 0 ? "w" : "e"}`;
+      const part = (suffix, y0, y1, mat) => S(name + suffix, [c[0], (y0 + y1) / 2, c[1]], [x[1] - x[0], y1 - y0, z[1] - z[0]], mat, { node: room.node, cell: 0.5 });
+      if (room.min[1] < GF - 1e-3) {
+        part("_low", room.min[1], GF, "brick");
+        part("", GF, room.max[1], "castle");
+      } else part("", room.min[1], room.max[1], room.wall === "split" ? "castle" : room.wall);
+    }
 }
 const SOLID_BY = Object.fromEntries(SOLIDS.map((s) => [s.name, s]));
 
@@ -285,7 +306,9 @@ export const DOORS = [
   { name: "door_store", tag: "store_door", passage: "store_door", hinge: [6.6 - 0.06, GF, 4.4 - 0.02], along: [0, 0, -1], open: [1, 0, 0], kind: "planks", initial: "locked", note: "hall ↔ storeroom (locked; opened with the key ring)" },
   { name: "door_stair", tag: "stair_door", passage: "stair_door", hinge: [10.4 - 0.02, GF, 1.2 - 0.06], along: [-1, 0, 0], open: [0, 0, 1], kind: "planks", initial: "closed", note: "storeroom ↔ stair landing; swings into the storeroom" },
   { name: "door_torture", tag: "torture_door", passage: "torture_door", hinge: [-1.0 + 0.06, BS, 4.9 + 0.02], along: [0, 0, 1], open: [-1, 0, 0], kind: "planks", initial: "closed", note: "corridor B2 ↔ torture room B3; swings into B3 (door kick)" },
-  { name: "door_cells", tag: "cell_gate", passage: "cell_gate", hinge: [-7.1 + 0.03, BS, -2.0 + 0.05], along: [1, 0, 0], open: [0, 0, -1], kind: "bars", width: 2.4 - 0.06, height: 2.6 - 0.02, maxOpen: (100 * Math.PI) / 180, initial: "open", note: "barred gate B3 → cell corridor; stands open" },
+  // the cell gate opens 88° so the open leaf lies along the corridor's west side, 1 cm clear of west
+  // cell 1's bars collider (x −7.19…−7.09) and 2 cm clear of the masonry at x −7.1
+  { name: "door_cells", tag: "cell_gate", passage: "cell_gate", hinge: [-7.1 + 0.06, BS, -2.0 + 0.05], along: [1, 0, 0], open: [0, 0, -1], kind: "bars", width: 2.4 - 0.09, height: 2.6 - 0.02, maxOpen: (88 * Math.PI) / 180, initial: "open", note: "barred gate B3 → cell corridor; stands open (88°)" },
 ];
 for (const d of DOORS) {
   d.width ??= DOOR_W - 0.04;
@@ -985,7 +1008,8 @@ function staticColliders() {
 
 // ------------------------------------------------------------------ build
 let BUILT = null;
-export const _debug = { RENDER, COLLIDERS, STATS, AIR, SOLIDS, A, LIGHTS: null };
+/** Internal builders, for offline checks (renders, walk tests); not used by the build. */
+export const _debug = { RENDER, COLLIDERS, STATS, AIR, SOLIDS, A };
 /** Geometry + data, no IO (memoised). */
 export function buildKeepInteriorData() {
   if (BUILT) return BUILT;
@@ -1060,35 +1084,185 @@ function validate(doors) {
     const h = d.hinge;
     if (h[0] < p.min[0] - 0.08 || h[0] > p.max[0] + 0.08 || h[2] < p.min[2] - 0.08 || h[2] > p.max[2] + 0.08) errors.push(`${d.name}: hinge ${r3(h)} is outside its opening ${d.passage}`);
   }
-  // the terrain's collider hole must be floored everywhere: a collider top within reach below
-  // (x 48…72, z −670…−654 effective on the 2 m grid, design §3.1)
-  const hole = { x0: KEEP_HOLE.samples.x0 - 2 - ORIGIN[0], x1: KEEP_HOLE.samples.x1 + 2 - ORIGIN[0], z0: KEEP_HOLE.samples.z0 - 2 - ORIGIN[2], z1: KEEP_HOLE.samples.z1 + 2 - ORIGIN[2] };
-  const all = Object.values(COLLIDERS).flat();
-  let bare = 0;
-  for (let x = hole.x0; x <= hole.x1 + 1e-6; x += 0.25)
-    for (let z = hole.z0; z <= hole.z1 + 1e-6; z += 0.25) {
-      let top = -Infinity;
-      for (const c of all) {
-        const r = Math.hypot(...c.s) / 2;
-        if (Math.abs(x - c.c[0]) > r || Math.abs(z - c.c[2]) > r) continue;
-        const R = euler(c.rot ?? [0, 0, 0]), Rt = transpose(R);
-        // highest point of the box's top face at (x, z): sample the vertical line
-        for (let y = Math.min(1.2, c.c[1] + r); y > Math.max(BS - 0.5, c.c[1] - r); y -= 0.05) {
-          const q = apply(Rt, sub([x, y, z], c.c));
-          if (Math.abs(q[0]) <= c.s[0] / 2 && Math.abs(q[1]) <= c.s[1] / 2 && Math.abs(q[2]) <= c.s[2] / 2) {
-            top = Math.max(top, y);
-            break;
-          }
-        }
-        if (top >= GF - 0.01) break;
-      }
-      if (top < BS - 0.3) bare++;
-    }
-  if (bare) errors.push(`keep hole: ${bare} sample points without a collider below`);
+  holeFloorCheck(errors);
+  shellCheck(errors);
+  doorSweepCheck(doors, errors);
   const tris = STATS.render.gf + STATS.render.stair + STATS.render.bs + doors.reduce((s, d) => s + d.leaf.tris, 0);
   if (tris < 25000 || tris > 45000) errors.push(`triangle budget: ${tris} (target 30–40k)`);
   else if (tris < 30000 || tris > 40000) warnings.push(`triangles ${tris} outside 30–40k`);
   return { errors, warnings, tris };
+}
+
+/** Oriented box {c, s, rot?} → {c, u: [3 axes], h: [3 half extents]}. */
+function obb(b) {
+  const R = euler(b.rot ?? [0, 0, 0]);
+  return { c: b.c, u: [0, 1, 2].map((k) => [R[k], R[3 + k], R[6 + k]]), h: mul(b.s, 0.5), from: b.from };
+}
+/** Penetration depth of two oriented boxes (separating-axis test); ≤ 0 when they are apart. */
+function obbOverlap(A, B) {
+  const T = sub(B.c, A.c);
+  const axes = [...A.u, ...B.u];
+  for (const a of A.u) for (const b of B.u) {
+    const c = cross(a, b);
+    if (len(c) > 1e-6) axes.push(norm(c));
+  }
+  let depth = Infinity;
+  for (const L of axes) {
+    const ra = A.u.reduce((s, u, k) => s + A.h[k] * Math.abs(dot(u, L)), 0);
+    const rb = B.u.reduce((s, u, k) => s + B.h[k] * Math.abs(dot(u, L)), 0);
+    depth = Math.min(depth, ra + rb - Math.abs(dot(T, L)));
+    if (depth <= 0) return depth;
+  }
+  return depth;
+}
+const inOBB = (o, p, shrink = 0) => {
+  const d = sub(p, o.c);
+  return o.u.every((u, k) => Math.abs(dot(d, u)) < o.h[k] - shrink);
+};
+
+/** Highest collider point at or below y0 on the vertical line (x, z): {y, from, inside} or null. */
+function colliderTop(boxes, x, z, y0, yMin) {
+  let best = null;
+  for (const o of boxes) {
+    const r = len(o.h);
+    if (Math.abs(x - o.c[0]) > r || Math.abs(z - o.c[2]) > r) continue;
+    if (inOBB(o, [x, y0, z], -1e-6)) return { y: y0, from: o.from, inside: true };
+    for (let y = Math.min(y0, o.c[1] + r); y > Math.max(yMin, o.c[1] - r); y -= 0.01)
+      if (inOBB(o, [x, y, z], -1e-6)) {
+        if (!best || y > best.y) best = { y, from: o.from, inside: false };
+        break;
+      }
+  }
+  return best;
+}
+
+/**
+ * The terrain's collider hole (x 48…72, z −670…−654 effective on the 2 m grid, design §3.1) must be
+ * floored at the ground-floor level: on every 0.25 m sample the first collider below GF + 5 cm must
+ * be the slab at GF (or something standing on it), except over the G5 stairwell, where it must be
+ * the stairs: a ramp, the mid landing, the core, or the stairwell floor at BS at the foot of flight B.
+ */
+function holeFloorCheck(errors) {
+  const hole = { x0: KEEP_HOLE.samples.x0 - 2 - ORIGIN[0], x1: KEEP_HOLE.samples.x1 + 2 - ORIGIN[0], z0: KEEP_HOLE.samples.z0 - 2 - ORIGIN[2], z1: KEEP_HOLE.samples.z1 + 2 - ORIGIN[2] };
+  const all = Object.values(COLLIDERS).flat().map(obb);
+  const sw = roomOf("G5");
+  const STAIR = new Set(["ramp A", "ramp B", "mid_landing", "stair core", "railing", "pilaster_ne_low", "pilaster_ne"]);
+  const bad = { bare: 0, low: 0, stair: 0 };
+  let first = null;
+  const fail = (k, msg) => {
+    bad[k]++;
+    first ??= msg;
+  };
+  for (let x = hole.x0; x <= hole.x1 + 1e-6; x += 0.25)
+    for (let z = hole.z0; z <= hole.z1 + 1e-6; z += 0.25) {
+      const top = colliderTop(all, x, z, GF + 0.05, BS - 0.6);
+      const where = `(${x.toFixed(2)}, ${z.toFixed(2)})`;
+      if (!top) fail("bare", `${where}: no collider below`);
+      else if (x > sw.min[0] + 1e-6 && x < sw.max[0] - 1e-6 && z > sw.min[2] + 1e-6 && z < sw.max[2] - 1e-6) {
+        // the bare stairwell floor only at the foot of flight B (its last run, where the ramp dips under BS)
+        const foot = STAIRS.B.z0 + STAIRS.B.dir * STAIRS.run * STAIRS.steps;
+        const atFootB = x > STAIRS.B.x[0] && x < STAIRS.B.x[1] && Math.abs(z - foot) < STAIRS.run;
+        const ok = STAIR.has(top.from) || (top.from === "G5" && Math.abs(top.y - BS) < 0.02 && atFootB);
+        if (!ok) fail("stair", `${where} in the stairwell: first collider is ${top.from} at ${top.y.toFixed(2)}`);
+      } else if (!top.inside && Math.abs(top.y - GF) > 0.03) fail("low", `${where}: floor collider ${top.from} at ${top.y.toFixed(2)}, not GF ${GF}`);
+    }
+  if (bad.bare + bad.low + bad.stair) errors.push(`keep hole: ${bad.bare} samples without a collider, ${bad.low} without a floor at GF, ${bad.stair} stairwell samples not on the stairs (first: ${first})`);
+}
+
+/** Room air a viewer can see: rooms, doorways and passages (not hidden openings or the bake-only outside). */
+const VISIBLE_AIR = AIR.filter((a) => a.kind === "room" || a.kind === "door" || a.kind === "pass");
+const inVisibleAir = (p, m = 0.005) => {
+  for (const a of VISIBLE_AIR) if (p[0] > a.min[0] + m && p[0] < a.max[0] - m && p[1] > a.min[1] + m && p[1] < a.max[1] - m && p[2] > a.min[2] + m && p[2] < a.max[2] - m) return true;
+  return inVault(p);
+};
+/**
+ * The keep shell (town/buildings keep_shell, from buildKeep) must not show inside the interior: no
+ * point of its triangles (sampled at ≤ 0.1 m) may lie in visible room air outside every solid.
+ */
+function shellCheck(errors) {
+  const shell = buildKeep();
+  const hits = new Map();
+  for (const [mname, b] of [["stone", shell.stone], ["dark", shell.dark]]) {
+    const P = (v) => [b.p[v * 3], b.p[v * 3 + 1], b.p[v * 3 + 2]];
+    for (let t = 0; t < b.i.length; t += 3) {
+      const [a, bb, c] = [b.i[t], b.i[t + 1], b.i[t + 2]].map(P);
+      const lo = [0, 1, 2].map((k) => Math.min(a[k], bb[k], c[k])), hi = [0, 1, 2].map((k) => Math.max(a[k], bb[k], c[k]));
+      if (!VISIBLE_AIR.some((r) => [0, 1, 2].every((k) => hi[k] > r.min[k] && lo[k] < r.max[k])) && !(hi[0] > VAULT.x0 && lo[0] < VAULT.x1 && hi[1] > VAULT.spring && lo[1] < VAULT.crown && hi[2] > VAULT.z0 && lo[2] < VAULT.z1)) continue;
+      const n = Math.max(1, Math.ceil(Math.max(len(sub(a, bb)), len(sub(bb, c)), len(sub(c, a))) / 0.1));
+      for (let i = 0; i <= n; i++)
+        for (let j = 0; j <= n - i; j++) {
+          const u = i / n, v = j / n;
+          const p = add(add(mul(a, u), mul(bb, v)), mul(c, 1 - u - v));
+          if (!inVisibleAir(p) || inAnySolid(p)) continue;
+          const room = VISIBLE_AIR.find((r) => inBox(r, p))?.name ?? "B3 vault";
+          if (!hits.has(room)) hits.set(room, `${mname} ${r3(p)}`);
+        }
+    }
+  }
+  for (const [room, at] of hits) errors.push(`keep shell shows inside ${room} (at ${at})`);
+}
+
+/**
+ * Door leaves, closed, swinging and open (t = 0, ¼, ½, ¾, 1), the postern included: away from the
+ * hinge (> 0.12 m off its axis, where a leaf legitimately sits in its jamb) the leaf collider must
+ * not run into a static collider, and every vertex of the leaf mesh must stay in room air outside
+ * the solids and static colliders. At the hinge the leaf may turn into its jamb by up to half its
+ * thickness (its axis lies on the jamb face).
+ */
+function doorSweepCheck(doors, errors) {
+  const statics = Object.values(COLLIDERS).flat().map(obb);
+  const leafAir = AIR.filter((a) => a.kind !== "ao");
+  const inLeafAir = (p) => leafAir.some((a) => p[0] > a.min[0] - 0.003 && p[0] < a.max[0] + 0.003 && p[1] > a.min[1] - 0.003 && p[1] < a.max[1] + 0.003 && p[2] > a.min[2] - 0.003 && p[2] < a.max[2] + 0.003);
+  const pl = buildPosternLeaf();
+  const specs = [
+    ...doors.map((d) => ({ name: d.name, hinge: d.hinge, baseYaw: d.baseYaw, openYaw: d.openYaw, w: d.width, h: d.height, t: d.leaf.col.s[0], meshes: [d.leaf.wood, d.leaf.iron] })),
+    { name: "keep_postern", hinge: POSTERN.hinge, baseYaw: 0, openYaw: POSTERN.openYaw, w: pl.size[2], h: pl.size[1], t: pl.size[0], meshes: [pl.wood, pl.iron] },
+  ];
+  const HINGE = 0.12;
+  for (const d of specs) {
+    for (const t of [0, 0.25, 0.5, 0.75, 1]) {
+      const yaw = d.baseYaw + t * d.openYaw;
+      const R = euler([0, yaw, 0]);
+      const state = t === 0 ? "closed" : t === 1 ? "open" : `t ${t}`;
+      const box = (z0, z1) => obb({ c: add(d.hinge, apply(R, [0, 0.015 + d.h / 2, (z0 + z1) / 2])), s: [d.t, d.h, z1 - z0], rot: [0, yaw, 0] });
+      const full = box(0.02, 0.02 + d.w), free = box(HINGE, 0.02 + d.w);
+      for (const s of statics) {
+        const f = obbOverlap(free, s);
+        if (f > 0.003) {
+          errors.push(`${d.name} (${state}): the leaf runs ${f.toFixed(3)} m into the collider of ${s.from}`);
+          continue;
+        }
+        // with the hinge axis on the jamb face, half the leaf's thickness turns into the jamb
+        const g = obbOverlap(full, s);
+        if (g > d.t / 2 + 0.002) errors.push(`${d.name} (${state}): the leaf's hinge end runs ${g.toFixed(3)} m into ${s.from}`);
+      }
+      // the leaf mesh (built in the closed hinge frame, already turned by baseYaw)
+      const Ro = euler([0, t * d.openYaw, 0]);
+      let bad = null;
+      for (const b of d.meshes)
+        for (let v = 0; v < b.p.length / 3 && !bad; v++) {
+          const q = [b.p[v * 3], b.p[v * 3 + 1], b.p[v * 3 + 2]];
+          if (Math.hypot(q[0], q[2]) < HINGE) continue;
+          const p = add(d.hinge, apply(Ro, q));
+          if (!inLeafAir(p) && !inVault(p)) bad = `${r3(p)} is in masonry`;
+          else if (SOLIDS.some((s) => inSolid(s, p) && sdSolid(s, p) < -0.003)) bad = `${r3(p)} is inside a solid`;
+          else {
+            const s = statics.find((o) => inOBB(o, p, 0.003));
+            if (s) bad = `${r3(p)} is inside the collider of ${s.from}`;
+          }
+        }
+      if (bad) errors.push(`${d.name} (${state}): leaf vertex ${bad}`);
+      // props and interactables (footprint radius r) must not stand in the leaf's sweep
+      for (const a of A) {
+        if (!a.r || Math.abs(a.local[1] - d.hinge[1]) > 1.5) continue;
+        const q = sub(a.local, free.c);
+        const u = [dot(q, free.u[0]), dot(q, free.u[2])];
+        const dd = Math.hypot(Math.max(0, Math.abs(u[0]) - free.h[0]), Math.max(0, Math.abs(u[1]) - free.h[2]));
+        if (dd < a.r * 0.8) errors.push(`${d.name} (${state}): the leaf sweeps through ${a.name} (r ${a.r})`);
+      }
+    }
+  }
+
 }
 
 // ------------------------------------------------------------------ glTF + JSON
@@ -1194,18 +1368,29 @@ export async function buildKeepInterior({ emit, SRC }) {
       materials: Object.fromEntries(Object.entries(MATERIALS).map(([k, m]) => [`ki_${k}`, m.src ?? "untextured"])),
     },
     anchors: Object.fromEntries(A.map((a) => [a.name, anchorJSON(a)])),
-    doors: Object.fromEntries(
-      doors.map((d) => [
-        d.tag,
-        {
-          node: d.name, leaf: `${d.name}_leaf`, collider: `${d.name}_col`,
-          hinge: { local: r3(d.hinge), world: toWorld(d.hinge) },
-          closedDir: d.along, openDir: d.open, openYaw: +d.openYaw.toFixed(4),
-          width: +d.width.toFixed(3), height: +d.height.toFixed(3), initial: d.initial, note: d.note,
-          opening: { min: r3(roomOf(d.passage).min), max: r3(roomOf(d.passage).max) },
-        },
-      ]),
-    ),
+    doors: {
+      ...Object.fromEntries(
+        doors.map((d) => [
+          d.tag,
+          {
+            asset: "keep/interior", node: d.name, leaf: `${d.name}_leaf`, collider: `${d.name}_col`,
+            hinge: { local: r3(d.hinge), world: toWorld(d.hinge) },
+            closedDir: d.along, openDir: d.open, openYaw: +d.openYaw.toFixed(4),
+            width: +d.width.toFixed(3), height: +d.height.toFixed(3), initial: d.initial, note: d.note,
+            opening: { min: r3(roomOf(d.passage).min), max: r3(roomOf(d.passage).max) },
+          },
+        ]),
+      ),
+      // the postern leaf ships in town/buildings (buildKeep): keep → keep_postern (hinge) → keep_postern_leaf
+      postern: {
+        asset: "town/buildings", node: "keep_postern", leaf: "keep_postern_leaf", collider: null,
+        hinge: { local: r3(POSTERN.hinge), world: toWorld(POSTERN.hinge) },
+        closedDir: [0, 0, 1], openDir: [1, 0, 0], openYaw: +POSTERN.openYaw.toFixed(4),
+        width: +(POSTERN.z1 - POSTERN.z0 - 0.04).toFixed(3), height: +(POSTERN.y1 - POSTERN.y0 - 0.03).toFixed(3), initial: "closed",
+        note: "west postern; no collider node: build its body from keep_postern_leaf's meshes (tag postern)",
+        opening: { min: [-KEEP.w / 2, POSTERN.y0, POSTERN.z0], max: [-KEEP.w / 2 + KEEP.wall, POSTERN.y1, POSTERN.z1] },
+      },
+    },
     zones: Object.fromEntries(Object.entries(zones).map(([k, boxes]) => [k, boxes.map((b) => ({ min: r3(b.min), max: r3(b.max), worldMin: toWorld(b.min), worldMax: toWorld(b.max) }))])),
     rooms: Object.fromEntries(AIR.filter((r) => r.kind !== "ao").map((r) => [r.name, { kind: r.kind, label: r.label, min: r3(r.min), max: r3(r.max), worldMin: toWorld(r.min), worldMax: toWorld(r.max) }])),
     vault: { ...Object.fromEntries(Object.entries(VAULT).map(([k, v]) => [k, +v.toFixed(4)])) },
