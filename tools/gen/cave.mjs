@@ -152,19 +152,28 @@ const coverExempt = (x, z) => x > -27 && z > -686;
 
 /**
  * The balcony outcrop (design §4.4). The box reaches down to y 36 (the design's 46.5 floats above
- * the terrain on the SE side, which falls to 40); the hood covers the last metres of the tunnel;
- * the west shoulder walls the platform on that side; the cap covers the whole of EXIT_HOLE (the
- * terrain inside the hole rises to 68 m at its NW corner, above the hood).
+ * the terrain on the SE side, which falls to 40); the hood covers the last metres of the tunnel and
+ * runs on east to the cliff, so the platform's north side is rock from the shoulder to the east face
+ * (the box's top would otherwise continue the deck as a shelf onto the hillside); the west shoulder
+ * walls the platform on that side; the cap covers the whole of EXIT_HOLE (the terrain inside the hole
+ * rises to 68 m at its NW corner, above the hood). The cap stands `lift` m above the terrain and the
+ * shoulder 5.5 m above the deck, so their landward rims are too high to step or jump onto from the
+ * hillside: the platform is reachable only through the tunnel, and a player who could reach the
+ * outcrop's top in a town chapter could otherwise drop onto the deck and be shut in by the rails.
+ * The rails close the open S and E edges; their ends run into the shoulder and the hood.
  */
 export const OUTCROP = {
   box: { c: [-16.5, 46.25, -672.75], half: [7.5, 10.25, 7.75], r: 1.5 },
-  hood: { min: [-23, 53.5, -681], max: [-15, 62.5, -674], r: 1.5 },
-  shoulder: { min: [-24.5, 50, -675.5], max: [-19, 58.6, -666.5], r: 1.2 },
-  cap: { x: [EXIT_HOLE.render.x0 - 1, EXIT_HOLE.render.x1 + 1], z: [EXIT_HOLE.render.z0 - 1, EXIT_HOLE.render.z1 + 1], lift: 1.3, r: 1.0 },
+  hood: { min: [-23, 53.5, -681], max: [-7.8, 62.5, -674], r: 1.5 },
+  shoulder: { min: [-24.5, 50, -675.5], max: [-19, 61.5, -666.5], r: 1.2 },
+  cap: { x: [EXIT_HOLE.render.x0 - 1, EXIT_HOLE.render.x1 + 1], z: [EXIT_HOLE.render.z0 - 1, EXIT_HOLE.render.z1 + 1], lift: 3.0, r: 1.0 },
   noise: 0.5,
   platform: { y: 56.05, x: [-19, -11], z: [-674, -667], centre: [-15.0, 56.05, -670.5] },
-  rails: { h: 1.2, t: 0.3, edges: { S: [[-19, -667], [-11, -667]], E: [[-11, -674], [-11, -667]] } },
+  /** invisible rails: `h` above the deck along the open edges (`open`), `t` thick; `edges` run on into the rock */
+  rails: { h: 1.4, t: 0.3, open: { S: [[-19, -667], [-11, -667]], E: [[-11, -674], [-11, -667]] }, edges: { S: [[-19.8, -667], [-11, -667]], E: [[-11, -675.2], [-11, -667]] } },
   footprint: { x: [-26, -9], z: [-684, -664] },
+  /** respawn below this height over the outcrop's skin (volumes.respawn_outcrop), north to `z0` (the tunnel runs below 50 m further north) */
+  respawn: { y: 50, z0: -676, margin: 1.0 },
   /** the field evaluates the outcrop terms only inside this box */
   bbox: { min: [-32, 30, -690], max: [-2, 72, -657] },
 };
@@ -253,6 +262,35 @@ SEGS.forEach((s, k) => {
 });
 const NO_SEGS = [];
 const segsNear = (x, z) => SEG_HASH.get(hkey(Math.floor(x / HC), Math.floor(z / HC))) ?? NO_SEGS;
+
+/**
+ * The mouth. The plug (a black card and a box) stands `plugDepth` m inside it, across the tunnel; the
+ * cave in front of the plug (the stub: rock, the top of the stair and its ramp) ships in cave/outcrop,
+ * so the outcrop alone closes and floors the mouth while cave/mesh is not loaded. The stub reaches
+ * `behind` m behind the plug's plane, so its floor runs under the plug box and its walls behind the card.
+ */
+export const MOUTH = { plugDepth: 3.5, behind: 1.5, radius: 9 };
+const MOUTH_PT = (() => {
+  const q = tunnelAt("exit", TUNNEL_LEN.exit);
+  return [q.x, q.fy, q.z];
+})();
+/** the plug's plane: a point on the centreline and the horizontal tangent (out of the mouth) */
+const PLUG_PLANE = (() => {
+  const q = tunnelAt("exit", TUNNEL_LEN.exit - MOUTH.plugDepth);
+  return { p: [q.x, q.fy, q.z], t: [q.tx, 0, q.tz] };
+})();
+/** signed distance of p in front of the plug's plane (toward the platform) */
+const plugSide = (p) => (p[0] - PLUG_PLANE.p[0]) * PLUG_PLANE.t[0] + (p[2] - PLUG_PLANE.p[2]) * PLUG_PLANE.t[2];
+/** a cave point of the stub: in front of the plug's plane (or less than `behind` behind it), near the mouth */
+const inStub = (p, behind = MOUTH.behind) => plugSide(p) > -behind && p[1] > 50 && Math.hypot(p[0] - MOUTH_PT[0], p[2] - MOUTH_PT[2]) < MOUTH.radius;
+
+/**
+ * The player's capsule (src/prologue/player.ts, src/engine/physics/CapsuleMover.ts defaults). The
+ * enclosure checks walk it over the decoded colliders: step-up 0.45, slopes ≤ 50°, 1.8 m tall, and a
+ * jump that lifts the feet v²/2g = 1.08 m (`JUMP_REACH` adds 3 cm).
+ */
+export const MOVER = { radius: 0.3, height: 1.8, stepUp: 0.45, maxSlopeDeg: 50, jumpSpeed: 4.6, gravity: 9.81 };
+const JUMP_REACH = MOVER.jumpSpeed ** 2 / (2 * MOVER.gravity) + 0.03;
 
 /** Point on a tunnel at horizontal arc length s: {p (floor point), w, h, t (unit horizontal tangent)}. */
 function tunnelAt(name, s) {
@@ -377,12 +415,15 @@ function heightAtRuntime(x, z) {
   return (h(i, j) * (1 - u) + h(i + 1, j) * u) * (1 - v) + (h(i, j + 1) * (1 - u) + h(i + 1, j + 1) * u) * v;
 }
 const rfDropped = (i, j) => inRect(EXIT_HOLE.samples, RUNTIME_FIELD.x0 + i * RF_STEP, RUNTIME_FIELD.z0 + j * RF_STEP);
-/** Surviving runtime collider triangles near the mouth: [[x, y, z] × 3] (both diagonals). */
-const RF_TRIS = (() => {
+/**
+ * The runtime terrain collider's triangles over a rectangle, as they survive EXIT_HOLE: [[x, y, z] × 3],
+ * both diagonals of every quad, all facing up.
+ */
+function runtimeFieldTris({ x0, x1, z0, z1 }) {
   const out = [];
   const P = (a, b) => [RUNTIME_FIELD.x0 + a * RF_STEP, 0, RUNTIME_FIELD.z0 + b * RF_STEP];
-  const i0 = Math.floor((-30 - RUNTIME_FIELD.x0) / RF_STEP), i1 = Math.ceil((-8 - RUNTIME_FIELD.x0) / RF_STEP);
-  const j0 = Math.floor((-688 - RUNTIME_FIELD.z0) / RF_STEP), j1 = Math.ceil((-664 - RUNTIME_FIELD.z0) / RF_STEP);
+  const i0 = Math.floor((x0 - RUNTIME_FIELD.x0) / RF_STEP), i1 = Math.ceil((x1 - RUNTIME_FIELD.x0) / RF_STEP);
+  const j0 = Math.floor((z0 - RUNTIME_FIELD.z0) / RF_STEP), j1 = Math.ceil((z1 - RUNTIME_FIELD.z0) / RF_STEP);
   for (let i = i0; i < i1; i++)
     for (let j = j0; j < j1; j++) {
       const c = [[i, j], [i + 1, j], [i, j + 1], [i + 1, j + 1]];
@@ -395,7 +436,9 @@ const RF_TRIS = (() => {
       for (const t of [[c00, c01, c11], [c00, c11, c10], [c00, c01, c10], [c10, c01, c11]]) if (!t.some((q) => q.d)) out.push(t.map((q) => q.p));
     }
   return out;
-})();
+}
+/** Surviving runtime collider triangles near the mouth. */
+const RF_TRIS = runtimeFieldTris({ x0: -30, x1: -8, z0: -688, z1: -664 });
 /** Highest surviving runtime collider surface at (x, z) near the mouth, or −Infinity. */
 function runtimeColliderTop(x, z) {
   let best = -Infinity;
@@ -1053,10 +1096,15 @@ export function buildCaveData({ log = () => {} } = {}) {
   const V = (v) => [kept.pos[v * 3], kept.pos[v * 3 + 1], kept.pos[v * 3 + 2]];
   const Nv = (v) => [kept.nrm[v * 3], kept.nrm[v * 3 + 1], kept.nrm[v * 3 + 2]];
   const centroid = (I, t) => mul(add(add(V(I[t * 3]), V(I[t * 3 + 1])), V(I[t * 3 + 2])), 1 / 3);
+  // the stub (the cave in front of the mouth plug) ships with the outcrop: group O, material cave_moss
   const groupOf = (I, t) => {
     const c = centroid(I, t);
     const k = surfaceClass(c[0], c[1], c[2]);
-    return k === "outcrop" ? "O" : zoneOf(c[0], c[1], c[2]);
+    return k === "outcrop" || inStub(c) ? "O" : zoneOf(c[0], c[1], c[2]);
+  };
+  const isStub = (I, t) => {
+    const c = centroid(I, t);
+    return surfaceClass(c[0], c[1], c[2]) !== "outcrop" && inStub(c);
   };
   // moss: the last 25 m of the climb (s along the exit spline), jittered so the change is ragged
   const exitLen = TUNNEL_LEN.exit;
@@ -1065,7 +1113,7 @@ export function buildCaveData({ log = () => {} } = {}) {
     return n && n.d < 8 && n.s + 3 * noise3(p[0] * 0.4, p[1] * 0.4, p[2] * 0.4) > exitLen - 25;
   };
   const matOf = (I, t, group) => {
-    if (group === "O") return "outcrop_rock";
+    if (group === "O") return isStub(I, t) ? "cave_moss" : "outcrop_rock";
     const c = centroid(I, t);
     const n = norm(add(add(Nv(I[t * 3]), Nv(I[t * 3 + 1])), Nv(I[t * 3 + 2])));
     if (group === "A" && c[1] < 24.8 && n[1] > 0.4 && channelInfo(c[0], c[2]).d < 4.5) return "cave_bed";
@@ -1095,8 +1143,9 @@ export function buildCaveData({ log = () => {} } = {}) {
     vGroups.get(v).add(rGroup[t]);
   }
   // The outcrop ships with the town (segment muster) and binds only the moss set, which ships there
-  // too: the cave triangles that touch it (its ring, at the mouth) are moss (cave_moss: floor or
-  // wall), and their copies in the outcrop's ring bind outcrop_rock (same textures, tile and UVs).
+  // too: the stub (the cave in front of the mouth plug, now group O) is cave_moss, floor and wall; the
+  // zone triangles that touch the outcrop (its ring) are moss too (cave_moss), and their copies in the
+  // outcrop's ring bind outcrop_rock (same textures, tile and UVs).
   const MOSS_MATS = new Set(["cave_moss", "outcrop_rock"]);
   for (let t = 0; t < nR; t++) {
     rMat[t] = matOf(rIdx, t, rGroup[t]);
@@ -1248,15 +1297,18 @@ export function buildCaveData({ log = () => {} } = {}) {
   })();
   if (stair.r > STAIR.maxRiser) errors.push(`stair riser ${stair.r.toFixed(3)} m > ${STAIR.maxRiser}`);
   for (const sl of stair.slabs) {
-    const group = zoneOf(sl.centre[0], sl.top + 1, sl.centre[2]);
-    const tread = addGeo(group, "cave_floor"), riser = addGeo(group, mossy(sl.centre) ? "cave_moss" : "cave_rock");
+    // the slabs in front of the mouth plug ship with the outcrop (moss only there)
+    const stub = inStub([sl.centre[0], sl.top, sl.centre[2]]);
+    sl.group = stub ? "O" : zoneOf(sl.centre[0], sl.top + 1, sl.centre[2]);
+    const group = sl.group;
+    const tread = addGeo(group, stub ? "cave_moss" : "cave_floor"), riser = addGeo(group, stub || mossy(sl.centre) ? "cave_moss" : "cave_rock");
     const fl = add(sl.front, mul(sl.r, -sl.wl)), W = sl.wl + sl.wr;
     const nu = Math.max(2, Math.ceil(W / 0.4)), nv = Math.max(1, Math.ceil(sl.L / 0.4));
-    gridQuad(tread, fl, mul(sl.r, W), mul(sl.t, sl.L), nu, nv, { tile: tileOf("cave_floor"), axis: "y", n: [0, 1, 0] });
+    gridQuad(tread, fl, mul(sl.r, W), mul(sl.t, sl.L), nu, nv, { tile: tileOf(stub ? "cave_moss" : "cave_floor"), axis: "y", n: [0, 1, 0] });
     // riser (faces −t), rough
     const h = sl.top - sl.bottom;
     const jitterR = (p, i, j) => (j === 0 || j === 2 ? p : add(p, mul(sl.t, 0.035 * noise3(p[0] * 2.3, p[1] * 2.3, p[2] * 2.3))));
-    const rTile = tileOf(mossy(sl.centre) ? "cave_moss" : "cave_rock");
+    const rTile = tileOf(stub || mossy(sl.centre) ? "cave_moss" : "cave_rock");
     gridQuad(riser, add(fl, [0, -h, 0]), mul(sl.r, W), [0, h, 0], nu, 2, { tile: rTile, n: mul(sl.t, -1), jitter: jitterR });
     // sides (inside the walls)
     gridQuad(riser, add(fl, [0, -h, 0]), [0, h, 0], mul(sl.t, sl.L), 1, nv, { tile: rTile, n: mul(sl.r, -1) });
@@ -1333,8 +1385,10 @@ export function buildCaveData({ log = () => {} } = {}) {
         if (h.some((v) => v === null)) continue;
         const P = (a, b, y) => [X0 + a * g, y, Z0 + b * g];
         const p00 = P(i, j, h[0]), p10 = P(i + 1, j, h[1]), p01 = P(i, j + 1, h[2]), p11 = P(i + 1, j + 1, h[3]);
-        // every zone a corner touches gets the cell (no crack at the D/E seam)
+        // every zone a corner touches gets the cell (no crack at the D/E seam), and the outcrop gets
+        // the cells of the stub (in front of the mouth plug)
         const groups = new Set([p00, p10, p01, p11].map((p) => zoneOf(p[0], p[1] + 1, p[2])));
+        if ([p00, p10, p01, p11].some((p) => inStub(p))) groups.add("O");
         for (const group of groups) {
           // counter-clockwise seen from above (+Y up, +Z toward the viewer): faces up
           colliders[group].tri(p00, p01, p11);
@@ -1683,11 +1737,11 @@ export function buildCaveData({ log = () => {} } = {}) {
     const c = [(a[0] + b[0]) / 2, PLAT.y + OUTCROP.rails.h / 2 - 0.25, (a[1] + b[1]) / 2];
     rails.box(c, [L / 2 + 0.15, OUTCROP.rails.h / 2 + 0.25, OUTCROP.rails.t / 2], [t, [0, 1, 0], [-t[2], 0, t[0]]]);
   }
-  extra.outcrop_rails_col = { group: "O", col: rails, colOnly: true, note: "invisible rails along the platform's S and E edges, 1.2 m above the deck" };
+  extra.outcrop_rails_col = { group: "O", col: rails, colOnly: true, note: `invisible rails along the platform's S and E edges, ${OUTCROP.rails.h} m above the deck; their ends run into the shoulder and the hood` };
   const plug = new Geo();
   let plugInfo;
   {
-    const q = tunnelAt("exit", exitLen - 3.5), t = [q.tx, 0, q.tz];
+    const q = tunnelAt("exit", exitLen - MOUTH.plugDepth), t = [q.tx, 0, q.tz];
     const f = floorAt(q.x, q.z, q.fy + 1.5);
     const sec = section([q.x, f, q.z], t, f);
     const W = sec.wl + sec.wr + 1.2, Hh = sec.clear + 0.8, mid = (sec.wr - sec.wl) / 2;
@@ -1705,8 +1759,8 @@ export function buildCaveData({ log = () => {} } = {}) {
     const col = new Col();
     const cc = add(base, add(mul(sec.r, W / 2), [0, Hh / 2, 0]));
     col.box(cc, [0.2, Hh / 2, W / 2], [t, [0, 1, 0], sec.r]);
-    plugInfo = { centre: r3v(cc), normal: r3v(t), size: [r2(W), r2(Hh)] };
-    extra.outcrop_mouth_plug = { group: "O", geo: { outcrop_plug: plug }, col, colName: "outcrop_mouth_plug_col", meshName: "outcrop_mouth_plug_mesh", note: "black card + box 3.5 m inside the mouth; hide both once cave/mesh is shown" };
+    plugInfo = { centre: r3v(cc), normal: r3v(t), size: [r2(W), r2(Hh)], box: { centre: r3v(cc), half: [0.2, r2(Hh / 2), r2(W / 2)], axes: [r3v(t), [0, 1, 0], r3v(sec.r)] } };
+    extra.outcrop_mouth_plug = { group: "O", geo: { outcrop_plug: plug }, col, colName: "outcrop_mouth_plug_col", meshName: "outcrop_mouth_plug_mesh", note: `black card + box ${MOUTH.plugDepth} m inside the mouth (the stub in front of it is in outcrop_rock / outcrop_col); hide both once cave/mesh is shown` };
   }
   lap("dressing");
 
@@ -2217,7 +2271,26 @@ export function buildCaveData({ log = () => {} } = {}) {
   }
   lap("zones");
 
-  // ---- 10. budgets
+  // ---- 10. the outcrop's respawn volume: below OUTCROP.respawn.y over the skin (+ margin), north to
+  // OUTCROP.respawn.z0. No walk point and no anchor may stand in it (the climb runs below 50 m further north).
+  const respawn = (() => {
+    const geo = render.O.outcrop_rock, R = OUTCROP.respawn;
+    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (let k = 0; k < geo.p.length; k += 3) {
+      x0 = Math.min(x0, geo.p[k]);
+      x1 = Math.max(x1, geo.p[k]);
+      z0 = Math.min(z0, geo.p[k + 2]);
+      z1 = Math.max(z1, geo.p[k + 2]);
+    }
+    return { min: [r2(x0 - R.margin), 0, Math.max(R.z0, r2(z0 - R.margin))], max: [r2(x1 + R.margin), R.y, r2(z1 + R.margin)] };
+  })();
+  {
+    const inside = (p) => p[0] >= respawn.min[0] && p[0] <= respawn.max[0] && p[2] >= respawn.min[2] && p[2] <= respawn.max[2] && p[1] < respawn.max[1] + 0.5;
+    const hits = [...Object.values(walk).flat(), ...Object.values(anchors).map((a) => a.pos)].filter(inside);
+    if (hits.length) errors.push(`${hits.length} walk points / anchors stand in volumes.respawn_outcrop (first at ${hits[0]})`);
+  }
+
+  // ---- 11. budgets
   const tris = {};
   for (const g of GROUPS) tris[g] = Object.values(render[g]).reduce((a, b) => a + b.tris, 0);
   const renderTotal = Object.values(tris).reduce((a, b) => a + b, 0);
@@ -2240,7 +2313,7 @@ export function buildCaveData({ log = () => {} } = {}) {
     // build timings: logged only (cave/anchors is content-addressed and must not change between identical builds)
     ms,
   };
-  BUILT = { render, colliders, extra, anchors, walk, zones, webs, stair, perchSteps, cocoons, eggList, fissureInfo, plugInfo, report, den_path, moved, lip };
+  BUILT = { render, colliders, extra, anchors, walk, zones, webs, stair, perchSteps, cocoons, eggList, fissureInfo, plugInfo, report, den_path, moved, lip, respawn };
   log(`  cave: ${raw.triangles} raw → render ${renderTotal} (${ZONES.map((z) => `${z} ${tris[z]}`).join(", ")}, outcrop ${tris.O}), colliders ${Object.values(colTris).reduce((a, b) => a + b, 0)}; ${Math.round(performance.now() - t0)} ms (${Object.entries(ms).map(([k, v]) => `${k} ${v}`).join(", ")})`);
   return BUILT;
 }
@@ -2326,6 +2399,509 @@ async function checkEncoded(data, glbs) {
   }
   if (crossings !== 1) bad.push(`walk: expected one chasm crossing, found ${crossings}`);
   return bad;
+}
+
+// ------------------------------------------------------------------ the outdoor set, the enclosure, the gates
+/** Every node of a GLB with its triangles in world space: {names, tris: {node: [[a, b, c], …]}}. */
+async function decodeGLB(glb) {
+  const doc = await io.readBinary(new Uint8Array(glb));
+  const names = [], tris = {};
+  for (const n of doc.getRoot().listNodes()) {
+    names.push(n.getName());
+    const mesh = n.getMesh();
+    if (!mesh) continue;
+    const m = n.getWorldMatrix();
+    const W = (p) => [m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12], m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13], m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14]];
+    const list = (tris[n.getName()] ??= []);
+    for (const prim of mesh.listPrimitives()) {
+      const pos = prim.getAttribute("POSITION"), idx = prim.getIndices(), el = [];
+      for (let k = 0; k < idx.getCount(); k += 3) list.push([0, 1, 2].map((j) => W(pos.getElement(idx.getScalar(k + j), el))));
+    }
+  }
+  return { names, tris };
+}
+
+/** Triangles bucketed on a 1 m x/z grid, for vertical lines, segments and rays (two-sided hits). */
+class TriGrid {
+  constructor() {
+    this.t = [];
+    this.g = new Map();
+  }
+  add([a, b, c], tag) {
+    const n = cross(sub(b, a), sub(c, a)), l = len(n);
+    if (l < 1e-12) return;
+    const id = this.t.length;
+    this.t.push({ a, b, c, n: mul(n, 1 / l), tag });
+    const xs = [a[0], b[0], c[0]], zs = [a[2], b[2], c[2]];
+    for (let i = Math.floor(Math.min(...xs)); i <= Math.floor(Math.max(...xs)); i++)
+      for (let j = Math.floor(Math.min(...zs)); j <= Math.floor(Math.max(...zs)); j++) {
+        const k = hkey(i, j);
+        if (!this.g.has(k)) this.g.set(k, []);
+        this.g.get(k).push(id);
+      }
+  }
+  /** surfaces crossing the vertical line at (x, z): [{y, ny, tag}], highest first */
+  column(x, z) {
+    const out = [];
+    for (const id of this.g.get(hkey(Math.floor(x), Math.floor(z))) ?? NO_SEGS) {
+      const { a, b, c, n, tag } = this.t[id];
+      const d = (b[2] - c[2]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[2] - c[2]);
+      if (Math.abs(d) < 1e-12) continue;
+      const l0 = ((b[2] - c[2]) * (x - c[0]) + (c[0] - b[0]) * (z - c[2])) / d, l1 = ((c[2] - a[2]) * (x - c[0]) + (a[0] - c[0]) * (z - c[2])) / d, l2 = 1 - l0 - l1;
+      if (l0 < -1e-7 || l1 < -1e-7 || l2 < -1e-7) continue;
+      out.push({ y: l0 * a[1] + l1 * b[1] + l2 * c[1], ny: n[1], tag });
+    }
+    return out.sort((p, q) => q.y - p.y);
+  }
+  /** ray parameter of the hit of triangle `id` by o + d·t (Möller–Trumbore, both sides), or null */
+  hit(id, o, d) {
+    const { a, b, c } = this.t[id];
+    const e1 = sub(b, a), e2 = sub(c, a), p = cross(d, e2), det = dot(e1, p);
+    if (Math.abs(det) < 1e-12) return null;
+    const s = sub(o, a), u = dot(s, p) / det;
+    if (u < -1e-9 || u > 1 + 1e-9) return null;
+    const q = cross(s, e1), v = dot(d, q) / det;
+    if (v < -1e-9 || u + v > 1 + 1e-9) return null;
+    return dot(e2, q) / det;
+  }
+  /** whether a triangle (not tagged `skip`) crosses the segment p → q */
+  segment(p, q, skip) {
+    const d = sub(q, p), seen = new Set();
+    for (let i = Math.floor(Math.min(p[0], q[0])); i <= Math.floor(Math.max(p[0], q[0])); i++)
+      for (let j = Math.floor(Math.min(p[2], q[2])); j <= Math.floor(Math.max(p[2], q[2])); j++)
+        for (const id of this.g.get(hkey(i, j)) ?? NO_SEGS) {
+          if (seen.has(id) || this.t[id].tag === skip) continue;
+          seen.add(id);
+          const t = this.hit(id, p, d);
+          if (t !== null && t >= 0 && t <= 1) return true;
+        }
+    return false;
+  }
+  /** first hit of the ray o + u·t (u unit) for t ≤ tmax: {t, tri}, walking the x/z cells in order */
+  ray(o, u, tmax) {
+    let ix = Math.floor(o[0]), iz = Math.floor(o[2]), best = null;
+    const sx = u[0] > 0 ? 1 : -1, sz = u[2] > 0 ? 1 : -1;
+    const dx = u[0] ? Math.abs(1 / u[0]) : Infinity, dz = u[2] ? Math.abs(1 / u[2]) : Infinity;
+    let mx = u[0] ? (u[0] > 0 ? ix + 1 - o[0] : o[0] - ix) * dx : Infinity, mz = u[2] ? (u[2] > 0 ? iz + 1 - o[2] : o[2] - iz) * dz : Infinity;
+    const seen = new Set();
+    for (let t0 = 0; t0 <= tmax; ) {
+      for (const id of this.g.get(hkey(ix, iz)) ?? NO_SEGS) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+        const t = this.hit(id, o, u);
+        if (t !== null && t > 1e-6 && t <= tmax && (!best || t < best.t)) best = { t, tri: this.t[id] };
+      }
+      const next = Math.min(mx, mz);
+      if (best && best.t <= next) break;
+      if (mx < mz) {
+        ix += sx;
+        t0 = mx;
+        mx += dx;
+      } else {
+        iz += sz;
+        t0 = mz;
+        mz += dz;
+      }
+    }
+    return best;
+  }
+}
+
+/**
+ * Where the player's capsule (MOVER) can get on collider triangles: a flood fill over columns of
+ * `cell` m inside `box`. A node is a column and a surface in it: an up-facing triangle no steeper than
+ * MOVER.maxSlopeDeg with MOVER.height clear above (surfaces closer than 0.12 m are one: duplicated
+ * ring triangles, the runtime field's two diagonals). A move to one of the 8 neighbouring columns lands
+ * on the first surface there at most `reach` above the current one (a step, or a jump up to JUMP_REACH)
+ * or any distance below (a fall). It is blocked when that surface has no head room, when something in
+ * the new column lies within MOVER.height above the higher of the two levels, when a jump hits
+ * something above the current column, or when a triangle (other than the terrain's) crosses the
+ * segments between the two columns at 0.3, 0.9 and 1.5 m above the higher level. Landing on a slope
+ * steeper than the limit slides: from there, only moves that do not climb. `visit(node, p)` returns
+ * "stop" to keep a node from spreading. Returns {nodes, voids, edges, path(node)}: `voids` are moves
+ * that fall through every collider, `edges` nodes that reach the border of `box`.
+ */
+function walkFill(grid, { box, cell = 0.25, starts, reach = JUMP_REACH, visit = () => {} }) {
+  const cosMax = Math.cos((MOVER.maxSlopeDeg * Math.PI) / 180), HB = MOVER.height;
+  const nx = Math.round((box.x1 - box.x0) / cell), nz = Math.round((box.z1 - box.z0) / cell);
+  const cx = (i) => box.x0 + (i + 0.5) * cell, cz = (j) => box.z0 + (j + 0.5) * cell;
+  const cols = new Map();
+  const column = (i, j) => {
+    const key = i * 65536 + j;
+    let c = cols.get(key);
+    if (c) return c;
+    c = [];
+    for (const h of grid.column(cx(i), cz(j))) {
+      const last = c[c.length - 1];
+      if (last && last.y - h.y < 0.12) {
+        if (h.ny >= cosMax) last.up = true;
+        if (h.tag !== "terrain") last.tag = h.tag;
+        continue;
+      }
+      c.push({ y: h.y, up: h.ny >= cosMax, tag: h.tag });
+    }
+    for (let n = 0; n < c.length; n++) c[n].room = n === 0 || c[n - 1].y - c[n].y >= HB;
+    cols.set(key, c);
+    return c;
+  };
+  const nodes = new Map(), queue = [], voids = [], edges = [];
+  const keyOf = (i, j, k) => (i * 65536 + j) * 64 + k;
+  const add = (i, j, k, from, slide) => {
+    const key = keyOf(i, j, k);
+    if (nodes.has(key)) return;
+    const c = column(i, j)[k];
+    const nd = { i, j, k, y: c.y, tag: c.tag, slide, from };
+    nodes.set(key, nd);
+    queue.push(nd);
+  };
+  for (const s of starts) {
+    const i = Math.floor((s[0] - box.x0) / cell), j = Math.floor((s[2] - box.z0) / cell);
+    const c = column(i, j);
+    const k = c.findIndex((h) => h.up && h.room && Math.abs(h.y - s[1]) < 0.6);
+    if (k >= 0) add(i, j, k, null, false);
+  }
+  const at = (nd) => [cx(nd.i), nd.y, cz(nd.j)];
+  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+  for (let q = 0; q < queue.length; q++) {
+    const nd = queue[q], p = at(nd);
+    if (visit(nd, p) === "stop") continue;
+    const src = column(nd.i, nd.j);
+    for (const [di, dj] of DIRS) {
+      const i2 = nd.i + di, j2 = nd.j + dj;
+      if (i2 < 0 || j2 < 0 || i2 >= nx || j2 >= nz) {
+        edges.push(nd);
+        continue;
+      }
+      const c2 = column(i2, j2), y = nd.y, hi = y + (nd.slide ? 0.05 : reach);
+      const k = c2.findIndex((h) => h.y <= hi + 1e-6);
+      if (k < 0) {
+        // nothing at all under the body: a fall out of the world (else only a wall above the reach)
+        if (!c2.length) voids.push({ from: nd, at: [cx(i2), y, cz(j2)] });
+        continue;
+      }
+      const h = c2[k];
+      if (!h.room) continue; // something in the new column within the body's height above the surface
+      if (!h.up && h.y > y + 0.05) continue; // a steep face at body height
+      const base = Math.max(y, h.y);
+      // nothing above the first surface may reach into the body (the next hit up is above hi)
+      if (k > 0 && c2[k - 1].y < base + HB) continue;
+      // a jump: room above the current column too
+      if (h.y > y + MOVER.stepUp && src.some((s) => s.y > y + 0.05 && s.y < h.y + HB)) continue;
+      const q2 = [cx(i2), 0, cz(j2)];
+      let blocked = false;
+      for (const dy of [0.3, 0.9, 1.5]) {
+        p[1] = q2[1] = base + dy;
+        if (grid.segment(p, q2, "terrain")) {
+          blocked = true;
+          break;
+        }
+      }
+      p[1] = nd.y;
+      if (!blocked) add(i2, j2, k, nd, !h.up);
+    }
+  }
+  const path = (nd) => {
+    const out = [];
+    for (let n = nd; n; n = n.from) out.push(at(n).map(r2));
+    return out.reverse();
+  };
+  return { nodes, voids, edges, path, at };
+}
+
+/** A path for a message: start, a few points, end. */
+const pathText = (pts) => (pts.length <= 6 ? pts : [...pts.slice(0, 2), "…", ...pts.slice(-3)]).map((p) => (typeof p === "string" ? p : `(${p.join(", ")})`)).join(" → ");
+
+/** The render terrain's triangles (tools/gen/terrain.mjs on its 2 m grid) over a rectangle, EXIT_HOLE cut. */
+function renderTerrainTris({ x0, x1, z0, z1 }) {
+  const out = [], sp = 2, H_ = (i, j) => [i * sp, T.height(i * sp, j * sp), j * sp];
+  for (let i = Math.floor(x0 / sp); i < Math.ceil(x1 / sp); i++)
+    for (let j = Math.floor(z0 / sp); j < Math.ceil(z1 / sp); j++) {
+      if (inRect(EXIT_HOLE.render, (i + 0.5) * sp, (j + 0.5) * sp)) continue;
+      const a = H_(i, j), b = H_(i + 1, j), c = H_(i + 1, j + 1), d = H_(i, j + 1);
+      if ((((i + j) % 2) + 2) % 2) out.push([a, d, c], [a, c, b]);
+      else out.push([a, d, b], [b, d, c]);
+    }
+  return out;
+}
+
+/** The decoded box of a removable collider: centre and half extents along `axes` (from its vertices). */
+function boxOf(tris, axes) {
+  const vs = tris.flat();
+  const c = mul(vs.reduce((s, v) => add(s, v), [0, 0, 0]), 1 / vs.length);
+  const half = axes.map((a) => Math.max(...vs.map((v) => Math.abs(dot(sub(v, c), a)))));
+  return { c, half };
+}
+
+/**
+ * Checks of the shipped GLBs beyond the walk (checkEncoded), with the field as the reference:
+ *  1. muster set (cave/outcrop alone, over the runtime terrain with EXIT_HOLE cut, no cave/mesh):
+ *     rays from the platform, the town and the hillside toward where zone E would be must meet a
+ *     front face first (no back face, nothing, or terrain hidden in the rock), and every standable
+ *     floor of the field outside the plug has a collider within 0.45 m;
+ *  2. enclosure: the capsule filled from `platform` stays on the deck and the stub (or drops into
+ *     volumes.respawn_outcrop), never reaches the terrain or the box's edge or falls through; filled
+ *     from the hillside it never reaches the deck or the stub (no one drops in and is shut in);
+ *  3. the rails stand ≥ rails.h above the deck along every open edge;
+ *  4. each removable gate box (web_A, web_B, the plug) covers the tunnel section in its plane;
+ *  5. the perch ramp climbs from perch_foot to the perch top with steps ≤ 0.45;
+ *  6. no two node names differ only by case.
+ * Returns {bad, stats}.
+ */
+async function checkOutdoor(data, { A, BE, O }) {
+  const bad = [], stats = {};
+  const PL = OUTCROP.platform, RS = data.respawn;
+  const region = { x0: -40, x1: 4, z0: -700, z1: -650 };
+  const inDeck = (p) => p[0] >= PL.x[0] && p[0] <= PL.x[1] && p[2] >= PL.z[0] && p[2] <= PL.z[1] && Math.abs(p[1] - PL.y) < 0.6;
+  /** the stub's floor: inside the tunnel's air, in front of the plug */
+  const inStubAir = (p) => plugSide(p) > -0.3 && inStub(p, 0.3) && air(p[0], p[1] + 1.0, p[2]) < 0;
+  const inRespawn = (p) => p[0] >= RS.min[0] && p[0] <= RS.max[0] && p[2] >= RS.min[2] && p[2] <= RS.max[2];
+  /** the outcrop's own box: the respawn volume's x/z, reaching north over the whole footprint */
+  const inOutcrop = (p) => p[0] >= RS.min[0] && p[0] <= RS.max[0] && p[2] >= OUTCROP.footprint.z[0] - 1 && p[2] <= RS.max[2];
+
+  // ---- 1a. render closure (muster set)
+  {
+    const g = new TriGrid();
+    for (const [name, list] of Object.entries(O.tris)) if (!/_col$/.test(name)) for (const t of list) g.add(t, name);
+    for (const t of renderTerrainTris(region)) g.add(t, "terrain");
+    // targets: zone E's surface near the mouth (what cave/mesh would show), and air behind the plug
+    const targets = [];
+    for (const [mat, geo] of Object.entries(data.render.E)) {
+      if (mat === "outcrop_rock") continue; // E's ring of outcrop triangles: those ship in cave/outcrop
+      for (let k = 0; k < geo.i.length; k += 3) {
+        const c = mul([0, 1, 2].map((j) => geo.p.slice(geo.i[k + j] * 3, geo.i[k + j] * 3 + 3)).reduce((s, v) => add(s, v), [0, 0, 0]), 1 / 3);
+        if (len(sub(c, MOUTH_PT)) < 14) targets.push(c);
+      }
+    }
+    const step = Math.max(1, Math.floor(targets.length / 450));
+    const T_ = targets.filter((_, n) => n % step === 0);
+    for (let s = TUNNEL_LEN.exit - MOUTH.plugDepth - 2.5; s <= TUNNEL_LEN.exit - MOUTH.plugDepth - 0.5; s += 0.5) {
+      const q = tunnelAt("exit", s);
+      for (const o of [-1.5, 0, 1.5]) for (const dy of [0.8, 2.0, 3.2]) T_.push([q.x - q.tz * o, q.fy + dy - 1, q.z + q.tx * o]);
+    }
+    const eyes = [];
+    for (let x = PL.x[0] + 0.5; x <= PL.x[1] - 0.4; x += 1.5) for (let z = PL.z[0] + 0.5; z <= PL.z[1] - 0.4; z += 1.5) eyes.push({ k: "platform", p: [x, PL.y + 1.65, z] });
+    const ground = (x, z) => Hrender(x, z) + 1.65;
+    for (const [k, x, z, y] of [["square", 60, -592], ["forecourt", 60, -645], ["keep_top", 60, -662, 52.7], ["street", 62, -610], ["tower", 90, -584, 52], ["inn", 101, -584, 46]]) eyes.push({ k, p: [x, y ?? ground(x, z), z] });
+    for (let a = 0; a < 360; a += 30)
+      for (const r of [16, 28]) {
+        const x = -16 + r * Math.cos((a * Math.PI) / 180), z = -674 + r * Math.sin((a * Math.PI) / 180), p = [x, ground(x, z), z];
+        if (S(p[0], p[1], p[2]) > 0.3) eyes.push({ k: `hill ${a}°/${r}`, p });
+      }
+    let rays = 0, fails = 0;
+    const byEye = {}, firsts = [];
+    for (const e of eyes)
+      for (const tp of T_) {
+        const d = sub(tp, e.p), L = len(d), u = mul(d, 1 / L);
+        const h = g.ray(e.p, u, L + 3);
+        rays++;
+        let why = null;
+        if (!h) why = "nothing";
+        else if (dot(h.tri.n, u) >= 0) why = `back face of ${h.tri.tag}`;
+        else if (h.tri.tag === "terrain") {
+          const hp = add(e.p, mul(u, h.t));
+          if (S(hp[0], hp[1] + 0.3, hp[2]) < -0.1) why = "terrain inside the rock";
+        }
+        if (why) {
+          fails++;
+          byEye[e.k] = (byEye[e.k] ?? 0) + 1;
+          if (firsts.length < 3) firsts.push(`${e.k} (${e.p.map(r2)}) → (${tp.map(r2)}): ${why}`);
+        }
+      }
+    stats.closure = { eyes: eyes.length, targets: T_.length, rays, fails };
+    if (fails) bad.push(`muster set (cave/outcrop without cave/mesh): ${fails} of ${rays} rays toward zone E reach the void (${Object.entries(byEye).map(([k, n]) => `${k} ${n}`).join(", ")}), e.g. ${firsts.join("; ")}`);
+  }
+
+  // colliders of the muster set: the outcrop's (deck, rails, plug) and the runtime terrain with EXIT_HOLE
+  const cg = new TriGrid();
+  for (const [name, list] of Object.entries(O.tris)) if (/_col$/.test(name)) for (const t of list) cg.add(t, name);
+  for (const t of runtimeFieldTris(region)) cg.add(t, "terrain");
+
+  // ---- 1b. every standable floor of the field outside the plug has a collider within 0.45 m
+  {
+    const cosMax = Math.cos((MOVER.maxSlopeDeg * Math.PI) / 180);
+    let pts = 0, miss = 0, first = null;
+    for (let x = OUTCROP.footprint.x[0] - 1; x <= OUTCROP.footprint.x[1] + 2; x += 0.5)
+      for (let z = OUTCROP.footprint.z[0] - 1; z <= OUTCROP.footprint.z[1] + 1; z += 0.5) {
+        // floors: rock below, air above, scanning down from 68 m to 44 m
+        let prev = S(x, 68, z) > 0;
+        for (let y = 67.8; y >= 44; y -= 0.2) {
+          const isAir = S(x, y, z) > 0;
+          if (prev && !isAir) {
+            const f = bisectY(x, z, y, y + 0.2);
+            const p = [x, f, z];
+            const cls = surfaceClass(x, f - 0.03, z);
+            const behind = plugSide(p) < -0.2 && air(x, f + 1.0, z) < 0;
+            const room = S(x, f + 0.3, z) > 0 && S(x, f + 1.0, z) > 0 && S(x, f + 1.75, z) > 0;
+            if (cls !== "terrain" && !behind && room && norm(gradS(x, f, z))[1] >= cosMax) {
+              pts++;
+              if (!cg.column(x, z).some((h) => h.y >= f - 0.45 && h.y <= f + 0.45)) {
+                miss++;
+                first ??= p.map(r2);
+              }
+            }
+          }
+          prev = isAir;
+        }
+      }
+    stats.mouthFloors = { points: pts, missing: miss };
+    if (miss) bad.push(`muster set: ${miss} of ${pts} standable floors outside the mouth plug have no collider within 0.45 m (first at ${first})`);
+  }
+
+  // ---- 2. enclosure
+  {
+    const first = {};
+    let respawned = 0;
+    const out = walkFill(cg, {
+      box: region,
+      starts: [data.anchors.platform.pos],
+      visit: (nd, p) => {
+        if (p[1] < RS.max[1] && inRespawn(p)) {
+          respawned++;
+          return "stop";
+        }
+        // inside the stub the runtime terrain collider is part of the floor (the tunnel follows it there)
+        const k = !inOutcrop(p) ? "outside" : inDeck(p) || inStubAir(p) ? null : nd.tag === "terrain" ? "terrain" : "envelope";
+        if (k) first[k] ??= nd;
+      },
+    });
+    const how = { outside: "leaves the outcrop", terrain: "reaches the terrain", envelope: "leaves the rails' envelope (the deck and the stub)" };
+    const msgs = Object.entries(first).map(([k, nd]) => `${how[k]} at (${out.at(nd).map(r2)}) via ${pathText(out.path(nd))}`);
+    if (!out.nodes.size) msgs.push("finds no standable surface at the platform anchor");
+    if (out.voids.length) msgs.push(`falls through every collider at (${out.voids[0].at.map(r2)}) via ${pathText(out.path(out.voids[0].from))}`);
+    if (out.edges.length) msgs.push(`reaches the edge of the checked area at (${out.at(out.edges[0]).map(r2)})`);
+    for (const m of msgs) bad.push(`enclosure: the capsule (step ${MOVER.stepUp}, slopes ≤ ${MOVER.maxSlopeDeg}°, jump ${JUMP_REACH.toFixed(2)} m) from the platform ${m}`);
+    stats.enclosure = { fromPlatform: out.nodes.size, respawned };
+  }
+  {
+    // from the hillside: every terrain surface on the border of the area, i.e. the whole open slope
+    const starts = [], cell = 0.25;
+    const nx = Math.round((region.x1 - region.x0) / cell), nz = Math.round((region.z1 - region.z0) / cell);
+    for (let i = 0; i < nx; i++)
+      for (const j of [0, nz - 1]) starts.push([region.x0 + (i + 0.5) * cell, heightAtRuntime(region.x0 + (i + 0.5) * cell, region.z0 + (j + 0.5) * cell), region.z0 + (j + 0.5) * cell]);
+    for (let j = 0; j < nz; j++)
+      for (const i of [0, nx - 1]) starts.push([region.x0 + (i + 0.5) * cell, heightAtRuntime(region.x0 + (i + 0.5) * cell, region.z0 + (j + 0.5) * cell), region.z0 + (j + 0.5) * cell]);
+    let reached = null, onTop = 0;
+    const out = walkFill(cg, {
+      box: region,
+      cell,
+      starts,
+      visit: (nd, p) => {
+        if (nd.tag !== "terrain") onTop++;
+        if (!reached && (inDeck(p) || inStubAir(p))) reached = nd;
+      },
+    });
+    stats.enclosure.fromHillside = out.nodes.size;
+    stats.enclosure.hillsideOnOutcrop = onTop;
+    if (reached) bad.push(`enclosure: the capsule from the hillside reaches the ${inDeck(out.at(reached)) ? "platform" : "mouth"} at (${out.at(reached).map(r2)}) via ${pathText(out.path(reached))}: a town-chapter player would be shut in by the rails`);
+    if (out.voids.length) bad.push(`muster set: the capsule from the hillside falls through every collider at (${out.voids[0].at.map(r2)}) via ${pathText(out.path(out.voids[0].from))}`);
+  }
+
+  // ---- 3. rails
+  {
+    const rails = new TriGrid(), deck = new TriGrid();
+    for (const t of O.tris.outcrop_rails_col ?? []) rails.add(t, "rails");
+    for (const t of O.tris.outcrop_col ?? []) deck.add(t, "deck");
+    let min = Infinity, at = null, gapAt = null;
+    for (const [a, b] of Object.values(OUTCROP.rails.open)) {
+      const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      for (let s = 0; s <= L + 1e-6; s += 0.25) {
+        const x = lerp(a[0], b[0], s / L), z = lerp(a[1], b[1], s / L);
+        const hs = rails.column(x, z);
+        const top = hs.length ? hs[0].y : -Infinity, bottom = hs.length ? hs[hs.length - 1].y : Infinity;
+        // the deck just inside the edge
+        const ix = x + (x <= PL.x[0] + 0.01 ? 0.5 : x >= PL.x[1] - 0.01 ? -0.5 : 0), iz = z + (z <= PL.z[0] + 0.01 ? 0.5 : z >= PL.z[1] - 0.01 ? -0.5 : 0);
+        const d = deck.column(ix, iz).find((h) => h.y < PL.y + 0.5)?.y ?? PL.y;
+        if (top - d < min) {
+          min = top - d;
+          at = [r2(x), r2(z)];
+        }
+        if (bottom > d + 0.02) gapAt ??= [r2(x), r2(z)];
+      }
+    }
+    stats.rails = { minAboveDeck: r2(min) };
+    if (min < OUTCROP.rails.h - 0.01) bad.push(`rails: only ${min.toFixed(2)} m above the deck at (${at}) (want ${OUTCROP.rails.h}; a jump lifts the feet ${JUMP_REACH.toFixed(2)} m)`);
+    if (gapAt) bad.push(`rails: a gap under the rails at (${gapAt})`);
+  }
+
+  // ---- 4. gate boxes cover their tunnel sections
+  {
+    const gates = [
+      ["web_A", BE.tris.web_A_col, data.webs.web_A?.box],
+      ["web_B", BE.tris.web_B_col, data.webs.web_B?.box],
+      ["outcrop_mouth_plug", O.tris.outcrop_mouth_plug_col, data.plugInfo?.box],
+    ];
+    stats.gates = {};
+    for (const [name, tris, info] of gates) {
+      if (!tris || !info) {
+        bad.push(`gate ${name}: no collider or no box record`);
+        continue;
+      }
+      const [t, up, r] = info.axes.map((a) => norm(a));
+      const box = boxOf(tris, [t, up, r]);
+      // flood the open section in the box's mid-plane from its centre (0.1 m cells, ±7 m)
+      const step = 0.1, N = 70, seen = new Uint8Array((2 * N + 1) ** 2);
+      const P = (iu, iv) => add(box.c, add(mul(r, iu * step), mul(up, iv * step)));
+      const id = (iu, iv) => (iv + N) * (2 * N + 1) + (iu + N);
+      const stack = [[0, 0]];
+      let cells = 0, outside = 0, first = null, open = false;
+      while (stack.length) {
+        const [iu, iv] = stack.pop();
+        if (Math.abs(iu) > N || Math.abs(iv) > N || seen[id(iu, iv)]) continue;
+        seen[id(iu, iv)] = 1;
+        const p = P(iu, iv), s = S(p[0], p[1], p[2]);
+        if (s <= 0.02) continue;
+        cells++;
+        if (Math.abs(iu) === N || Math.abs(iv) === N) open = true;
+        // a capsule's centre needs its radius of air; such a point outside the box gets past it
+        if (s > MOVER.radius && (Math.abs(iu * step) > box.half[2] + 1e-3 || Math.abs(iv * step) > box.half[1] + 1e-3)) {
+          outside++;
+          first ??= p.map(r2);
+        }
+        stack.push([iu + 1, iv], [iu - 1, iv], [iu, iv + 1], [iu, iv - 1]);
+      }
+      stats.gates[name] = { sectionCells: cells, half: box.half.map(r2), outside };
+      if (open) bad.push(`gate ${name}: the section in its plane is not closed within ${N * step} m of the box`);
+      if (outside) bad.push(`gate ${name}: its box (${box.half.map(r2)} half extents) does not cover the tunnel section in its plane: ${outside} open points with room for the capsule lie outside it (first at ${first})`);
+    }
+  }
+
+  // ---- 5. the perch ramp
+  {
+    const g = new TriGrid();
+    for (const t of A.tris.cave_A_col ?? []) g.add(t, "A");
+    const foot = data.anchors.perch_foot?.pos, top = data.anchors.perch?.pos;
+    let maxStep = 0, prev = foot?.[1], ok = !!(foot && top), at = null;
+    const pts = [];
+    if (ok) {
+      for (let x = foot[0]; x <= PERCH.c[0]; x += 0.1) pts.push([x, PERCH.steps.z]);
+      const L = Math.hypot(top[0] - PERCH.c[0], top[2] - PERCH.steps.z);
+      for (let s = 0.1; s <= L; s += 0.1) pts.push([lerp(PERCH.c[0], top[0], s / L), lerp(PERCH.steps.z, top[2], s / L)]);
+      for (const [x, z] of pts) {
+        const h = g.column(x, z).find((q) => q.y <= prev + MOVER.stepUp + 0.005 && q.ny > 0.3);
+        if (!h) {
+          ok = false;
+          at = [r2(x), r2(z)];
+          break;
+        }
+        maxStep = Math.max(maxStep, h.y - prev);
+        prev = h.y;
+      }
+    }
+    stats.perchRamp = { maxStep: +maxStep.toFixed(3), top: prev === undefined ? null : +prev.toFixed(3) };
+    if (!ok || Math.abs(prev - PERCH.top) > 0.1) bad.push(`perch: the decoded ramp does not climb from perch_foot to the perch top with steps ≤ ${MOVER.stepUp} (${at ? `stuck at (${at})` : `ends at ${prev?.toFixed(2)}, top ${PERCH.top}`})`);
+  }
+
+  // ---- 6. node names
+  {
+    const seen = new Map();
+    for (const [asset, d] of [["cave/mesh_a", A], ["cave/mesh", BE], ["cave/outcrop", O]])
+      for (const n of d.names) {
+        const k = n.toLowerCase(), was = seen.get(k);
+        if (was && was.name !== n) bad.push(`node names ${was.name} (${was.asset}) and ${n} (${asset}) differ only by case`);
+        if (!was) seen.set(k, { name: n, asset });
+      }
+  }
+  return { bad, stats };
 }
 
 export async function buildCave({ emit, SRC }) {
@@ -2428,14 +3004,20 @@ export async function buildCave({ emit, SRC }) {
     return finalizeCave(doc);
   }
   const assetOf = { A: "cave/mesh_a", B: "cave/mesh", C: "cave/mesh", D: "cave/mesh", E: "cave/mesh", O: "cave/outcrop" };
-  const glbA = await buildDoc("cave_a", ["A"]);
-  const glbBE = await buildDoc("cave", ["B", "C", "D", "E"]);
-  const glbO = await buildDoc("outcrop", ["O"]);
+  // container roots: no node name may differ from another only by case (cave_a vs cave_A)
+  const glbA = await buildDoc("cave_a_root", ["A"]);
+  const glbBE = await buildDoc("cave_root", ["B", "C", "D", "E"]);
+  const glbO = await buildDoc("outcrop_root", ["O"]);
   for (const v of Object.values(nodesJSON)) v.asset = assetOf[v.group];
+  // the outdoor set, the enclosure, rails, gates, perch ramp and node names, on the decoded GLBs
+  const decoded = { A: await decodeGLB(glbA), BE: await decodeGLB(glbBE), O: await decodeGLB(glbO) };
+  _debug.last = { data, decoded };
+  const outdoor = await checkOutdoor(data, decoded);
+  Object.assign(report.stats, outdoor.stats);
 
   const json = {
     version: 1,
-    assets: { "cave/mesh_a": "zone A (keep segment)", "cave/mesh": "zones B–E (exit segment); covers EXIT_HOLE", "cave/outcrop": "outcrop skin, platform, rails, mouth plug (muster segment, with the town; binds only cave/tex/moss_*, also muster)" },
+    assets: { "cave/mesh_a": "zone A (keep segment)", "cave/mesh": "zones B–E behind the mouth plug (exit segment)", "cave/outcrop": "outcrop skin, platform, the mouth stub in front of the plug, rails, mouth plug (muster segment, with the town; covers EXIT_HOLE; binds only cave/tex/moss_*, also muster)" },
     frame: "world coordinates: add each container at the origin (no parenting, no recentring); node transforms come from mesh quantisation",
     yawConvention: "atan2(−dx, −dz) of the facing direction; facing −Z = 0, west = π/2, east = −π/2",
     nodes: nodesJSON,
@@ -2446,19 +3028,21 @@ export async function buildCave({ emit, SRC }) {
     zoneOrder: "define A, B, C, D, E in this order with equal priority: overlapping boxes resolve to the earlier zone",
     volumes: {
       respawn_gallery: { min: [32, 0, -735.5], max: [64, 25.5, -727.5], to: ["lever_stance", "gal_s_cp"], note: "fade 0.6 s, teleport to the bank last stood on, no damage" },
-      respawn_outcrop: { min: [OUTCROP.footprint.x[0], 0, OUTCROP.footprint.z[0]], max: [OUTCROP.footprint.x[1], 50, OUTCROP.footprint.z[1]], to: ["platform"] },
+      respawn_outcrop: { min: data.respawn.min, max: data.respawn.max, to: ["platform"], note: `y < ${OUTCROP.respawn.y} over the outcrop's skin + ${OUTCROP.respawn.margin} m, north to z ${OUTCROP.respawn.z0} (the climb runs below 50 m further north); a safety net: the deck is closed` },
       water: { min: [30, WATER.bed - 0.3, -737], max: [66, WATER.y, -725], surface: WATER.y, bed: WATER.bed, note: "slow the player to 0.65× and splash inside; the ribbon has no collider" },
       spider_arena: { min: [9, 26, -757], max: [27, 36, -743] },
       chasm: { x: 48, z: [-727.5, -735.5], note: "drawbridge gap; jump ≤ 5.8 m" },
     },
     webs: data.webs,
-    stair: { ...report.stats.stair, slabs: data.stair.slabs.map((s) => ({ k: s.k, top: +s.top.toFixed(3), s: [r2(s.sa), r2(s.sb)] })), ramp: data.stair.ramp, note: "rock slabs on the climb; the collider is one ramp through the tread middles (in cave_D_col / cave_E_col)" },
+    stair: { ...report.stats.stair, slabs: data.stair.slabs.map((s) => ({ k: s.k, top: +s.top.toFixed(3), s: [r2(s.sa), r2(s.sb)], node: s.group === "O" ? "outcrop_rock" : `cave_${s.group}` })), ramp: data.stair.ramp, note: "rock slabs on the climb; the collider is one ramp through the tread middles (in cave_D_col / cave_E_col; the cells in front of the mouth plug also in outcrop_col). The slabs in front of the plug are in outcrop_rock (moss)" },
     perch: { top: PERCH.top, box: { min: PERCH_MIN, max: PERCH_MAX }, steps: data.perchSteps.steps.map((s) => ({ top: +s.top.toFixed(3), x: [r2(s.xa), r2(s.xb)] })), z: [r2(data.perchSteps.z0), r2(data.perchSteps.z1)], ramp: { ...data.perchSteps.ramp, deg: +data.perchSteps.ramp.deg.toFixed(1) } },
     outcrop: {
       platform: { y: PLAT.y, x: PLAT.x, z: PLAT.z, centre: PLAT.centre },
       vista: report.stats.vista,
       viewCorridor: { points: Object.values(report.stats.vista).map((v) => v.leavesDeck.at), note: "the vista lines leave the deck here 0.8–1.4 m above it: keep anything taller than 0.7 m at least 1.5 m away" },
-      rails: { height: OUTCROP.rails.h, edges: OUTCROP.rails.edges },
+      rails: { height: OUTCROP.rails.h, open: OUTCROP.rails.open, edges: OUTCROP.rails.edges, note: "the boxes run 0.15 m past `edges`, their ends inside the shoulder and the hood" },
+      mouthStub: { plane: { point: r3v(PLUG_PLANE.p), normal: r3v(PLUG_PLANE.t) }, behind: MOUTH.behind, note: "the cave in front of the plug's plane (and up to `behind` m behind it) ships in cave/outcrop: outcrop_rock (material cave_moss) and outcrop_col, the top stair slabs and their ramp included" },
+      enclosure: outdoor.stats.enclosure,
       mouthPlug: data.plugInfo,
       hole: { id: EXIT_HOLE.id, render: EXIT_HOLE.render, samples: EXIT_HOLE.samples, cover: EXIT_HOLE.cover },
       scatterExclusion: SCATTER_EXCLUDE.map((e) => ({ centre: [e.x, e.z], radius: e.r, note: "tools/gen/scatter.mjs SCATTER_EXCLUDE" })),
@@ -2482,6 +3066,7 @@ export async function buildCave({ emit, SRC }) {
   // the shipped files, decoded: their colliders (quantised, in world space) must still carry every
   // anchor and the walk path, as the runtime will build them (removable colliders left out)
   const bad = await checkEncoded(data, [glbA, glbBE, glbO]);
+  bad.push(...outdoor.bad);
   if (bad.length) throw new Error(`cave: the encoded colliders fail (${bad.length}):\n  ` + bad.slice(0, 20).join("\n  "));
 
   // ---- emit (nothing is written before every check has passed)
@@ -2500,4 +3085,4 @@ export async function buildCave({ emit, SRC }) {
   console.log(`  cave stats: cover ${report.stats.minRockCover} m, clearance ${report.stats.probes.minClearance}, half-width ${report.stats.probes.minHalfWidth}, winding ${report.stats.wrongWindingPct} %, ${Object.keys(data.anchors).length} anchors; ${((performance.now() - t0) / 1000).toFixed(1)} s`);
 }
 
-export const _debug = { S, air, outcrop, ground, Hc, Hrender, surfaceClass, zoneOf, floorAt, clearAt, tunnelAt, nearestSeg, SEGS, TUNNEL_LEN, T };
+export const _debug = { S, air, outcrop, ground, Hc, Hrender, surfaceClass, zoneOf, floorAt, clearAt, tunnelAt, nearestSeg, SEGS, TUNNEL_LEN, T, TriGrid, walkFill, runtimeFieldTris, renderTerrainTris, checkOutdoor, decodeGLB, plugSide, inStub, PLUG_PLANE, MOUTH_PT, JUMP_REACH, heightAtRuntime, last: null };
