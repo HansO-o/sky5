@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { BEAST_HEARING, NoiseBus, combatNoise, footstepNoise } from "../../../../src/engine/ai/noise";
-import { BEAST, PERCEPTION, Perception, beastRate, hearRate, inCone, levelOf, sightRate, type PerceptionTarget } from "../../../../src/engine/ai/perception";
+import { BEAST, PERCEPTION, Perception, beastRate, createPerception, hearRate, hearingDistance, inCone, levelOf, sightRate, type PerceptionTarget } from "../../../../src/engine/ai/Perception";
 
 const near = (a: number, b: number, eps = 1e-6) => Math.abs(a - b) <= eps;
 
@@ -170,6 +170,34 @@ test("hearing: footsteps raise suspicion with the last noise remembered; it fade
   assert.ok(a.s.meter > 0.5);
 });
 
+test("hearing is measured on the ground plane: §9's radii are plain distances (a storey up is further)", () => {
+  const feet = { x: 0, y: 0, z: 0 };
+  assert.equal(hearingDistance(feet, { x: 1.9, y: 0, z: 0 }), 1.9);
+  assert.equal(hearingDistance(feet, { x: 0, y: 1.2, z: -1.9 }), 1.9, "a clash at chest height");
+  assert.ok(near(hearingDistance(feet, { x: 3, y: 6, z: 0 }), 5), "a floor up: the height beyond 2 m counts");
+  // a guard hears a sneak-move 1.9 m away (its eye 1.6 m up does not shrink the 2 m radius), not 2.1 m
+  for (const [z, heard] of [[1.9, true], [2.1, false]] as const) {
+    const a = scene({ sight: false });
+    a.player.z = z;
+    a.noise.source(() => ({ kind: "sneak", at: a.player }));
+    a.run(1);
+    assert.equal(a.s.lastNoise !== null, heard, `a sneak-move at ${z} m`);
+  }
+  // the wolf hears a sneak-move out to 3 m (on the ground: its eye height does not count)
+  const meterAfter = (z: number, noisy: boolean) => {
+    const w = scene({ kind: "beast" });
+    w.player.z = z;
+    w.player.sneaking = true;
+    w.s.meter = 0.2;
+    if (noisy) w.noise.source(() => ({ kind: "sneak", at: w.player }));
+    w.run(2);
+    assert.equal(w.s.level, "unaware", "sneaking never wakes it");
+    return w.s.meter;
+  };
+  assert.ok(meterAfter(-2.8, true) - meterAfter(-2.8, false) > 0.02, "heard at 2.8 m");
+  assert.equal(meterAfter(-3.2, true), meterAfter(-3.2, false), "not at 3.2 m");
+});
+
 test("beast sensor: noise only; stir and settle; too close or a clash nearby wakes it at once; a bone step adds 0.35 once", () => {
   const w = scene({ kind: "beast" });
   w.player.z = -6;
@@ -182,6 +210,7 @@ test("beast sensor: noise only; stir and settle; too close or a clash nearby wak
   off();
   w.run(5);
   assert.equal(w.s.level, "unaware");
+  w.s.calm();
   w.noise.emit({ kind: "bone", at: { x: 0, y: 0, z: -3 }, seconds: 0 });
   w.run(0.5);
   assert.ok(near(w.s.meter, 0.35 - 0.1 * 0.5, 0.03), `${w.s.meter}`);
@@ -230,4 +259,44 @@ test("combat noise: blows clash, swings swing, backstabs are silent", () => {
   assert.equal(combatNoise(hit("backstab")), null);
   assert.equal(combatNoise({ type: "swing", attacker: c("a"), attack: { ranged: false } } as never)?.kind, "swing");
   assert.equal(combatNoise({ type: "miss" } as never), null);
+});
+
+test("a sensor switched off hears nothing meanwhile: switched on again it starts from then, not with the whole span at once", () => {
+  const a = scene({ sight: false });
+  a.player.z = 3;
+  // running 3 m behind it the whole time: 0.675/s while it listens
+  a.noise.source(() => ({ kind: "run", at: a.player }));
+  a.s.enabled = false;
+  a.run(10);
+  assert.equal(a.s.meter, 0);
+  a.s.enabled = true;
+  a.s.calm();
+  a.run(0.25);
+  assert.ok(a.s.meter < 0.2, `one look's worth, not 10 s of it (${a.s.meter.toFixed(2)})`);
+  assert.equal(a.s.level, "unaware");
+  // and it does hear from then on
+  a.run(1.2);
+  assert.equal(a.s.level, "suspicious");
+});
+
+test("canSee and createPerception (engine-framework §2.19): range, cone, static occlusion", () => {
+  const wall = {
+    rayCastStatic(from: Vector3, dir: Vector3, max: number) {
+      // a wall across x = 3
+      if (dir.x <= 0) return Infinity;
+      const t = (3 - from.x) / dir.x;
+      return t > 0 && t < max ? t : Infinity;
+    },
+  };
+  const per = createPerception(wall);
+  assert.ok(per.noise instanceof NoiseBus, "its own noise bus");
+  const eye = { x: 0, y: 1.6, z: 0 };
+  const fwd = { x: 0, z: -1 };
+  assert.ok(per.canSee(eye, { x: 0, y: 1.2, z: -10 }, fwd, 15, 110));
+  assert.ok(!per.canSee(eye, { x: 0, y: 1.2, z: -20 }, fwd, 15, 110), "too far");
+  assert.ok(!per.canSee(eye, { x: 0, y: 1.2, z: 5 }, fwd, 15, 110), "behind");
+  assert.ok(per.canSee(eye, { x: -4, y: 1.2, z: -4 }, fwd, 15, 110), "45° off, inside 110°");
+  assert.ok(!per.canSee(eye, { x: 4, y: 1.2, z: -4 }, fwd, 15, 110), "past the wall");
+  const bus = new NoiseBus();
+  assert.equal(createPerception(null, { noise: bus }).noise, bus);
 });

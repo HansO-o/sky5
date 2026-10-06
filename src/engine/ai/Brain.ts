@@ -4,6 +4,14 @@
  * first: a parent can leave the whole family, e.g. "combat" giving up when no enemy is left) and
  * its enter/exit (run once when the family is entered or left, not on moves inside it). Pure: no
  * Babylon, no clock of its own (`update(dt)` advances it).
+ *
+ * The `ai/` modules against engine-framework §1.1/§2.19: `Brain.ts` (this), `AISystem.ts` (`add`
+ * takes a `Brain` or a fighting brain), `Perception.ts` (`canSee`, `createPerception`; the noise
+ * channel is a `NoiseBus`), `AgentMover.ts` (on a `CapsuleMover` with direct steering instead of a
+ * `NavAgent`, design §0 #12). The brains themselves (`CombatBrain`, `HumanoidBrain`,
+ * `CreatureBrain`, `Companion`) are the flagship's states, built on this machine rather than on
+ * §2.19's shared `states.ts`, which ships once a second game needs them; `noise`, `steering`,
+ * `agent`, `breadcrumbs`, `lunge`, `slicer` and `tuning` are their helpers.
  */
 import type { DisposerSink } from "../core/emitter";
 import { Emitter } from "../core/emitter";

@@ -1,7 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { FOLLOW } from "../../../../src/engine/ai/breadcrumbs";
+import { PLAYER_WEAPONS } from "../../../../src/engine/combat/attacks";
 import { dist, fight } from "../../helpers/ai";
+
+const SLEEP = { sleep: "wolf_lie", stir: "wolf_head_up", wake: "wolf_stand" };
 
 test("follows the player's trail 2.5 m behind, walking or jogging by distance; stops near an idle player", () => {
   const f = fight();
@@ -171,4 +174,88 @@ test("hold and place: it waits at a mark facing the player, and is put back on t
   assert.equal(c.brain.trail.length, 1, "the trail starts over at the player");
   f.run(1);
   assert.ok(dist(c.agent.position, f.pl.p) < 3);
+});
+
+test("after a fight it leaves an unaware guard at his post and a sleeping wolf alone (§7: it never gives the player away)", () => {
+  const f = fight();
+  const c = f.companion("brun", { x: 2, y: 0, z: 1 });
+  const a = f.enemy("a", "soldier", { x: 0, y: 0, z: -5 });
+  // 13.6 m from the player, beyond a's shout (15.8 m), looking away (+X)
+  const g = f.enemy("g", "soldier", { x: 13, y: 0, z: 4, yaw: -Math.PI / 2 }, { perceive: true });
+  const BED = { x: -10, y: 0, z: -6, yaw: 0 };
+  const w = f.creature("wolf", "wolf", { ...BED }, { perceive: true, asleep: true, sleep: SLEEP, leash: { home: BED, radius: 18 } });
+  f.run(1);
+  assert.ok(c.brain.fighting, c.brain.state);
+  assert.equal(c.brain.target, a.c);
+  f.combat.strike(f.player, a.c, { ...PLAYER_WEAPONS.sword.light[0], damage: 999, poiseDamage: 0 });
+  assert.ok(a.c.dead);
+  f.until(() => c.brain.state === "follow", 3);
+  assert.equal(c.brain.state, "follow");
+  const from = c.states.length;
+  f.run(10);
+  assert.ok(!c.states.slice(from).some((s) => s === "alert" || s === "approach"), `no new fight: ${c.states.slice(from).join(" ")}`);
+  assert.equal(g.brain.state, "post", "the guard is still at his post");
+  assert.equal(g.c.vitals.hp, g.c.vitals.health.max);
+  assert.equal(w.brain.state, "asleep", "the wolf sleeps on");
+  assert.equal(w.c.vitals.hp, w.c.vitals.health.max);
+  assert.ok(dist(c.agent.position, f.pl.p) <= FOLLOW.idleStop + 0.5, "back at the player's side");
+  // once the guard knows, he is fair game
+  g.brain.engage(f.player);
+  f.until(() => c.brain.target === g.c, 2);
+  assert.equal(c.brain.target, g.c);
+});
+
+test("it drops a fight the player has left behind (the wolf at its den) and follows again", () => {
+  const f = fight();
+  const c = f.companion("brun", { x: 2, y: 0, z: -3 });
+  const BED = { x: 0, y: 0, z: -8, yaw: 0 };
+  const w = f.creature("wolf", "wolf", { ...BED }, { leash: { home: BED, radius: 18 } });
+  // the wolf is on Brun (its last attacker, or its 30 % switch)
+  w.brain.forceTarget(c.c, 120);
+  f.run(2);
+  assert.ok(c.brain.fighting);
+  assert.equal(c.brain.target, w.c);
+  // the player runs off, 40 m
+  let left = Infinity;
+  f.walk(0, 1, 6, 40 / 6, (t) => {
+    if (left === Infinity && !c.brain.fighting) left = t;
+  });
+  assert.ok(left < 4.5, `disengaged ${left.toFixed(1)} s after the player ran (${c.brain.state})`);
+  assert.equal(c.brain.target, null);
+  f.run(12);
+  assert.equal(c.brain.state, "follow");
+  const d = dist(c.agent.position, f.pl.p);
+  assert.ok(d <= 8, `with the player again (${d.toFixed(1)} m)`);
+  assert.ok(!w.brain.fighting && ["return", "rest", "idle"].includes(w.brain.state), `the wolf went home (${w.brain.state})`);
+  // a bite from a beast the player has left behind does not pull it back (nor is it a backstab)
+  const hp = c.c.vitals.hp;
+  f.combat.strike(w.c, c.c, { ...PLAYER_WEAPONS.sword.light[0], poiseDamage: 0 });
+  assert.ok(c.c.vitals.hp > hp - 30 && !c.c.down, "an ordinary bite");
+  f.run(0.5);
+  assert.equal(c.brain.state, "follow");
+});
+
+test("its preference for foes not on the player holds between their swings (no flip-flopping)", () => {
+  const f = fight();
+  f.player.vitals.health.regen = 1000;
+  // (Ivo: Brun's roar would pull the one on the player onto himself after 8 s)
+  const c = f.companion("ivo", { x: 2, y: 0, z: 1 });
+  // nearer, but on the player for good
+  const near = f.enemy("near", "soldier", { x: 0, y: 0, z: -3 });
+  const far = f.enemy("far", "soldier", { x: 6, y: 0, z: -4 });
+  near.brain.forceTarget(f.player, 60);
+  far.brain.forceTarget(c.c, 60);
+  let onNear = 0;
+  let switches = 0;
+  let last = null as unknown;
+  f.run(15, () => {
+    if (c.brain.target === near.c) onNear++;
+    if (c.brain.target !== last) switches++;
+    last = c.brain.target;
+  });
+  assert.equal(onNear, 0, "never the one on the player while another is free");
+  assert.ok(switches <= 2, `switches ${switches}`);
+  // its own swings do not glint (the tell is the enemies')
+  assert.ok(c.states.includes("attack"), c.states.join(" "));
+  assert.ok(!c.events.some((e) => e.type === "glint"));
 });

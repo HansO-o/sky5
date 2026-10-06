@@ -440,12 +440,48 @@ assets.onProgress((p) => {
 // saves live in their own DB: 继续 and 读取 don't wait for the manifest and the asset worker
 void refreshSaves();
 
+/**
+ * Debug: straight into the combat and AI sandbox (?debug&arena) instead of the menu. Its pause
+ * menu's 返回主菜单 leads to the usual menu.
+ */
+async function startArena() {
+  starting = true;
+  menuEl.classList.add("hidden");
+  document.getElementById("smoke")!.classList.add("off");
+  hud.loading(true, "正在准备竞技场");
+  try {
+    const game = await getGame();
+    // the combat clips and creatures come with the keep and exit segments
+    assets.setSegment("keep");
+    const { ArenaStage } = await import("./scenes/ArenaStage");
+    await game.setStage(async () => {
+      const st = new ArenaStage(game);
+      try {
+        await st.init();
+      } catch (e) {
+        st.dispose();
+        throw e;
+      }
+      return st;
+    });
+    mark("arena-started");
+  } finally {
+    starting = false;
+    hud.loading(false);
+  }
+}
+
 (async () => {
   try {
     await assetsReady;
     mark("assets-ready");
     void navigator.storage?.persist?.().catch(() => {});
     void listSaves().catch(() => {});
+    const q = new URLSearchParams(location.search);
+    if (q.has("debug") && q.has("arena")) {
+      await startArena();
+      return;
+    }
     await showMenu();
     mark("menu-3d-ready");
     const mi = performance.getEntriesByName("menu-interactive")[0]?.startTime ?? 0;

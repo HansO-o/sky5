@@ -5,15 +5,18 @@
  * catches up by appearing on the trail 6 m behind the player, out of view, when it falls more than
  * 25 m behind unseen or is stuck for 4 s. When alert enemies are near it fights (`CombatBrain`),
  * preferring enemies that are not on the player, with its special (Brun's roar, Ivo's shield
- * wall). It is essential: at 0 HP it kneels for 6 s and gets up at 50 % (the combat system's
+ * wall). It never gives the player away: it takes on only enemies that are alert (never a guard at
+ * his post, a sleeping beast or one walking home on its leash) and near the player or itself, and
+ * drops a fight the player has left behind to follow again (where the catch-up can bring it
+ * along). It is essential: at 0 HP it kneels for 6 s and gets up at 50 % (the combat system's
  * `essential` with the `down` state here).
  */
 import type { CompanionTuning } from "../combat/attacks";
-import type { Combatant } from "../combat/CombatSystem";
+import type { Awareness, Combatant } from "../combat/CombatSystem";
 import type { XYZ } from "../combat/hit";
 import { Breadcrumbs, FOLLOW, followSpeed, shouldCatchUp, type FollowTarget } from "./breadcrumbs";
 import { CombatBrain, type CombatBrainOptions } from "./CombatBrain";
-import type { BrainState } from "./fsm";
+import type { BrainState } from "./Brain";
 
 /** The player as the companion follows and protects them. */
 export interface Leader {
@@ -34,6 +37,8 @@ export interface CompanionOptions extends CombatBrainOptions {
   special?: CompanionTuning["special"] | null;
   /** fights alert enemies within this of the player or itself (m; default 15) */
   engageRange?: number;
+  /** drops a fight with an enemy further than this from the player (m; default 20: the player left) */
+  leaveRange?: number;
 }
 
 /** The specials (§7). */
@@ -59,9 +64,11 @@ export class Companion extends CombatBrain {
   private wallAgainst: Combatant | null = null;
   /** following: since when it has made no progress along the trail (see `trackProgress`) */
   private progress = { trying: false, crumb: -1, along: Infinity, since: 0 };
+  /** the enemies fighting the player, worked out once per think */
+  private engagedCache: { at: number; set: Set<Combatant> } | null = null;
 
   constructor(o: CompanionOptions) {
-    super(o);
+    super({ glint: false, ...o });
     this.copts = o;
     this.leader = o.leader;
     this.trail.reset(o.leader.position());
@@ -70,6 +77,11 @@ export class Companion extends CombatBrain {
 
   protected calmState() {
     return this.holdAt ? "wait" : "follow";
+  }
+
+  /** Never caught unawares (no backstab or sneak attack on it): it is the player's ally, not a mark. */
+  protected calmAwareness(): Awareness {
+    return "alert";
   }
 
   /** Stay at `at` (null: follow again). */
@@ -82,25 +94,60 @@ export class Companion extends CombatBrain {
   place(p: XYZ, yaw?: number) {
     this.agent.teleport(p, yaw);
     this.trail.reset(this.leader.position());
+    this.progress.trying = false;
   }
 
-  /** Foes already on the player rank behind the others (§3.6: prefers enemies not on the player). */
+  /** Clean and calm again (an encounter's retry), the trail starting over at the player. */
+  reset() {
+    super.reset();
+    this.trail.reset(this.leader.position());
+    this.progress.trying = false;
+    this.onPlayer.clear();
+    this.wallAgainst = null;
+  }
+
+  /**
+   * Foes already fighting the player rank behind the others (§3.6: prefers enemies not on the
+   * player). "Fighting the player" is the enemy brain's target, which holds between swings
+   * (tokens come and go with every sequence and would flip its choice back and forth).
+   */
   protected targetBias(c: Combatant) {
     const p = this.leader.combatant;
-    return p && this.combat.tokenOf(c) === p ? 3 : 0;
+    return p && this.engaged(p).has(c) ? 3 : 0;
   }
 
-  /** Alert enemies near the player or itself: time to fight. */
-  private threatened() {
-    const range = this.copts.engageRange ?? 15;
-    const me = this.agent.position;
+  /**
+   * Whom it may fight (§7: the companion never gives the player away): an enemy that is alert
+   * (not a guard unaware at his post, a sleeping or stirring beast, or one leashed home), not in a
+   * scene, within `engageRange` of the player or itself; kept while within `leaveRange` of the
+   * player. A forced target (its special, a script) need not be alert, but is dropped all the
+   * same once the player has left it behind.
+   */
+  protected canFight(c: Combatant, o: { current?: boolean; forced?: boolean } = {}) {
+    if (!super.canFight(c, o)) return false;
     const lp = this.leader.position();
-    for (const c of this.combat.enemiesOf(this.self)) {
-      if (c.down || (c.spec.awareness?.() ?? "alert") !== "alert") continue;
-      const p = c.pose;
-      if (Math.hypot(p.x - me.x, p.z - me.z) <= range || Math.hypot(p.x - lp.x, p.z - lp.z) <= range) return true;
-    }
-    return false;
+    const toPlayer = Math.hypot(c.pose.x - lp.x, c.pose.z - lp.z);
+    if (toPlayer > (this.copts.leaveRange ?? 20)) return false;
+    if (o.forced) return true;
+    if ((c.spec.awareness?.() ?? "alert") !== "alert") return false;
+    if (this.ai?.brainOf(c)?.suspended) return false;
+    if (o.current) return true;
+    const range = this.copts.engageRange ?? 15;
+    return toPlayer <= range || this.dist(c) <= range;
+  }
+
+  /** Someone to fight: time to. */
+  private threatened() {
+    return this.pickTarget() !== null;
+  }
+
+  /**
+   * Fights only whom it may (a blow from a beast the player has left behind does not hold it
+   * back). A script that wants it on someone regardless uses `forceTarget(c, seconds)`.
+   */
+  engage(target?: Combatant | null) {
+    if (target && this.forced?.c !== target && !this.canFight(target)) return;
+    super.engage(target);
   }
 
   think(dt: number) {
@@ -117,7 +164,7 @@ export class Companion extends CombatBrain {
     if (!sp || !player) return;
     // who has been fighting the player, since when (tokens come and go between swings; the fight
     // is the brain's target; without an AI system, the token holders)
-    const engaged = this.engagedWith(player);
+    const engaged = this.engaged(player);
     for (const c of [...this.onPlayer.keys()]) if (!engaged.has(c)) this.onPlayer.delete(c);
     for (const c of engaged) if (!this.onPlayer.has(c)) this.onPlayer.set(c, this.time);
     if (this.time < this.specialAt || player.vitals.dead) return;
@@ -151,6 +198,15 @@ export class Companion extends CombatBrain {
       this.events.emit({ type: "bark", kind: "special" });
       return "guard";
     }
+  }
+
+  /** Enemies fighting the player now (once per think). */
+  private engaged(player: Combatant) {
+    const k = this.engagedCache;
+    if (k && k.at === this.time) return k.set;
+    const set = this.engagedWith(player);
+    this.engagedCache = { at: this.time, set };
+    return set;
   }
 
   /** Enemies fighting `c` now. */

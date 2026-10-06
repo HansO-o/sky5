@@ -4,12 +4,16 @@
  * beast's noise meter (the sleeping wolf: stir 0.5, wake 1.0). Sensors look 5 times a second in
  * round robin, with at most 4 line-of-sight rays per frame (`Perception`). The rates are pure
  * functions, unit-tested against §9's numbers.
+ *
+ * Engine-framework §2.19 names this module `ai/Perception.ts` with `canSee()` and
+ * `createPerception(ph)`; both are here. Its noise channel is a {@link NoiseBus} (kinds, radii,
+ * steady sources, one-shots) rather than a plain `Emitter`: the bus's `events` is that emitter.
  */
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { Emitter } from "../core/emitter";
 import type { Disposer } from "../core/types";
 import type { XYZ } from "../combat/hit";
-import { BEAST_HEARING, BEAST_ONESHOT, HEARING, type NoiseBus } from "./noise";
+import { BEAST_HEARING, BEAST_ONESHOT, HEARING, NoiseBus } from "./noise";
 import { TimeSlicer } from "./slicer";
 
 /** Human perception (§9). Angles are the whole cone (degrees). */
@@ -28,8 +32,10 @@ export const PERCEPTION = {
   /** sight multipliers: sneaking, moving */
   sneak: 0.35,
   moving: 1.3,
-  /** hearing: (1 − d/r) × this per second */
+  /** hearing: (1 − d/r) × this per second, d on the ground plane (§9's radii are plain distances);
+   * a height difference beyond `hearBand` (a storey) counts in full */
   hear: 0.9,
+  hearBand: 2,
   /** the meter falls this much per second */
   decay: 0.15,
   /** thresholds: suspicious from 0.5, alert at 1.0; suspicion fades below `calm` */
@@ -40,6 +46,8 @@ export const PERCEPTION = {
 
 /** A beast's meter (§9 "Wolf", §6.3 E6): noise only. */
 export const BEAST = {
+  /** eye height of a beast (m: the wolf lying, a spider) */
+  eye: 0.6,
   decay: 0.1,
   /** stir from 0.5, wake at 1.0; a stirred beast settles back below `settle` */
   stir: 0.5,
@@ -74,6 +82,15 @@ export function hearRate(d: number, r: number) {
 export function beastRate(d: number, r: number, w: number) {
   if (!(r > 0)) return 0;
   return w * Math.min(1, Math.max(0, 1 - d / r));
+}
+
+/**
+ * The distance a noise at `n` is heard over by a listener standing at `feet` (§9): on the ground
+ * plane, plus whatever height difference exceeds `band` m (a noise a floor up or down is that much
+ * further; one at chest or ankle height is not).
+ */
+export function hearingDistance(feet: XYZ, n: XYZ, band: number = PERCEPTION.hearBand) {
+  return Math.hypot(n.x - feet.x, n.z - feet.z, Math.max(0, Math.abs(n.y - feet.y) - band));
 }
 
 /** Whether `p` is inside the horizontal cone of `fovDeg` (whole angle) looking along `yaw` from `eye`. */
@@ -119,7 +136,7 @@ export interface SensorSpec {
   position(): XYZ;
   /** facing (forward = (−sin, −cos)) */
   yaw(): number;
-  /** eye height (default 1.6) */
+  /** eye height (default: humans 1.6, beasts 0.6) */
   eye?: number;
   /** sees (default: humans yes, beasts no); changeable later (`sensor.sight`) */
   sight?: boolean;
@@ -290,12 +307,17 @@ export class Perception {
 
   /** One look of `s` over the last `dt` seconds; null when it needs more rays than are left. */
   private look(s: Sensor, dt: number, left: number): number | null {
-    if (!s.enabled) return 0;
+    if (!s.enabled) {
+      // blind and deaf: what sounds meanwhile is never heard (switched on again, it hears from then)
+      s.heardTo = this.noise.time;
+      s.heardSeq = this.noise.seq;
+      return 0;
+    }
     const spec = s.spec;
     const feet = spec.position();
-    const eyeY = feet.y + (spec.eye ?? PERCEPTION.eye);
-    const yaw = spec.yaw();
     const beast = s.kind === "beast";
+    const eyeY = feet.y + (spec.eye ?? (beast ? BEAST.eye : PERCEPTION.eye));
+    const yaw = spec.yaw();
     const range = spec.range ?? PERCEPTION.range;
     const fov = (spec.fov ?? PERCEPTION.fov)[s.level === "unaware" ? "unaware" : "alert"];
     const prox = spec.proximity !== undefined ? spec.proximity : beast ? BEAST.proximity : null;
@@ -336,7 +358,7 @@ export class Perception {
       const since = s.heardTo ?? now - dt;
       s.heardTo = now;
       s.heardSeq = this.noise.heard(since, (n, secs, fresh) => {
-        const d = Math.hypot(n.at.x - feet.x, n.at.y - eyeY, n.at.z - feet.z);
+        const d = hearingDistance(feet, n.at);
         let gain = 0;
         if (beast) {
           const one = BEAST_ONESHOT[n.kind];
@@ -373,6 +395,19 @@ export class Perception {
     return looks.length;
   }
 
+  /**
+   * Whether an eye at `eye` looking along `forward` (horizontal) sees `target` within `maxDist` m
+   * and a cone of `fovDeg` (whole angle), unblocked by static geometry (engine-framework §2.19).
+   */
+  canSee(eye: XYZ, target: XYZ, forward: { x: number; z: number }, maxDist: number, fovDeg: number) {
+    const dx = target.x - eye.x, dy = target.y - eye.y, dz = target.z - eye.z;
+    const d = Math.hypot(dx, dy, dz);
+    if (d > maxDist) return false;
+    const flat = Math.hypot(dx, dz), fl = Math.hypot(forward.x, forward.z);
+    if (flat > 1e-6 && fl > 1e-6 && (dx * forward.x + dz * forward.z) / (flat * fl) < Math.cos(((fovDeg / 2) * Math.PI) / 180) - 1e-9) return false;
+    return this.visible(eye.x, eye.y, eye.z, target.x, target.y, target.z, d);
+  }
+
   private visible(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, d: number) {
     if (!this.los) return true;
     this.rays++;
@@ -394,4 +429,12 @@ export class Perception {
     this.slicer.clear();
     this.changes.clear();
   }
+}
+
+/**
+ * A perception over static line of sight (`Physics` fits `SightRay`) with its own noise bus unless
+ * one is given (engine-framework §2.19 `createPerception(ph)`).
+ */
+export function createPerception(los: SightRay | null, o: { noise?: NoiseBus; hz?: number; raysPerFrame?: number } = {}): Perception {
+  return new Perception({ noise: o.noise ?? new NoiseBus(), los, hz: o.hz, raysPerFrame: o.raysPerFrame });
 }

@@ -13,8 +13,8 @@
 import type { Awareness } from "../combat/CombatSystem";
 import type { XYZ } from "../combat/hit";
 import { CombatBrain, type CombatBrainOptions } from "./CombatBrain";
-import type { BrainState } from "./fsm";
-import { PERCEPTION, type Perception, type Sensor, type SensorSpec } from "./perception";
+import type { BrainState } from "./Brain";
+import { PERCEPTION, type Perception, type Sensor, type SensorSpec } from "./Perception";
 import { AI } from "./tuning";
 
 /** Where a calm humanoid belongs, and what it does there. */
@@ -89,6 +89,13 @@ export class HumanoidBrain extends CombatBrain {
   protected onAlerted(at: XYZ | null) {
     const s = this.sensor;
     if (s && !s.alerted) s.alert(at);
+  }
+
+  protected senses(on: boolean) {
+    const s = this.sensor;
+    if (!s) return;
+    s.enabled = on;
+    if (on) s.calm();
   }
 
   private calmStates(): Record<string, BrainState<CombatBrain>> {

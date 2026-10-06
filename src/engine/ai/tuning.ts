@@ -38,6 +38,8 @@ export const AI = {
     fear: { r: 2, seconds: 1 },
     /** a strike lands from this far: the attack's reach + the target's radius − `inset` */
     inset: 0.3,
+    /** a leashed creature without senses turns on a foe this close (inside its leash) again (tune) */
+    aggro: 6,
   },
   /** the wolf (§6.3): back asleep 20 s after being leashed home; 30 % of its attacks go to the companion */
   beast: { sleepAfter: 20, switchToCompanion: 0.3, homeStop: 0.8, stand: 1.0 },

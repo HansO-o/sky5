@@ -1,8 +1,8 @@
 /**
  * The AI of a scene (keep/exit design §3.6; engine-framework §2.19 `AISystem`): brains think at
  * 10 Hz, time-sliced (`maxBrainsPerFrame`), perception looks at 5 Hz with at most 4 rays a frame,
- * noises go through one bus, agents keep their distance in one crowd, ragdolls are capped (2 at
- * once). Brains register themselves, so a script can find one by its combatant, id, body or name
+ * noises go through one bus, agents keep their distance in one crowd, ragdolls are capped (2 live
+ * at once). Brains register themselves, so a script can find one by its combatant, id, body or name
  * (`suspend(ch)` / `resume(ch)`, design §3.6), and an alert spreads to the shouter's allies.
  * Dependencies come in through the constructor; the owner calls `update(dt)` on game time.
  */
@@ -11,47 +11,46 @@ import type { Disposer } from "../core/types";
 import type { XYZ } from "../combat/hit";
 import type { BrainSystem, CombatBrain } from "./CombatBrain";
 import { NoiseBus } from "./noise";
-import { Perception, type SightRay } from "./perception";
+import { Perception, type SightRay } from "./Perception";
 import { TimeSlicer } from "./slicer";
 import { Crowd } from "./steering";
 import { AI } from "./tuning";
 
-/** Something that thinks on the AI's clock. */
-export interface Thinker {
-  think(dt: number): void;
-}
+/**
+ * Something that thinks on the AI's clock: a fighting brain (`think`), or a bare state machine
+ * (`Brain`, whose `update` is engine-framework §2.19's `AISystem.add(brain)`).
+ */
+export type Thinker = { think(dt: number): void } | { update(dt: number): void };
 
 /**
- * Ragdolls at once (§3.6: at most 2): a death may start one while fewer than `max` started in the
- * last `seconds` (the time a body takes to settle); the rest play a death clip.
+ * Live ragdolls (§3.6: at most 2 at once): a death may start one while fewer than `max` slots are
+ * held; the rest play a death clip. A slot is held from `take()` until its release is called (the
+ * content releases it when the ragdoll has settled and been frozen, or is disposed), so the cap
+ * counts ragdolls whose bodies and bone drive exist, not ragdolls started lately.
  */
 export class RagdollBudget {
-  private ends: number[] = [];
-  private time = 0;
+  private held = new Set<object>();
 
-  constructor(
-    readonly max: number = AI.ragdolls,
-    readonly seconds = 6,
-  ) {}
+  constructor(readonly max: number = AI.ragdolls) {}
 
+  /** Slots held now. */
   get active() {
-    return this.ends.length;
+    return this.held.size;
   }
 
-  /** Take a slot (true) or not (false: at the limit). */
-  take(): boolean {
-    if (this.ends.length >= this.max) return false;
-    this.ends.push(this.time + this.seconds);
-    return true;
+  /** Take a slot: its release (idempotent), or null at the limit. */
+  take(): Disposer | null {
+    if (this.held.size >= this.max) return null;
+    const key = {};
+    this.held.add(key);
+    return () => {
+      this.held.delete(key);
+    };
   }
 
-  update(dt: number) {
-    this.time += Math.max(0, dt);
-    if (this.ends.length && this.ends[0] <= this.time) this.ends = this.ends.filter((t) => t > this.time);
-  }
-
+  /** Every slot free again (a scene's teardown; stale releases are harmless). */
   clear() {
-    this.ends = [];
+    this.held.clear();
   }
 }
 
@@ -151,8 +150,8 @@ export class AISystem implements BrainSystem {
     return n;
   }
 
-  /** A ragdoll may start now. */
-  ragdollSlot() {
+  /** A ragdoll may start now: the slot to release once it is frozen or gone (null: at the limit). */
+  ragdollSlot(): Disposer | null {
     return this.ragdolls.take();
   }
 
@@ -161,10 +160,10 @@ export class AISystem implements BrainSystem {
     if (this.disposed || dt <= 0) return;
     this.noise.update(dt);
     this.perception.update(dt);
-    this.ragdolls.update(dt);
     this.slicer.update(dt, (b, d) => {
       try {
-        b.think(d);
+        if ("think" in b) b.think(d);
+        else b.update(d);
       } catch (e) {
         console.error("ai think", e);
       }

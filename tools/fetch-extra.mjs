@@ -10,6 +10,8 @@ import os from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { DRAGON_MIRROR, BLENDER, reexportDragon, sha256 } from "./lib/dragon-source.mjs";
+import { itchSignedUrl, zipExtract } from "./lib/zipget.mjs";
+import { FPM_KIT } from "./sources.mjs";
 
 const run = promisify(execFile);
 const ROOT = path.resolve(import.meta.dirname, "..");
@@ -102,6 +104,25 @@ if (!(await exists(path.join(C, "anim/UAL2_Standard.glb")))) {
       const p = path.join(C, d, f);
       if (await exists(p)) await fs.rename(p, path.join(C, d, "LICENSE.txt"));
     }
+  }
+}
+
+// ---------------------------------------------------------------- Quaternius Fantasy Props MegaKit (CC0)
+// Only what tools/gen/propkit.mjs merges (FPM_KIT in tools/sources.mjs: glTF + .bin per model, the trim
+// textures and the licence), pulled out of the 150 MB zip with ranged requests (tools/lib/zipget.mjs).
+{
+  const FPM = path.join(SRC, "props/fpm");
+  const want = [...FPM_KIT.models.flatMap((m) => [`${m}.gltf`, `${m}.bin`]), ...FPM_KIT.textures];
+  const missing = [];
+  for (const f of [...want, "LICENSE.txt"]) if (!(await exists(path.join(FPM, f)))) missing.push(f);
+  if (missing.length) {
+    const url = await itchSignedUrl(FPM_KIT.game, FPM_KIT.upload);
+    const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const got = await zipExtract(url, new RegExp(`^${esc(FPM_KIT.dir)}(${want.map(esc).join("|")})$`), FPM, { strip: FPM_KIT.dir });
+    await zipExtract(url, /^License_Standard\.txt$/, FPM, { rename: () => "LICENSE.txt" });
+    const lost = want.filter((f) => !got.includes(f));
+    if (lost.length) throw new Error(`the Fantasy Props MegaKit zip (itch upload ${FPM_KIT.upload}) lacks ${lost.join(", ")}`);
+    console.log("got", path.relative(ROOT, FPM), `(${got.length} files)`);
   }
 }
 

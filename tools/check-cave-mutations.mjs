@@ -1,8 +1,9 @@
 // Mutation test of the cave build gate (tools/gen/cave.mjs, design §4.3 validator and the joins it owns).
 // Each mutation edits a copy of cave.mjs the way a careless change could break the cave, and the build
-// (buildCave up to its first emit: the field validator in buildCaveData, then the decoded-GLB walk) must
+// (buildCave up to its first emit: the field validator in buildCaveData, then the checks of the decoded
+// GLBs: the walk, the town-chapter set, the deck's enclosure, rails, gate boxes and the perch ramp) must
 // fail with the expected message. The unmutated source must reach its first emit. Nothing is written
-// to public/: emit throws before the first file. Takes about a minute per 4 mutations (4 at a time).
+// to public/: emit throws before the first file. About 50 s per run, 4 at a time (21 runs: ~5 min).
 //   node tools/check-cave-mutations.mjs              every mutation
 //   node tools/check-cave-mutations.mjs sealed drain  the names containing any of the words
 // Copies are written next to cave.mjs (tools/gen/.cave-mutant-*.mjs, so its imports resolve) and removed.
@@ -77,7 +78,7 @@ const MUTATIONS = [
   {
     name: "hood_low",
     what: "the hood lowered to 56.5",
-    edits: [["hood: { min: [-23, 53.5, -681], max: [-15, 62.5, -674], r: 1.5 },", "hood: { min: [-23, 53.5, -681], max: [-15, 56.5, -674], r: 1.5 },"]],
+    edits: [["hood: { min: [-23, 53.5, -681], max: [-7.8, 62.5, -674], r: 1.5 },", "hood: { min: [-23, 53.5, -681], max: [-7.8, 56.5, -674], r: 1.5 },"]],
     expect: /opens to the terrain surface|opens through the outcrop|no ceiling|rock cover/,
   },
   {
@@ -118,6 +119,64 @@ const MUTATIONS = [
     what: "toDen's ceiling lowered to 2.2 m over 3 m (rock from 2.2 m above the 29.87 floor at (−6, −741))",
     edits: [wallInAir(`Math.max(${slab(-6, -741, -0.7964, 0.6048, 1.5)}, 32.07 - y)`)],
     expect: /walk path breach → balcony_mouth broken: toDen s [\d.]+…[\d.]+ \(low|clearance [\d.]+ m < 2\.6/,
+  },
+  // ---- the outdoor set (cave/outcrop shown with the town, cave/mesh not loaded), the enclosure, the gates
+  {
+    name: "skin_crack",
+    what: "the outcrop skin's border left where surface nets put it (up to 0.6 m above the render terrain on the steep west slope)",
+    edits: [['      cls0[t] = "outcrop";\n      groundKept++;', "      groundKept++;"]],
+    expect: /the outcrop skin's border is not under the render terrain/,
+  },
+  {
+    name: "stub_in_cave",
+    what: "the cave in front of the mouth plug ships in cave/mesh (zone E), not in cave/outcrop",
+    edits: [['return inStub(c) ? "O" : zoneOf(c[0], c[1], c[2]);', "return zoneOf(c[0], c[1], c[2]);"]],
+    expect: /muster set \(cave\/outcrop without cave\/mesh\): \d+ of \d+ rays toward zone E reach the void/,
+  },
+  {
+    name: "stub_no_collider",
+    what: "the stub's collider (rock floor in front of the plug) ships in cave_E_col, its render still in cave/outcrop",
+    edits: [["cGroup[t] = groupOf(cIdx, t);", 'cGroup[t] = isStub(cIdx, t) ? "E" : groupOf(cIdx, t);']],
+    expect: /muster set: \d+ of \d+ standable floors outside the mouth plug have no collider within 0\.45 m/,
+  },
+  {
+    name: "hood_short",
+    what: "the hood ends at x −15 (the earlier outcrop): east of it the deck's N edge runs on as a shelf onto the hillside",
+    edits: [["hood: { min: [-23, 53.5, -681], max: [-7.8, 62.5, -674], r: 1.5 },", "hood: { min: [-23, 53.5, -681], max: [-15, 62.5, -674], r: 1.5 },"]],
+    expect: /enclosure: the capsule \(step 0\.45, slopes ≤ 50°, jump [\d.]+ m\) from the platform (leaves the outcrop|reaches the terrain|leaves the rails' envelope)/,
+  },
+  {
+    name: "no_W_wall",
+    what: "no wall over the shoulder: from the outcrop's top (reachable from the hillside) one drops onto the deck",
+    edits: [["      W: { a: [-21.8, -674.2], b: [-21.8, -667], y: [55.55, 66] },\n", ""]],
+    expect: /enclosure: the capsule from the hillside reaches the (platform|mouth)/,
+  },
+  {
+    name: "rails_low",
+    what: "the S and E rails 0.2 m high",
+    edits: [
+      ["S: { a: [-21.8, -667], b: [-11, -667], y: [55.55, 66] },", "S: { a: [-21.8, -667], b: [-11, -667], y: [55.55, 56.25] },"],
+      ["E: { a: [-11, -675.2], b: [-11, -667], y: [55.55, 66] },", "E: { a: [-11, -675.2], b: [-11, -667], y: [55.55, 56.25] },"],
+    ],
+    expect: /rails: only 0\.\d\d m above the deck/,
+  },
+  {
+    name: "no_perch_ramp",
+    what: "no perch ramp collider: the 2.2 m perch box cannot be climbed",
+    edits: [["    colliders.A.quad([xFoot, fFoot, z1 + 0.05], [xTop, PERCH.top, z1 + 0.05], [xTop, PERCH.top, z0 - 0.05], [xFoot, fFoot, z0 - 0.05]);\n", ""]],
+    expect: /perch: the decoded ramp does not climb from perch_foot to the perch top/,
+  },
+  {
+    name: "web_narrow",
+    what: "the web walls' box colliders a quarter of their width: the player walks round them",
+    edits: [["col.box(centre, [0.3, Hh / 2, W / 2 - 0.2], [t, [0, 1, 0], sec.r]);", "col.box(centre, [0.3, Hh / 2, W / 8], [t, [0, 1, 0], sec.r]);"]],
+    expect: /gate web_A: its box \([\d., ]+ half extents\) does not cover the tunnel section in its plane[\s\S]*gate web_B: its box/,
+  },
+  {
+    name: "plug_narrow",
+    what: "the mouth plug's box a quarter of the tunnel's width",
+    edits: [["col.box(cc, [0.2, Hh / 2, W / 2], [t, [0, 1, 0], sec.r]);", "col.box(cc, [0.2, Hh / 2, W / 8], [t, [0, 1, 0], sec.r]);"]],
+    expect: /gate outcrop_mouth_plug: its box \([\d., ]+ half extents\) does not cover the tunnel section in its plane/,
   },
 ];
 

@@ -59,3 +59,25 @@ export async function loadCreature(world: World, id: string, profile: CreaturePr
   }
   return cr;
 }
+
+// ------------------------------------------------------------------------------------------------
+// Rigs (design §10.3): asset ids and clip names as the creature pipeline writes them
+
+/**
+ * The cave spider (Quaternius Easy Enemy Pack, design §10.3): clips Spider_Idle (4.17 s),
+ * Spider_Walk (0.83), Spider_Attack (0.75, hit 0.40), Spider_Death (1.04), Spider_Jump (0.71, hit
+ * 0.52). One asset for both sizes: small spiders are brown at scale 0.55, the giant black at 1.
+ */
+export const SPIDER = {
+  asset: "creatures/spider",
+  clips: { idle: "Spider_Idle", walk: "Spider_Walk", death: "Spider_Death" },
+  /** the walk clip's ground speed at rate 1 (§6.3: speedRatio = v / 2.6) */
+  walkSpeed: 2.6,
+  /** the capsule it walks with, by scale 1 (m) */
+  capsule: { radius: 0.8, height: 1.7 },
+} as const;
+
+/** A spider's profile at `scale` (its clips keep their asset names). */
+export function spiderProfile(name: string, scale: number): CreatureProfile {
+  return { name, scale };
+}

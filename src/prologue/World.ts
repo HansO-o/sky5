@@ -137,8 +137,33 @@ export class World {
     this.streamScatter("ph/dead_tree_trunk", undefined, ["log"], 120);
     this.streamScatter("ph/mountainside", undefined, ["cliff"], 900);
     this.streamScatter("ph/rock_face_01", undefined, ["rockface"], 600);
+    this.watchNpcs();
+  }
 
-    scene.onBeforeRenderObservable.add(() => {
+  /**
+   * A bare world for sandboxes (`?debug&arena`): sky, sun, shadows, the light pool and the
+   * character factory over flat ground at y 0 (`heightAt` is 0 everywhere); no terrain,
+   * vegetation, route or town. The owner adds its own floor and colliders.
+   */
+  async initBare() {
+    const scene = this.scene;
+    const [env, bodyC, animC] = await Promise.all([
+      createEnvironment(scene, this.rig.camera).then((env) => {
+        this.lights = new LightPool(scene, { name: "pool" });
+        return env;
+      }),
+      loadGLB("chars/male", scene),
+      loadGLB("chars/anim_base", scene),
+    ]);
+    this.env = env;
+    this.heightfield = { n: 2, x0: -4096, z0: -4096, step: 8192, h: new Float32Array(4) };
+    this.factory = new CharacterFactory(scene, bodyC, [animC]);
+    this.watchNpcs();
+  }
+
+  /** Named NPCs' per-frame pose fix-ups (fingers, look-at) after the animations. */
+  private watchNpcs() {
+    this.scene.onBeforeRenderObservable.add(() => {
       const dt = this.scene.getEngine().getDeltaTime() / 1000;
       for (const c of this.npcs.values()) c.postAnimate(dt);
     });

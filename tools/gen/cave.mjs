@@ -25,10 +25,11 @@
 //
 // Outputs (buildCave → emit), all in world coordinates (add the containers at the origin):
 //   cave/mesh_a   glb  keep   zone A: entry + gallery (render, collider, water ribbon, perch steps)
-//   cave/mesh     glb  exit   zones B–E (+ webs, cocoons, egg sacs, fissure, stair); EXIT_HOLE cover
-//   cave/outcrop  glb  muster the outcrop's skin + platform, rails, mouth plug (shown with the town:
-//                             it covers EXIT_HOLE, which cart/terrain cuts from the start); binds only
-//                             the moss set, which ships in muster with it
+//   cave/mesh     glb  exit   zones B–E behind the mouth plug (+ webs, cocoons, egg sacs, fissure, stair)
+//   cave/outcrop  glb  muster EXIT_HOLE's cover, shown with the town: the outcrop's skin + platform,
+//                             the mouth in front of the plug (the stub: rock, top stair slabs, ramp),
+//                             the deck's enclosure (rails + walls) and the plug; binds only the moss
+//                             set, which ships in muster with it
 //   cave/anchors  json keep   anchors, paths, zones, volumes, webs, stair, materials, joins, stats
 //                             (reproducible: no timings, so identical builds give identical bytes)
 //   cave/tex/*    ktx2 keep/muster  rock_face_03, rocks_ground_08, ganges_river_pebbles (keep), mossy_rock (muster)
@@ -36,9 +37,13 @@
 // buildCaveData fails the build per design §4.3 (cover, clearance, half-width across the tunnel,
 // slope, winding), on a walk path that is not continuous from breach to balcony_mouth (only the
 // gallery chasm and the keep's drain passage are exempt) and on the joins this module owns (terrain
-// hole, drain mouth, walkable colliders, zones, platform); buildCave then re-checks the walk on the
-// decoded GLBs before it emits anything. tools/check-cave-mutations.mjs proves the gate catches each
-// mutation in its list; tools/build-assets.mjs re-checks the drain join against keep/anchors.
+// hole, the skin's border under the terrain mesh, drain mouth, walkable colliders, zones, platform).
+// buildCave then checks the decoded GLBs before it emits anything: the walk (checkEncoded), and the
+// town-chapter set, cave/outcrop over the runtime terrain collider with EXIT_HOLE and no cave/mesh
+// (render closed around the mouth, a collider under every floor), the deck's enclosure for the
+// player's capsule, rail height, the gate boxes, the perch ramp and node names (checkOutdoor).
+// tools/check-cave-mutations.mjs proves the gate catches each mutation in its list;
+// tools/build-assets.mjs re-checks the drain join against keep/anchors.
 // Self-contained: layout data, field, meshing, validation and glTF; only emit/SRC come in.
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -2788,12 +2793,22 @@ async function checkOutdoor(data, { A, BE, O }) {
   for (const [name, list] of Object.entries(O.tris)) if (/_col$/.test(name)) for (const t of list) cg.add(t, name);
   for (const t of runtimeFieldTris(region)) cg.add(t, "terrain");
 
-  // ---- 1b. every standable floor of the field outside the plug has a collider within 0.45 m
+  // ---- 1b. every standable floor of the field outside the plug has a collider within 0.45 m of it, or
+  // within 0.2 m of the floor the player sees there (the up-facing render surface nearest the field's,
+  // within 0.6 m: both meshes are simplified, and on a few ledges the render sits 0.4 m under the
+  // field). A field floor the render does not show within 0.6 m (a sliver of the rim the simplifier
+  // removed, from the render and the collider alike) is counted, not failed: a floor missing from the
+  // render is the closure check's (1a), a shown floor without a collider is this one's. In the tunnel's
+  // air (the stub) every floor counts.
   {
     const cosMax = Math.cos((MOVER.maxSlopeDeg * Math.PI) / 180);
-    let pts = 0, miss = 0, first = null;
-    for (let x = OUTCROP.footprint.x[0] - 1; x <= OUTCROP.footprint.x[1] + 2; x += 0.5)
-      for (let z = OUTCROP.footprint.z[0] - 1; z <= OUTCROP.footprint.z[1] + 1; z += 0.5) {
+    const rg = new TriGrid();
+    for (const [name, list] of Object.entries(O.tris)) if (!/_col$/.test(name)) for (const t of list) rg.add(t, name);
+    let pts = 0, miss = 0, first = null, byRender = 0, unshown = 0;
+    // every 0.5 m, and every 0.25 m around the mouth (the stub's floor)
+    for (let x = OUTCROP.footprint.x[0] - 1; x <= OUTCROP.footprint.x[1] + 2; x += 0.25)
+      for (let z = OUTCROP.footprint.z[0] - 1; z <= OUTCROP.footprint.z[1] + 1; z += 0.25) {
+        if ((x % 0.5 !== 0 || z % 0.5 !== 0) && Math.hypot(x - MOUTH_PT[0], z - MOUTH_PT[2]) > MOUTH.radius + 1) continue;
         // floors: rock below, air above, scanning down from 68 m to 44 m
         let prev = S(x, 68, z) > 0;
         for (let y = 67.8; y >= 44; y -= 0.2) {
@@ -2806,16 +2821,22 @@ async function checkOutdoor(data, { A, BE, O }) {
             const room = S(x, f + 0.3, z) > 0 && S(x, f + 1.0, z) > 0 && S(x, f + 1.75, z) > 0;
             if (cls !== "terrain" && !behind && room && norm(gradS(x, f, z))[1] >= cosMax) {
               pts++;
-              if (!cg.column(x, z).some((h) => h.y >= f - 0.45 && h.y <= f + 0.45)) {
-                miss++;
-                first ??= p.map(r2);
+              const cs = cg.column(x, z);
+              if (!cs.some((h) => h.y >= f - 0.45 && h.y <= f + 0.45)) {
+                const seen = rg.column(x, z).filter((h) => h.ny > 0 && Math.abs(h.y - f) < 0.6).sort((a, b) => Math.abs(a.y - f) - Math.abs(b.y - f))[0];
+                if (seen && cs.some((h) => Math.abs(h.y - seen.y) <= 0.2)) byRender++;
+                else if (!seen && !cs.some((h) => Math.abs(h.y - f) < 0.6) && air(x, f + 1.0, z) > 0) unshown++;
+                else {
+                  miss++;
+                  first ??= p.map(r2);
+                }
               }
             }
           }
           prev = isAir;
         }
       }
-    stats.mouthFloors = { points: pts, missing: miss };
+    stats.mouthFloors = { points: pts, missing: miss, byRenderFloor: byRender, unshown };
     if (miss) bad.push(`muster set: ${miss} of ${pts} standable floors outside the mouth plug have no collider within 0.45 m (first at ${first})`);
   }
 

@@ -1549,7 +1549,7 @@ The bake assumes the anchors' lights are lit. Mean vertex luminance is about 0.3
 **Terrain holes.** `tools/gen/terrainHoles.mjs` mirrors `src/world/terrainHoles.ts`; keep the two tables identical.
 - `cart/terrain` cuts a hole only when its `cover` asset ships. That set is the `HOLE_COVERS` constant in `build-assets.mjs`, and today it holds only `keep/interior`. This matches `activeTerrainHoles` at runtime.
 - A gate fails the build when the manifest ships a cover whose hole is not cut, or the reverse.
-- When `cave/mesh` ships, add `"cave/mesh"` to `HOLE_COVERS` and rebuild with `--only=cart/terrain,cave/…`. Until then `EXIT_HOLE` is closed in both the render mesh and the collider. *(Done: `cave/mesh` now ships, `HOLE_COVERS` holds it and `cart/terrain` cuts `EXIT_HOLE`. See "Cave and balcony outcrop" below.)*
+- When `cave/mesh` ships, add `"cave/mesh"` to `HOLE_COVERS` and rebuild with `--only=cart/terrain,cave/…`. Until then `EXIT_HOLE` is closed in both the render mesh and the collider. *(Done, then changed: the geometry that covers and floors the hole is `cave/outcrop`, so `EXIT_HOLE.cover` in `tools/gen/terrainHoles.mjs` and `HOLE_COVERS` now name `cave/outcrop`, and `cart/terrain` cuts `EXIT_HOLE`. `src/world/terrainHoles.ts` still names `cave/mesh` until the runtime mirrors it. See "Cave and balcony outcrop" below.)*
 
 **Deviations:**
 - **Asset ids** are `keep/interior` + `keep/anchors`, as in §10.1 and the runtime's `KEEP_HOLE.cover`. The pipeline task had named it `town/keep_interior`.
@@ -1568,26 +1568,35 @@ The bake assumes the anchors' lights are lit. Mean vertex luminance is about 0.3
 
 ### Cave and balcony outcrop (`cave/*`, `fx/water_n`)
 
-Built by `tools/gen/cave.mjs`. It is self-contained: layout data, the rock field, meshing, validation and glTF. Two helpers sit beside it: `tools/gen/webtex.mjs` makes the web atlas and `tools/gen/watertex.mjs` makes the water normal map. Rebuild with `node tools/build-assets.mjs --only=cave/`, which takes about 35 s. The `cave/` step also emits `fx/water_n`. `cart/terrain` now cuts `EXIT_HOLE`, because `HOLE_COVERS` holds `cave/mesh`. Rebuild it only when `terrainHoles` changes.
+Built by `tools/gen/cave.mjs`. It is self-contained: layout data, the rock field, meshing, validation and glTF. Two helpers sit beside it: `tools/gen/webtex.mjs` makes the web atlas and `tools/gen/watertex.mjs` makes the water normal map. Rebuild with `node tools/build-assets.mjs --only=cave/`, which takes about 52 s (31 s for the field, meshing and validation, the rest for the checks of the decoded GLBs and encoding). The `cave/` step also emits `fx/water_n`. `cart/terrain` cuts `EXIT_HOLE`, because `HOLE_COVERS` holds its cover. Rebuild it only when `terrainHoles` changes.
+
+**`EXIT_HOLE.cover` is `cave/outcrop`.** The outcrop's skin caps the hole, and since this round it also ships the mouth in front of the plug, render and collider. `tools/gen/terrainHoles.mjs` and `HOLE_COVERS` name it. The runtime's table (`src/world/terrainHoles.ts`) still names `cave/mesh`. Both ship, so the runtime opens the collider exactly where the render terrain is cut. The build reads the runtime's covers and **fails** if they would disagree with the render cut. It **warns** while the two tables differ: `warning: terrain hole "exit": src/world/terrainHoles.ts names cave/mesh as its cover …`. The runtime engineer should mirror the change in src. The unit test `holes.test.ts` keeps passing, because it only asks `activeTerrainHoles(() => true)` for both holes.
 
 The cave reads the keep's drain room from `keepinterior.mjs` when it builds. If the drain changes, rebuild both: `--only=keep/,cave/`. A gate in `build-assets.mjs` fails the build otherwise (see Joins). The build is reproducible: identical sources give byte-identical outputs, `cave/anchors` included, because it carries no timings. `node tools/check-cave-mutations.mjs` (`npm run check-cave`) re-runs the mutation test of the validator (see Validation).
 
 | Manifest id | Type | Segment | Priority, `pos` | Raw / brotli | Content |
 |---|---|---|---|---|---|
-| `cave/mesh_a` | glb | **keep** | 93, [50, −715] | 124 KB / 94 KB | Zone A (the entry tunnel and the gallery), its collider, the water ribbon and the perch steps. 8.1k render triangles (7.5k cave, 0.56k water). |
-| `cave/mesh` | glb | **exit** | 95, [−10, −730] | 469 KB / 370 KB | Zones B–E and their colliders, the terraced stair, web walls A/B, corner webs, cocoons, egg sacs and the den fissure. The 1024² web atlas is embedded. 20.0k render triangles (17.4k cave, 2.6k dressing). **This is `EXIT_HOLE.cover`.** |
-| `cave/outcrop` | glb | **muster** | 90, [−17, −673] | 77 KB / 60 KB | The outcrop's skin, including the platform, plus the rails and the mouth plug. 4.4k render and 1.9k collider triangles. Its only textured material is `outcrop_rock`, which uses the moss set. |
-| `cave/anchors` | json | **keep** | 95, [50, −715] | 26 KB / 9 KB | Anchors, walk paths, zones, volumes, webs, stair, perch, outcrop, dressing, lights, materials, joins and build stats. Load it with `loadJSON("cave/anchors")`. |
+| `cave/mesh_a` | glb | **keep** | 93, [50, −715] | 124 KB / 94 KB | Zone A (the entry tunnel and the gallery), its collider, the water ribbon and the perch steps. 8.1k render triangles (7.5k cave, 0.56k water), 2.4k collider. |
+| `cave/mesh` | glb | **exit** | 95, [−10, −730] | 452 KB / 357 KB | Zones B–E **behind the mouth plug** and their colliders, the terraced stair up to the plug, web walls A/B, corner webs, cocoons, egg sacs and the den fissure. The 1024² web atlas is embedded. 18.9k render triangles (16.4k cave, 2.5k dressing), 5.2k collider. |
+| `cave/outcrop` | glb | **muster** | 90, [−17, −673] | 106 KB / 78 KB | **`EXIT_HOLE.cover`.** It holds the outcrop's skin, including the platform, and the **mouth stub**: the cave in front of the plug, with its rock, the top 4 stair slabs and their ramp collider. It also holds the deck's enclosure (rails plus walls) and the mouth plug. 6.3k render triangles and 2.6k collider triangles. It binds only the moss set, through materials `outcrop_rock` (the skin) and `cave_moss` (the stub). |
+| `cave/anchors` | json | **keep** | 95, [50, −715] | 29 KB / 9 KB | Anchors, walk paths, zones, volumes, webs, stair, perch, outcrop, dressing, lights, materials, joins and build stats. Load it with `loadJSON("cave/anchors")`. |
 | `cave/tex/{rock,ground,pebbles}_{d,n,arm}` | ktx2 | keep | 92 / 90 / 88, [50, −725] | 1.07 MB | Poly Haven CC0 `rock_face_03`, `rocks_ground_08` and `ganges_river_pebbles`. `_d` is 1024² colour, `_n` is 512² normal (OpenGL / `nor_gl`), `_arm` is 512² linear (R = AO, G = roughness, B = metal). |
 | `cave/tex/moss_{d,n,arm}` | ktx2 | **muster** | 92 / 90 / 88, [−17, −673] | 0.35 MB | `mossy_rock`, in the same layout. It ships with `cave/outcrop`, which binds it. `cave/mesh` (exit) uses it from there. |
 | `fx/water_n` | ktx2 | keep | 90, [48, −731] | 50 KB | 512² normal map that tiles in u and v (integer-wavevector sines, OpenGL convention). |
 
-The start packs after this build are:
-- keep 3.79 MB (+1.22 MB),
-- exit 0.38 MB,
-- muster 12.55 MB (+0.41 MB: the outcrop is 0.06 MB and the moss set 0.35 MB).
+The start packs (brotli) after this build (`--only=cave/`, manifest `db3f9b551886`) are:
 
-Cart stays at 8.54 MB: the hole changes `cart/terrain` by +1.5 KB, and its hash changed. `cart/scatter` and `cart/heightfield` are byte-identical, and all 77 earlier ids still exist.
+| Segment | Start pack | Change from the cave's arrival |
+|---|---|---|
+| menu | 0.02 MB | – |
+| cart | 8.54 MB | the hole changes `cart/terrain` by +1.5 KB |
+| muster | **12.57 MB** | +0.43 MB: the outcrop 0.08 MB and the moss set 0.35 MB |
+| execution | 2.90 MB | – |
+| dragon | 4.84 MB | – |
+| keep | **3.79 MB** | +1.22 MB |
+| exit | **0.37 MB** | `cave/mesh` alone |
+
+The previous round's summary gave "exit 0→0.73 MB, muster 12.14→12.20 MB". Those numbers predate the move of the moss set to muster and are superseded. This round changed only `cave/*` (all four ids got new hashes; `cave/mesh` lost 17 KB to `cave/outcrop`, which gained 29 KB). `cart/terrain` is byte-identical, because the hole it cuts is unchanged, and all 94 earlier ids still exist.
 
 **Frame.** Everything is in **world coordinates**. Add each container at the origin. Do not parent it, and do not use `piece()`, which recentres. Mesh nodes carry a translation and a uniform scale from `KHR_mesh_quantization`, so build bodies from world geometry, as `appendWorldGeometry` does. Every anchor `y` is the shipped collider's height at that x/z, so a `place3` ray lands within 3 mm of it. The build checks this against the decoded GLBs.
 
@@ -1605,7 +1614,7 @@ Each triangle is classified by the term that makes it:
 
 Simplification is joint, to 35 % for render and 12 % for colliders, then the result is split. Every render mesh **and** every collider also carries a one-triangle ring of its neighbours' triangles. Each mesh is quantised on its own, and the ring covers the millimetre cracks that leaves at the seams. Do not filter those duplicates out.
 
-**`cave/mesh_a`** (`cave_a` → …), **`cave/mesh`** (`cave` → …), **`cave/outcrop`** (`outcrop` → …):
+**`cave/mesh_a`** (root `cave_a_root` → …), **`cave/mesh`** (root `cave_root` → …), **`cave/outcrop`** (root `outcrop_root` → …). The roots were renamed from `cave_a` / `cave` / `outcrop`, because `cave_a` and `cave_A` differed only by case. The build now fails if two node names across the three files differ only by case. Look nodes up by exact name.
 
 | Node | What | Runtime use |
 |---|---|---|
@@ -1617,10 +1626,10 @@ Simplification is joint, to 35 % for render and 12 % for colliders, then the res
 | `cocoon_courier` → `cocoon_courier_mesh`, `cocoon_courier_col` | The courier's cocoon, lying along the wall at anchor `cocoon` (r 0.38, 1.8 m), plus a box collider. | Hold-E target. Hide or replace it when cut open, and remove its body. |
 | `cave_cocoons`, `cave_eggs` | Four hanging cocoons, and five egg sacs by `burrow_s` (material `cave_eggsac`, emissive teal, `KHR_materials_emissive_strength` 1.8). | Cosmetic. Light hint `lights.light_eggs`. |
 | `den_fissure` | An emissive 6 × 1.2 m card on the den ceiling (material `cave_fissure`). | Pair it with the spot light `lights.light_den_fissure`. Cosmetic. |
-| `outcrop_rock` | The outcrop skin and the flat platform, plus a one-triangle ring of zone E triangles at the mouth. It has one material, `outcrop_rock`, on the ring as well. The E triangles under the ring are `cave_moss`, which has the same textures, tile, UVs and vertex colours, so the doubled triangles render identically. | **Show with the town (outdoor set) from the muster chapter on.** It covers `EXIT_HOLE`, which `cart/terrain` cuts from the start. Its textures `cave/tex/moss_*` ship in muster too, so it is fully textured from the first frame it is shown. Keep it visible in zones D–E. |
-| `outcrop_col` | The outcrop's collider, including the platform deck (flat at 56.05, within 4 cm). | Static body. Build it with the town. |
-| `outcrop_rails_col` | Invisible 1.2 m rails along the platform's S edge (z −667, x −19…−11) and E edge (x −11, z −674…−667). | Static body. |
-| `outcrop_mouth_plug` → `_mesh`, `_col` | A black card 8.3 × 6.55 m plus a box, 3.5 m inside the mouth, facing out. | Shown until `cave/mesh` is in: it hides the empty tunnel from the town. Remove both (tag suggestion `blocker_mouth`) when `cave/mesh` is shown. In the fallback (cut #6) keep it as the void card. |
+| `outcrop_rock` | The outcrop skin and the flat platform (primitive `outcrop_rock`), and the **mouth stub** (primitive `cave_moss`). The stub is every cave triangle in front of the plug's plane, plus 1.5 m behind it so that its floor runs under the plug box and its walls behind the card. It includes the top 4 of the 19 stair slabs. There is also a one-triangle ring of zone E triangles where the stub meets `cave_E` (material `outcrop_rock`/`cave_moss`, the same textures, tile, UVs and vertex colours as the E triangles under them, so the doubled triangles render identically). The skin's lower border runs at least 5 cm under the render terrain everywhere (0.07 m at the highest), so the two meet without a crack. | **Show with the town (outdoor set) from the muster chapter on.** It covers `EXIT_HOLE`, which `cart/terrain` cuts from the start. With the plug, it closes the mouth by itself: `cave/mesh` is not needed for anything seen or walked on from the town. Its textures `cave/tex/moss_*` ship in muster too, so it is fully textured from the first frame it is shown. Keep it visible in zones D–E. |
+| `outcrop_col` | The outcrop's collider: the skin, the platform deck (flat at 56.05, within 4 cm) and the stub's floor and walls. The stair ramp cells in front of the plug are here too, and also in `cave_E_col`. | Static body. Build it with the town. |
+| `outcrop_rails_col` | The deck's invisible enclosure, four boxes up to y 66 (`outcrop.rails.walls`). **S** (z −667, x −21.8…−11) and **E** (x −11, z −675.2…−667) are the rails over the open edges, ≥ 1.2 m above the deck (they run to 66). **W** (x −21.8, over the shoulder) and **N** (z −674, from y 59.2, 1.2 m thick into the hood) stop anyone on the outcrop's top from dropping onto the deck or into the mouth. | Static body, with the town. |
+| `outcrop_mouth_plug` → `_mesh`, `_col` | A black card 8.3 × 6.55 m plus a box (half extents 0.2 × 3.27 × 4.15, covering the whole tunnel section in its plane), 3.5 m inside the mouth, facing out, at (−19.07, 57.98, −676.63). | Shown until `cave/mesh` is in: behind it the tunnel is empty while only the outcrop is loaded. Remove both (tag suggestion `blocker_mouth`) when `cave/mesh` is shown. In the fallback (cut #6) keep it as the void card. |
 
 **Materials and textures.** The rock materials in the GLBs are **untextured**. Their `baseColorFactor` is the mean colour of their diffuse, roughness is 1 and metallic is 0. TEXCOORD_0 is world position ÷ tile, in texture repeats, box-projected:
 - floors, the bed and ceilings use XZ;
@@ -1647,12 +1656,15 @@ The webs material `cave_web` has its atlas embedded: alpha blend, double-sided, 
 - **`zones.A`…`E`:** `{boxes: [{min, max}], neighbours, show: ["cave_X"], profile}`. Define them **in order A, B, C, D, E with equal priority**, because overlaps resolve to the earlier zone. Neighbours are A–B, B–C, C–D and D–E. The profile is "cave", except E, which is "climb-out". The boxes are binned along the tunnels; the build checks that every walk sample resolves to its own zone, or to the neighbour within 4 m of a seam. Zone E's last box covers the outcrop top (x −26…−9, y 50…64, z −684…−664). Hand off to K_BS / `drain_plug` at `breach`.
 - **`volumes`:**
   - `respawn_gallery`: y < 25.5 over the chasm, to the bank last stood on (`lever_stance`/`gal_s_cp`).
-  - `respawn_outcrop`: y < 50, to `platform`.
+  - `respawn_outcrop`: y < 50 over the outcrop's skin plus 1 m (x −26.79…−6.5, z −676…−662.42), to `platform`. It reaches the skin's east face at x −7.5, not just the design footprint (x ≤ −9). It stops at z −676 because the climb runs below 50 m further north. It is a safety net only: the enclosure check shows the capsule cannot leave the deck.
   - `water`: the slow and splash box, surface 23.7, bed 23.1.
   - `spider_arena` and `chasm`.
 - **`webs`, `stair`, `perch`** (`box`, `steps`, `ramp`) **and `outcrop`:**
   - `platform`: y 56.05, x −19…−11, z −674…−667.
-  - `rails`, `mouthPlug`, `hole`, `scatterExclusion`.
+  - `rails`: `open` (the S and E edges), `walls` (S, E, W, N boxes: `a`, `b`, `y`, `t`, `side`), `minHeight` 1.2.
+  - `mouthStub`: the plug's plane (point and normal) and `behind` (1.5 m). Cave geometry in front of it ships in `cave/outcrop`.
+  - `enclosure`: the fill counts of the enclosure check (below).
+  - `mouthPlug`, `hole` (`cover: "cave/outcrop"`), `scatterExclusion`.
   - `vista`: per target the distance, yaw, clearance and where the line leaves the deck.
   - `viewCorridor`.
   - `props`: the `brow` suggestion `ph/rock_face_02` at (−19, 60.5, −674.6), and 5 `lip_*` boulder positions on the S/E edges, outside the view corridor.
@@ -1685,9 +1697,9 @@ The webs material `cave_web` has its atlas embedded: alpha blend, double-sided, 
 | `cp_den` / `comp_den` | −16.5, 31.56, −729 / −15.5, 31.40, −730.2 | 4.25 | CP3 yaw 2.45 |
 | `wolf_bed` / `satchel` / `den_centre` | −22, 32.85, −718 / −20.5, 33.47, −716.5 / −24, 32.47, −720 | | the wolf faces `cp_den` |
 | `bones_1..3` | (−24.5, 32.48, −721), (−26.8, 32.79, −715.5), (−23.53, 33.12, −713.3) | | props |
-| `den_path_1..4` | (−19, 32.06, −726), (−25.5, 33.13, −723.5), (−27.5, 33.00, −718), (−27, 33.13, −712.5) | | |
+| `den_path_1..4` | (−19, 32.06, −726), (−25.5, 33.19, −723.5), (−27.5, 33.00, −718), (−27, 33.13, −712.5) | | |
 | `cp_climb` / `comp_climb` | −28, 33.73, −709 / −27, 33.41, −711 | 4.5 | CP4 yaw 2.7 |
-| `climb_s23` / `climb_mid` | −33, 35.53, −699 / −46, 40.73, −681 | | leash limit; wind bed |
+| `climb_s23` / `climb_mid` | −33, 35.48, −699 / −46, 40.73, −681 | | leash limit; wind bed |
 | `cp_light` / `stub84` | −25, 51.28, −684 / −21.9, 53.32, −681.3 | 5.9 / 5.75 | stair (ramp heights) |
 | `bend` | −21, 54.08, −680 | 5.75 | zone D/E seam |
 | `balcony_mouth` / `platform` / `comp_platform` | −17.5, 56.05, −673.5 / −15, 56.05, −670.5 / −17.6, 56.05, −672 | | platform yaw −1.68 (CP5) |
@@ -1699,6 +1711,14 @@ The webs material `cave_web` has its atlas embedded: alpha blend, double-sided, 
   - The tunnel meets the terrain only inside `EXIT_HOLE.render`.
   - Every point of the hole is under the outcrop. The outcrop adds a cap over the hole that follows the terrain + 1.3 m; the terrain inside the hole reaches 68 m, above the hood.
   - The runtime height field survives a few triangles outside `samples`, along the mouth's west wall. The pipeline models it exactly (4 m `heightAt`, 512/255 m sample grid, either quad diagonal) and the tunnel floor there follows those triangles + 3 cm, so none of them reaches into the tunnel.
+- **Skin and terrain mesh.** The outcrop skin's lower border lies at least 5 cm under the render terrain (`tools/gen/terrain.mjs`, 2 m grid, same triangulation) at every one of its 327 border vertices; at the highest it is 0.07 m under. The ground term sits 0.5 m under the terrain. But on the steep west slope (gradient ≈ 1.3), surface nets put the crease between the outcrop and the ground up to a cell away from the true crease, up to 0.6 m *above* the terrain. Dropping the ground triangles there left a sliver crack, which hillside eyes saw into at grazing angles. Ground triangles that reach above the render terrain inside the outcrop's box now stay with the skin (125 triangles).
+- **The town-chapter set** (muster through keep: `cave/outcrop` shown with the town, `cave/mesh` not loaded). This is checked on the decoded `cave/outcrop` with the runtime terrain collider modelled with `EXIT_HOLE` cut:
+  - **Render closure.** 55 eyes look at the 879 zone-E surface points within 14 m of the mouth and at points in the air behind the plug (48,345 rays). The eyes are a grid on the deck, the square, the forecourt, the keep top, the street, the tower, the inn, and 24 hillside points 16 and 28 m around the outcrop. Each ray's first front face must come before the ray enters the void (rock deeper than 0.25 m, or cave air outside the stub). Measured: 0 fails.
+  - **Floors.** Every standable floor of the field outside the plug is checked: rock below, 1.75 m of room, slope ≤ 50°, sampled every 0.5 m and every 0.25 m within 10 m of the mouth. Each needs an `outcrop_col` or terrain collider within 0.45 m, or within 0.2 m of the up-facing render floor that the player sees there. A field floor with no render floor within 0.6 m outside the tunnel is counted, not failed. This happens for 2 points on a 0.6 m sliver of the cap's north rim, which the simplifier removed from both meshes. Measured: 3721 floors, 0 missing (3 matched by the render floor, 2 unshown).
+- **Enclosure.** A flood fill runs the player's capsule over the decoded colliders (`MOVER`: step 0.45, slopes ≤ 50°, 1.8 m tall, jump 1.11 m; 0.25 m columns; segments between columns blocked by any non-terrain triangle at 0.3, 0.9 and 1.5 m). From `platform`, it must stay on the deck and the stub, or drop into `respawn_outcrop`. It must never reach the terrain, leave the outcrop, fall through every collider or reach the edge of the 44 × 50 m area. From every terrain cell on the area's border (the whole open slope), it must never reach the deck or the stub. Measured: 1132 nodes from the platform, all on the deck or the stub. 33,884 nodes from the hillside, 3520 of them on the outcrop's top, none on the deck or the stub. This is design §12 X4 ("boulder lip + rails + respawn below y 50") made checkable: the platform cannot be walked onto from the town, nor walked off into the open world.
+- **Rails.** Along the open S and E edges, every 0.25 m, the rails must stand ≥ 1.2 m above the deck just inside, with no gap under them. Measured: 9.86 m (they run to y 66).
+- **Gates.** Each removable gate box (`web_A_col`, `web_B_col`, `outcrop_mouth_plug_col`) must cover its tunnel section. The section is flood-filled in the box's mid-plane from the field. No point with a capsule radius of air may lie outside the box, and the section must close within 7 m. Measured: 0 outside for all three (sections of 20, 28 and 32 m²).
+- **Perch.** The decoded `cave_A_col` must carry a walk from `perch_foot` east to the perch top (30.15) with steps ≤ 0.45 m. Measured: steps ≤ 0.09 m.
 - **Openings.** The cave opens to the sky only at the mouth. Every walk sample has rock overhead except the last 1.5 m.
 - **Walkability, on the field and its colliders.** The centreline is sampled every 0.5 m. Each sample takes the **largest vertical air gap** of its column, from 2.5 m below the design floor to 2.5 m above its clear height. A sample fails if:
   - its column has no air (**sealed**);
@@ -1730,7 +1750,8 @@ The webs material `cave_web` has its atlas embedded: alpha blend, double-sided, 
   - platform flat within 8 cm;
   - chimney open;
   - the joins above.
-- **Mutation-tested** by `node tools/check-cave-mutations.mjs`. Each mutation edits a copy of `cave.mjs` and runs `buildCave` up to its first emit. The build must fail **with the expected message**, and the unmutated source must pass. Four run at a time, about 35 s each, and nothing is written to `public/`. Each of these fails the build:
+- **Plus, on the decoded GLBs (before anything is emitted):** the walk; the town-chapter set (render closure and floors), the enclosure, the rails, the gates and the perch ramp (see Joins); and no two node names across the three GLBs that differ only by case.
+- **Mutation-tested** by `node tools/check-cave-mutations.mjs` (`npm run check-cave`). Each mutation edits a copy of `cave.mjs` and runs `buildCave` up to its first emit. The build must fail **with the expected message**, and the unmutated source must pass. There are 21 runs, four at a time, about 50 s each, so the whole test takes about 4 minutes. Nothing is written to `public/`. Each of these fails the build:
   - no cap over the hole (`EXIT_HOLE is not covered`);
   - no mouth constraint (`the runtime terrain collider reaches into the tunnel`);
   - no stair ramp (`stair ramp … vs rock floor`);
@@ -1741,30 +1762,41 @@ The webs material `cave_web` has its atlas embedded: alpha blend, double-sided, 
   - **sealed exit with the field validator off:** the decoded-GLB walk alone fails (`walk: gap of … m outside the chasm between exit …`, `no decoded collider`);
   - **narrowed toSpider:** control half-width 0.45 between the chambers (`half-width 0.60 m < 0.9 across the tunnel at toSpider`);
   - **pinched toDen:** two rock pillars leave a 1.4 m waist (`half-width 0.75 m < 0.9`);
-  - **low toDen:** the ceiling at 2.2 m over 3 m (`clearance 2.02 m < 2.6`).
+  - **low toDen:** the ceiling at 2.2 m over 3 m (`clearance 2.02 m < 2.6`);
+  - **skin_crack:** the ground triangles at the crease are dropped as before (`the outcrop skin's border is not under the render terrain at 54 of 327 vertices … worst 0.63 m above`);
+  - **stub_in_cave:** the stub ships in `cave/mesh` again, which is the first review's finding (`muster set (cave/outcrop without cave/mesh): 920 of 34980 rays toward zone E reach the void`);
+  - **stub_no_collider:** the stub's render stays in the outcrop but its collider goes to `cave_E_col` (`muster set: … standable floors outside the mouth plug have no collider within 0.45 m`);
+  - **hood_short:** the hood ends at x −15, as in the first review, so the deck's N edge continues as a shelf onto the hillside (`enclosure: the capsule … from the platform leaves the rails' envelope`);
+  - **no_W_wall:** no wall over the shoulder (`enclosure: the capsule from the hillside reaches the mouth`);
+  - **rails_low:** the S and E rails 0.2 m high (`rails: only 0.11 m above the deck`);
+  - **no_perch_ramp:** no perch ramp collider (`perch: the decoded ramp does not climb from perch_foot to the perch top`);
+  - **web_narrow:** web boxes a quarter of their width (`gate web_A: its box … does not cover the tunnel section in its plane`, and the same for web_B);
+  - **plug_narrow:** the plug box a quarter of the tunnel's width (`gate outcrop_mouth_plug: its box … does not cover …`).
 
-**Raw → shipped:** 70.7k triangles → 29.4k render (A 7.5k, B 3.6k, C 4.0k, D 7.6k, E 2.1k, outcrop 4.4k) → 10.0k collider. The build takes about 31 s, plus about 4 s to encode the GLBs.
+  `hood_low` now lowers the hood of the current outcrop (`max x −7.8`). Removing the platform slab fill is not caught, and it is harmless: the outcrop's cut already fills the deck.
+
+**Raw → shipped:** 72.0k triangles → 30.3k render (A 7.5k, B 3.5k, C 4.0k, D 8.0k, E 0.8k, outcrop and stub 6.3k) → 10.2k collider. The field, meshing and validation take about 31 s. The checks of the decoded GLBs and the encoding take about 20 s more.
 
 **Runtime integration checklist (cave).** These are runtime changes in `src/**`:
-1. **Outcrop with the town.**
-   - Load `cave/outcrop` in `ensureTown`. Add `outcrop_rock` to the outdoor visibility set. Bind its material's `extras.textures` (`cave/tex/moss_*`, which ship in muster with it).
+1. **Outcrop with the town. This is a blocker for shipping this manifest.** `cart/terrain` cuts `EXIT_HOLE`, and the runtime opens the collider there because its cover ships. Until `ensureTown` loads `cave/outcrop`, the game has an uncovered 10 × 8 m hole into the void on the hillside 75 m west of the keep. It is visible from the square and is a fall-through.
+   - Load `cave/outcrop` in `ensureTown`, in muster and every later chapter. Add `outcrop_rock` to the outdoor visibility set. Bind its materials' `extras.textures` (`outcrop_rock` and `cave_moss`, both `cave/tex/moss_*`, which ship in muster with it).
    - Build `outcrop_col`, `outcrop_rails_col` and `outcrop_mouth_plug_col` with the town's static bodies.
-   - `cart/terrain` already has the hole, and `activeTerrainHoles` opens the collider as soon as `cave/mesh` is in the manifest, which it now is.
+   - In `src/world/terrainHoles.ts`, set `EXIT_HOLE.cover` to `"cave/outcrop"` to mirror `tools/gen/terrainHoles.mjs`. That makes the build's warning go away. The hole then opens only when the geometry that covers it ships.
 2. **`ensureUnderground`.**
    - Load `cave/mesh_a` (keep) and `cave/mesh` (exit) plus `cave/anchors`.
    - `setEnabled(false)` every `*_col`, and build one static body per collider node.
    - Tags: `web_A`, `web_B`, the courier cocoon and `blocker_mouth` for the plug.
 3. **Textures.** Bind `extras.textures` per material as above, sharing the textures between both GLBs. Set `hasVertexAlpha = false` on the rock materials.
 4. **Zones.** Define A–E from `zones`, in order. `show: cave_X` toggles the render node, and the neighbours stay shown. Colliders stay on.
-5. **Mouth.** When `cave/mesh` is shown, hide `outcrop_mouth_plug` and remove its body, and remove `drain_plug` in the keep (K9).
+5. **Mouth.** When `cave/mesh` is shown, hide `outcrop_mouth_plug` and remove its body, and remove `drain_plug` in the keep (K9). Keep `outcrop_rock` and `outcrop_col` on: the stub in front of the plug is only in them, and `cave_E` and `cave_E_col` meet them edge to edge, with a one-triangle ring.
 6. **Water.** Bind and scroll `fx/water_n`. Use the volumes for respawn and slow.
 
 **Deviations:**
 - **Moss textures in muster.** §10.6 lists `mossy_rock` under exit. It ships in **muster**, because the outcrop, shown with the town from muster on, binds it. Muster's start pack grows by 0.35 MB and exit's shrinks by the same. The rock, ground and pebble sets stay in keep, and the outcrop binds none of them.
 - **Asset split.** §10.1 has one `cave/mesh` (zones A–E). It ships as:
   - `cave/mesh_a`, zone A, in segment keep;
-  - `cave/mesh`, zones B–E, in exit (it keeps the id that `EXIT_HOLE.cover` names);
-  - `cave/outcrop`, in **muster**. The hole is cut in `cart/terrain` from the first chapter, and the outcrop is visible from the square, so it has to come with the town.
+  - `cave/mesh`, zones B–E behind the mouth plug, in exit;
+  - `cave/outcrop`, in **muster**. The hole is cut in `cart/terrain` from the first chapter, and the outcrop is visible from the square, so it has to come with the town. It carries the mouth in front of the plug (the stub), so it closes and floors the mouth by itself, and it is `EXIT_HOLE.cover`. §3.1's table says the hole is covered by the "outcrop footprint", and the earlier build named `cave/mesh`.
 - **Textures.**
   - The cave textures are standalone `cave/tex/*` assets, bound from material extras. They are not embedded, because embedding would have duplicated them in two segments.
   - The web atlas is embedded in `cave/mesh` (material `cave_web`). There is no separate `fx/webs` asset.
@@ -1772,12 +1804,16 @@ The webs material `cave_web` has its atlas embedded: alpha blend, double-sided, 
   - The box reaches down to y 36. With the design's 46.5 bottom it floats over the SE terrain, which falls to 40.
   - It has a large warp, a taper and bedding.
   - It adds a **west shoulder** (to y 58.6) that walls the platform's west side, and a **cap over the whole hole**.
-  - At the terrain its skin spans x −25.8…−8.1 and z −683.6…−663.4, which is the design footprint plus 0.9 m on the east.
+  - The **hood** runs east to the cliff (x −23…−7.8, not −15). Before, the box's top continued the deck's N edge east of x −15 as a level shelf, 56.2–56.9, onto the hillside, so the platform could be walked onto from the town.
+  - The rails are an **enclosure**: S and E rails over the open edges plus W and N walls over the rock sides, all to y 66. §4.4 has only "invisible 1.2 m rails" on the open edges. The walls stop anyone who reaches the outcrop's top from the hillside from dropping onto the deck.
+  - **No overhang at the ground line.** Ground triangles at the crease with the steep west slope stay with the skin, so its border is under the terrain mesh (see Joins).
+  - Its skin spans x −25.8…−7.5 and z −683.8…−663.4, which is the design footprint plus 1.5 m on the east (the hood). It stays inside `SCATTER_EXCLUDE` with a 1 m margin; the build checks this.
 - **Perch.** The ledge falls from 27.95 at the box to 27.1 at x 50, so the flight is 8 risers of 0.378 m starting at x 50.35, not 0.4 m steps from 52.8. Its collider is a 40° ramp.
 - **Web walls** are sized to the tunnel section (A 5.9 × 5.15 m, B 7.45 × 5.55 m), not 4.4 × 3.6.
 - **Water** flows west, along the channel from x 64 to x 32. §4.3 says "flowing south".
 - **Anchor values.** `den_path` passes the wolf at 5.17 m, not 5.5. `interrog_body` stands at 27.29, not 27.9. `bones_3` is moved, as noted above. `chimney_base` is split into `chimney_mouth` and `chimney_top`.
 - **Scatter exclusion** is 19 m, not 10, to cover the outcrop's footprint. No scatter stood within 25 m of it, so nothing changed.
+- **Respawn** (`respawn_outcrop`) covers the skin plus 1 m (x to −6.5), not the design footprint (x ≤ −9), and stops at z −676.
 - **Not built here:**
   - the brow `ph/rock_face_02` and the lip boulders (anchors and suggestions only, for the props unit);
   - the drawbridge, lever, winch, slab, bones and camp fire (procprops and props units; anchors only);

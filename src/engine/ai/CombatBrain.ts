@@ -17,15 +17,16 @@ import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { Emitter } from "../core/emitter";
 import type { Disposer } from "../core/types";
 import type { DisposerSink } from "../core/emitter";
-import type { RootMotionCurve } from "../anim/rootMotion";
+import type { RootMotionCurve, RootMotionLimits } from "../anim/rootMotion";
 import { ARROW, BACKSTAB, COMPANION, GUARDS, STAGGER, type Archetype, type CompanionTuning } from "../combat/attacks";
 import type { AttackHandle, Awareness, CombatantSpec, CombatEvent, Combatant, CombatSystem, HitResult } from "../combat/CombatSystem";
 import { Vitals } from "../combat/vitals";
 import type { XYZ } from "../combat/hit";
 import type { AttackDef, SpecialDef } from "../combat/weapons";
 import type { AgentControl } from "./agent";
-import { Brain, type BrainState } from "./fsm";
-import type { SightRay } from "./perception";
+import { Brain, type BrainState } from "./Brain";
+import { carriedBy, dashCurve, landingDistance, leapCurve, LUNGE, lungeReach, stopDistance } from "./lunge";
+import type { SightRay } from "./Perception";
 import { AI, between } from "./tuning";
 import { yawOf, type XZ } from "./steering";
 
@@ -162,8 +163,11 @@ export type BarkKind = "alert" | "suspicious" | "calm" | "special" | "surrender"
 export type BrainEvent =
   | { type: "state"; from: string | null; to: string }
   | { type: "bark"; kind: BarkKind }
-  /** an archer's draw glints (`at` the bow) */
-  | { type: "glint"; at: XYZ }
+  /**
+   * a tell glints: a human melee wind-up as it starts (`seconds` to the strike, `attack` its id;
+   * content shows it at the weapon, falling back to `at`), or an archer's draw (`at` the bow)
+   */
+  | { type: "glint"; at: XYZ; seconds?: number; attack?: string }
   /** a projectile left the bow: it arrives in `seconds` */
   | { type: "shoot"; from: XYZ; to: XYZ; seconds: number }
   | { type: "died"; hit: HitResult | null; ragdoll: boolean }
@@ -176,8 +180,11 @@ export interface BrainSystem {
   register(b: CombatBrain): Disposer;
   /** alert the brain's allies (its group, and its faction within `radius`) */
   alertAllies(from: CombatBrain, at: XYZ | null, radius: number): number;
-  /** a ragdoll may start now (at most 2 at once) */
-  ragdollSlot(): boolean;
+  /**
+   * a ragdoll may start now (at most 2 at once): a slot to hold while the ragdoll is live, released
+   * (idempotently) once it is frozen or gone; null at the limit
+   */
+  ragdollSlot(): Disposer | null;
   /** every brain it knows */
   readonly brains: readonly CombatBrain[];
   brainOf(key: unknown): CombatBrain | undefined;
@@ -204,10 +211,16 @@ export interface CombatBrainOptions {
   keys?: readonly unknown[];
   /** score bias for a target (negative: preferred), e.g. a captain that prefers the companion */
   preferTarget?(c: Combatant): number;
-  /** may it fight this one at all */
+  /** may it fight this one at all (checked when choosing a target and on every update while fighting it) */
   canTarget?(c: Combatant): boolean;
-  /** make a ragdoll of the body; true when it did (only asked while the budget has room) */
-  ragdoll?(hit: HitResult | null): boolean;
+  /**
+   * make a ragdoll of the body; true when it did (only asked while the budget has room). The
+   * ragdoll holds one of the 2 slots until `done()` is called: call it when the ragdoll is frozen
+   * (settled) or disposed. Disposing the brain releases it too.
+   */
+  ragdoll?(hit: HitResult | null, done: Disposer): boolean;
+  /** melee wind-ups that play slowed (below 1×) glint (default: humanoid fighters; the companion's never) */
+  glint?: boolean;
   /** how aware it reads to the combat system while a script has it (default "alert": no backstab mid-scene) */
   scriptedAwareness?: Awareness;
   /** give up on targets further than this (m; default 30) */
@@ -215,7 +228,7 @@ export interface CombatBrainOptions {
 }
 
 /** A stagger as the combat system reported it. */
-interface StaggerInfo {
+export interface StaggerInfo {
   seconds: number;
   clip: string | null;
   push: { x: number; z: number } | null;
@@ -261,6 +274,8 @@ export abstract class CombatBrain {
   protected comboIdx = 0;
   protected lastDef: AttackDef | null = null;
   protected swing: AttackHandle | null = null;
+  /** how the swing under way carries the body (null: in place) */
+  protected swingMotion: { curve: RootMotionCurve; limits: RootMotionLimits } | null = null;
   protected stagger: StaggerInfo | null = null;
   protected blockAgainst: Combatant | null = null;
   protected deathHit: HitResult | null = null;
@@ -283,6 +298,8 @@ export abstract class CombatBrain {
   protected relayed = false;
   /** where it is going back to after a scene (set by `resume`) */
   protected resumeTo: string | null = null;
+  /** the ragdoll slot its body holds (released when the content freezes the ragdoll, or on dispose) */
+  private ragdollHeld: Disposer | null = null;
   protected disposed = false;
 
   constructor(o: CombatBrainOptions) {
@@ -411,6 +428,34 @@ export abstract class CombatBrain {
     return this.fsm.in("scripted");
   }
 
+  /**
+   * Back to a clean calm state (an encounter's retry put it on its mark, a checkpoint): no target,
+   * turn, forced target, plan or arrows; out of a scene; its senses on. A dead brain stays dead.
+   */
+  reset() {
+    if (this.disposed || this.fsm.in("dead")) return;
+    this.releaseToken();
+    this.forced = null;
+    this.target = null;
+    this.lastHitBy = null;
+    this.combo = [];
+    this.comboIdx = 0;
+    this.flights = [];
+    this.stagger = null;
+    this.untilHit = false;
+    this.nextAttackAt = this.time;
+    this.senses(true);
+    this.fsm.go(this.resetState(), { restart: true });
+  }
+
+  /** The state `reset()` puts it in (default its calm state; a sleeping beast goes back to sleep). */
+  protected resetState(): string {
+    return this.calmState();
+  }
+
+  /** Subclasses: switch the senses on or off (off when dead or surrendered). */
+  protected senses(_on: boolean) {}
+
   // ---------------------------------------------------------------- combat events
 
   protected onCombat(e: CombatEvent) {
@@ -424,16 +469,7 @@ export abstract class CombatBrain {
         if (e.hit.target === me && e.hit.attacker !== me) this.hitBy(e.hit);
         break;
       case "stagger":
-        if (e.target === me && !this.fsm.in("dead") && !this.fsm.in("scripted")) {
-          const calm = !this.fsm.in("combat");
-          this.stagger = { seconds: e.seconds, clip: e.clip, push: e.push, from: e.from, knockdown: e.knockdown };
-          this.fsm.go("stagger", { restart: true });
-          // a first blow that staggers skips the alert state: its senses and allies still learn of it
-          if (calm && this.fsm.in("combat")) {
-            this.onAlerted(e.from);
-            this.ai?.alertAllies(this, e.from, AI.alert.radius);
-          }
-        }
+        if (e.target === me && !this.fsm.in("dead") && !this.fsm.in("scripted")) this.staggered({ seconds: e.seconds, clip: e.clip, push: e.push, from: e.from, knockdown: e.knockdown });
         break;
       case "death":
         if (e.target === me) {
@@ -453,9 +489,24 @@ export abstract class CombatBrain {
     }
   }
 
+  /**
+   * Its poise broke, a parry or a guard break made it reel: into `stagger` (subclasses: a sleeping
+   * beast reels where it lies and stands up first).
+   */
+  protected staggered(s: StaggerInfo) {
+    const calm = !this.fsm.in("combat");
+    this.stagger = s;
+    this.fsm.go("stagger", { restart: true });
+    // a first blow that staggers skips the alert state: its senses and allies still learn of it
+    if (calm && this.fsm.in("combat")) {
+      this.onAlerted(s.from);
+      this.ai?.alertAllies(this, s.from, AI.alert.radius);
+    }
+  }
+
   /** After getting up (essential): straight back into the fight, or calm. */
   protected afterDown() {
-    return this.combat.enemiesOf(this.self).length ? "approach" : this.calmState();
+    return this.pickTarget() ? "approach" : this.calmState();
   }
 
   /** Took a blow from `h.attacker`: remember it, and fight back. */
@@ -497,11 +548,21 @@ export abstract class CombatBrain {
     return dist(this.agent.position, c.pose);
   }
 
+  /**
+   * May it fight `c` now: active, not down, allowed by `canTarget`. Subclasses narrow it (the
+   * companion takes only alert enemies near the player). `current`: the target it is fighting
+   * (whether to keep it); `forced`: a target a special or a script put it on.
+   */
+  protected canFight(c: Combatant, _o: { current?: boolean; forced?: boolean } = {}): boolean {
+    if (!c.active || c.down) return false;
+    return !this.o.canTarget || this.o.canTarget(c);
+  }
+
   /** Choose whom to fight: the nearest, kept unless another is clearly nearer, the last attacker preferred, foes already crowded passed over. */
   protected pickTarget(): Combatant | null {
     const f = this.forced;
     if (f) {
-      if (this.time < f.until && this.combat.has(f.c) && f.c.active && !f.c.down) return f.c;
+      if (this.time < f.until && this.combat.has(f.c) && this.canFight(f.c, { forced: true, current: f.c === this.target })) return f.c;
       this.forced = null;
     }
     const me = this.self;
@@ -509,7 +570,7 @@ export abstract class CombatBrain {
     let bestScore = Infinity;
     const giveUp = this.o.giveUp ?? 30;
     for (const c of this.combat.enemiesOf(me)) {
-      if (c.down || (this.o.canTarget && !this.o.canTarget(c))) continue;
+      if (!this.canFight(c, { current: c === this.target })) continue;
       const d = this.dist(c);
       if (d > giveUp || Math.abs(c.pose.y - this.agent.position.y) > 6) continue;
       let s = d + (this.o.preferTarget?.(c) ?? 0) + this.targetBias(c);
@@ -564,7 +625,8 @@ export abstract class CombatBrain {
   protected planAttack(d: number) {
     const f = this.fighter;
     const sp = f.special;
-    if (sp && this.time >= this.specialReadyAt && d >= sp.range[0] && d <= sp.range[1]) {
+    const r = this.specialRange();
+    if (sp && r && this.time >= this.specialReadyAt && d >= r[0] && d <= r[1]) {
       this.combo = [sp];
       this.specialReadyAt = this.time + sp.cooldown;
     } else if (f.heavy && ((f.heavyEvery && (this.sequences + 1) % f.heavyEvery === 0) || (f.heavyChance && this.random() < f.heavyChance))) {
@@ -575,8 +637,53 @@ export abstract class CombatBrain {
 
   /** A special is in range and ready now (the lunge from 4–6 m, the kick up close). */
   protected specialReady(d: number) {
+    const r = this.specialRange();
+    return !!r && this.time >= this.specialReadyAt && this.time >= this.nextAttackAt && d >= r[0] && d <= r[1];
+  }
+
+  /**
+   * From how far its special may start and still land on `t` (§8): the special's range, cut to
+   * what its strike can reach once its motion has carried it through the strike window (the lunge's
+   * 4–6 m becomes about 4–4.9 m; a move that does not travel reaches only its reach). Null: none.
+   */
+  specialRange(t: Combatant | null = this.target): readonly [number, number] | null {
     const sp = this.fighter.special;
-    return !!sp && this.time >= this.specialReadyAt && this.time >= this.nextAttackAt && d >= sp.range[0] && d <= sp.range[1];
+    if (!sp) return null;
+    const reachable = sp.reach + (t?.radius ?? 0.35);
+    return [sp.range[0], Math.min(sp.range[1], lungeReach(reachable, this.carries(sp)))];
+  }
+
+  /** Whether `def` is its special (lunge, kick, pounce). */
+  protected isSpecial(def: AttackDef): def is SpecialDef {
+    return !!this.fighter.special && def === this.fighter.special;
+  }
+
+  /**
+   * How `def` carries the body (null: it plays in place): its baked root-motion curve, which a
+   * special rides without the 3 m/s cap; for a special without one, a dash of its `travel` m (the
+   * lunge without the sidecar), or for a creature a leap sized to the distance `d` (the spiders'
+   * jump). Root motion never takes it closer than its stop distance to `t`.
+   */
+  protected attackMotion(def: AttackDef, t: Combatant | null, d: number): { curve: RootMotionCurve; limits: RootMotionLimits } | null {
+    const stop = t ? stopDistance(this.self.radius, t.radius) : LUNGE.stop;
+    const special = this.isSpecial(def);
+    const baked = this.o.rootMotion?.get(def.clip);
+    if (baked?.moves) return { curve: baked, limits: special ? { maxSpeed: LUNGE.maxSpeed, stopDistance: stop } : { stopDistance: stop } };
+    if (!special) return null;
+    const limits = { maxSpeed: LUNGE.maxSpeed, stopDistance: stop };
+    if (def.travel) return { curve: dashCurve(def, def.travel), limits };
+    if (this.fighter.kind !== "creature" || !t) return null;
+    const travel = Math.min(def.range[1], d - landingDistance(def.reach + t.radius, stop));
+    return travel >= 0.05 ? { curve: leapCurve(def, travel), limits } : null;
+  }
+
+  /** How far `def` has carried the body when its strike window closes (m; Infinity: a leap sized to the distance). */
+  protected carries(def: AttackDef): number {
+    const baked = this.o.rootMotion?.get(def.clip);
+    if (baked?.moves) return carriedBy(baked, def.active[1]);
+    if (!this.isSpecial(def)) return 0;
+    if (def.travel) return carriedBy(dashCurve(def, def.travel), def.active[1]);
+    return this.fighter.kind === "creature" ? Infinity : 0;
   }
 
   /** The attack that comes next (for the distance it needs). */
@@ -589,7 +696,6 @@ export abstract class CombatBrain {
     const t = this.target;
     this.lastDef = def;
     this.agent.stop();
-    if (t) this.agent.face(() => t.pose);
     // (the system reports the wind-up rate from inside attack(), before the handle exists: the clip
     // and its root motion start below with that rate; later changes come through here)
     let handle: AttackHandle | null = null;
@@ -598,21 +704,53 @@ export abstract class CombatBrain {
       onRate: (r) => {
         if (!handle) return;
         this.agent.setActRate(r);
-        this.rideRootMotion(def, r, handle.time);
+        this.rideRootMotion(r, handle.time);
       },
     });
     handle = h;
     this.swing = h;
-    if (!h) return;
+    if (!h) {
+      if (t) this.agent.face(() => t.pose);
+      return;
+    }
+    if (t) this.faceThrough(h, t);
+    this.swingMotion = this.attackMotion(def, t, t ? this.dist(t) : 0);
     this.agent.act(def.clip, { speed: h.rate, blend: def.blend ?? 0.1, hold: true });
-    this.rideRootMotion(def, h.rate, 0);
+    this.rideRootMotion(h.rate, 0);
+    // a slowed human wind-up is a tell: it glints (and the content's grunt plays on the wind-up)
+    if (h.rate < 1 - 1e-6 && !def.ranged && (this.o.glint ?? this.fighter.kind === "humanoid")) {
+      const p = this.agent.position;
+      const y = this.agent.yaw;
+      const at = { x: p.x - Math.sin(y) * 0.45, y: p.y + 1.45, z: p.z - Math.cos(y) * 0.45 };
+      this.events.emit({ type: "glint", at, seconds: def.active[0] / Math.max(0.05, h.rate), attack: def.id });
+    }
   }
 
-  private rideRootMotion(def: AttackDef, rate: number, from: number) {
-    const curve = this.o.rootMotion?.get(def.clip);
-    if (!curve) return;
+  /** The swing's motion from clip time `from` at `rate` (again whenever the rate changes). */
+  private rideRootMotion(rate: number, from: number) {
+    const m = this.swingMotion;
+    if (!m) return;
     const t = this.target;
-    this.agent.rootMotion(curve, { speed: rate, from, target: t ? () => t.pose : undefined });
+    this.agent.rootMotion(m.curve, { speed: rate, from, target: t ? () => t.pose : undefined, limits: m.limits });
+  }
+
+  /**
+   * Track `t` through the wind-up (turning at the agent's rate, root motion or not), then commit:
+   * from the strike on it holds the facing it had (a swing or a lunge goes where it was aimed, so a
+   * foe who sidesteps late makes it miss). Evaluated by the agent every frame, so the commit is
+   * exact, not at the brain's 10 Hz.
+   */
+  private faceThrough(h: AttackHandle, t: Combatant) {
+    let committed: number | null = null;
+    const far = { x: 0, z: 0 };
+    this.agent.face(() => {
+      if (committed === null && !h.finished && h.time < h.attack.active[0]) return t.pose;
+      committed ??= this.agent.yaw;
+      const p = this.agent.position;
+      far.x = p.x - Math.sin(committed) * 100;
+      far.z = p.z - Math.cos(committed) * 100;
+      return far;
+    });
   }
 
   /** The recovery is far enough along to be cut short by a block. */
@@ -697,10 +835,13 @@ export abstract class CombatBrain {
             }
           }
           const t = this.target;
-          if (!t || !t.active || t.down || !this.combat.has(t)) {
+          if (!t || !this.combat.has(t) || !this.canFight(t, { current: true, forced: this.forced?.c === t })) {
+            this.releaseToken();
             this.target = null;
             const next = this.pickTarget();
             if (next) this.target = next;
+            // (a blow's reel runs its time before it calms down)
+            else if (this.fsm.state === "stagger" && this.fsm.elapsed() < this.timer) return;
             else return this.calmState();
           }
           // holders far from their target let others have the turn (2 Hz)
@@ -759,8 +900,7 @@ export abstract class CombatBrain {
         update: () => {
           const s = this.swing;
           if (!s) return this.afterAttack();
-          // tracks the target through the wind-up, then commits
-          if (s.time >= s.attack.active[0]) this.agent.face(this.agent.yaw);
+          // (it tracks the target through the wind-up, then commits: `faceThrough`)
           if (!s.finished) return;
           if (this.comboIdx + 1 < this.combo.length && this.target && !this.target.vitals.dead) {
             this.comboIdx++;
@@ -772,6 +912,7 @@ export abstract class CombatBrain {
         exit: () => {
           if (this.swing && !this.swing.finished) this.swing.cancel();
           this.swing = null;
+          this.swingMotion = null;
           this.agent.stopRootMotion();
         },
       }),
@@ -791,7 +932,7 @@ export abstract class CombatBrain {
           this.timer = (len || rec.length) / Math.max(0.05, rate);
           const curve = this.o.rootMotion?.get(rec.clip);
           const t = this.target;
-          if (curve) this.agent.rootMotion(curve, { speed: rate, target: t ? () => t.pose : undefined });
+          if (curve) this.agent.rootMotion(curve, { speed: rate, target: t ? () => t.pose : undefined, limits: { stopDistance: t ? stopDistance(this.self.radius, t.radius) : LUNGE.stop } });
         },
         update: () => {
           if (this.fsm.elapsed() >= this.timer) return this.afterAttack();
@@ -900,6 +1041,7 @@ export abstract class CombatBrain {
       dead: S({ enter: () => this.die() }),
       surrender: S({
         enter: () => {
+          this.senses(false);
           this.releaseToken();
           this.combat.block(this.self, false);
           this.agent.stop();
@@ -1006,37 +1148,48 @@ export abstract class CombatBrain {
     this.agent.stop();
     this.agent.stopRootMotion();
     if (!s) return;
-    let push = s.push;
     if (this.fighter.kind === "creature") {
-      // creatures reel procedurally: pushed 0.6 m away from the blow and rocked for 0.3 s
-      if (!push && s.from) {
-        const p = this.agent.position;
-        const dx = p.x - s.from.x, dz = p.z - s.from.z;
-        const l = Math.hypot(dx, dz) || 1;
-        push = { x: (dx / l) * STAGGER.creature.push, z: (dz / l) * STAGGER.creature.push };
-      }
-      this.agent.wobble(STAGGER.creature.wobble);
+      this.reel(s);
       if (s.clip) this.agent.act(s.clip, { hold: true, blend: 0.08 });
-    } else if (s.clip) this.agent.act(s.clip, { hold: true, blend: 0.08 });
+      return;
+    }
+    if (s.clip) this.agent.act(s.clip, { hold: true, blend: 0.08 });
+    if (s.push) this.agent.shove(s.push.x, s.push.z, 0.3);
+  }
+
+  /** A creature's procedural reel: pushed 0.6 m away from the blow (or by its knockback) and rocked for 0.3 s. */
+  protected reel(s: StaggerInfo) {
+    let push = s.push;
+    if (!push && s.from) {
+      const p = this.agent.position;
+      const dx = p.x - s.from.x, dz = p.z - s.from.z;
+      const l = Math.hypot(dx, dz) || 1;
+      push = { x: (dx / l) * STAGGER.creature.push, z: (dz / l) * STAGGER.creature.push };
+    }
+    this.agent.wobble(STAGGER.creature.wobble);
     if (push) this.agent.shove(push.x, push.z, 0.3);
   }
 
   /** Dead: a ragdoll while the budget allows (never for a backstab), else a death clip; the capsule goes. */
   protected die() {
     const hit = this.deathHit;
+    this.senses(false);
     this.releaseToken();
-    this.flights = [];
+    // (arrows already loosed still land: the brain keeps thinking dead, and the flight is seen)
     this.combat.block(this.self, false);
     this.agent.stop();
     this.agent.stopRootMotion();
     this.agent.face(null);
     let ragdoll = false;
-    if (this.o.ragdoll && hit?.outcome !== "backstab" && (this.ai?.ragdollSlot() ?? true)) {
+    const slot = this.o.ragdoll && hit?.outcome !== "backstab" ? (this.ai ? this.ai.ragdollSlot() : () => {}) : null;
+    if (slot) {
       try {
-        ragdoll = this.o.ragdoll(hit);
+        ragdoll = this.o.ragdoll!(hit, slot);
       } catch (e) {
         console.error("ragdoll", e);
       }
+      if (ragdoll) this.ragdollHeld = slot;
+      else slot();
     }
     if (!ragdoll) {
       const clip = hit?.outcome === "backstab" ? this.clips.backstabDeath : this.clips.death[Math.floor(this.random() * this.clips.death.length)];
@@ -1051,6 +1204,8 @@ export abstract class CombatBrain {
     if (this.disposed) return;
     this.disposed = true;
     this.releaseToken();
+    this.ragdollHeld?.();
+    this.ragdollHeld = null;
     for (const off of this.offs) off();
     this.offs = [];
     this.fsm?.dispose();

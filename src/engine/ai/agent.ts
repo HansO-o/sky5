@@ -6,7 +6,7 @@
  * `KinematicAgent` integrates it directly (tests, simple props). Engine-framework §2.19 calls the
  * mover `AgentMover` (there over a navmesh agent; here direct steering, design §0 #12).
  */
-import { RootMotionTrack, type RootMotionCurve } from "../anim/rootMotion";
+import { RootMotionTrack, type RootMotionCurve, type RootMotionLimits } from "../anim/rootMotion";
 import type { XYZ } from "../combat/hit";
 import { circleVelocity, localVelocity, separation, seek, sidestep, STEER, StuckDetector, turnToward, yawOf, type Crowd, type CrowdMember, type XZ } from "./steering";
 
@@ -56,8 +56,12 @@ export interface AgentControl {
   /** the action clip playing (null: locomotion) */
   readonly acting: string | null;
   hasClip(clip: string): boolean;
-  /** ride a clip's root motion (started with the clip, at its rate); false without a curve */
-  rootMotion(curve: RootMotionCurve | null | undefined, o?: { speed?: number; from?: number; target?: () => XZ | null }): boolean;
+  /**
+   * ride a clip's root motion (started with the clip, at its rate; `limits`: the track's speed cap
+   * and stop distance, e.g. no cap for a lunge); false without a curve. The body keeps turning
+   * toward an explicit `face()` target meanwhile, and the curve runs along the current facing.
+   */
+  rootMotion(curve: RootMotionCurve | null | undefined, o?: RootMotionOptions): boolean;
   stopRootMotion(): void;
   /** pushed (m, world) over `seconds` (default 0.3) */
   shove(dx: number, dz: number, seconds?: number): void;
@@ -74,6 +78,17 @@ export interface AgentControl {
   readonly stuckFor: number;
   /** turn the head toward a point (null: free) */
   lookAt?(p: XYZ | null): void;
+}
+
+export interface RootMotionOptions {
+  /** clip playback rate (default 1) */
+  speed?: number;
+  /** start at this clip time (s) */
+  from?: number;
+  /** what it is attacking: root motion never carries it closer than the stop distance */
+  target?: () => XZ | null;
+  /** the track's limits (default: 3 m/s, carried; 0.9 m stop distance) */
+  limits?: RootMotionLimits;
 }
 
 /** A locomotion clip and the speed (m/s) its feet travel at rate 1. */
@@ -262,12 +277,12 @@ export abstract class AgentCore implements AgentControl, CrowdMember {
     this.playClip(a.clip, { loop: a.loop, speed: rate, blend: 0 });
   }
 
-  rootMotion(curve: RootMotionCurve | null | undefined, o: { speed?: number; from?: number; target?: () => XZ | null } = {}) {
+  rootMotion(curve: RootMotionCurve | null | undefined, o: RootMotionOptions = {}) {
     if (!curve || !curve.moves) {
       this.track = null;
       return false;
     }
-    this.track = { t: new RootMotionTrack(curve, o.speed ?? 1, {}, o.from ?? 0), target: o.target ?? null };
+    this.track = { t: new RootMotionTrack(curve, o.speed ?? 1, o.limits ?? {}, o.from ?? 0), target: o.target ?? null };
     return true;
   }
   stopRootMotion() {
@@ -342,7 +357,11 @@ export abstract class AgentCore implements AgentControl, CrowdMember {
     return { vx, vz, snap };
   }
 
-  /** Per frame: turn toward the facing target (or the movement), and age the action. */
+  /**
+   * Per frame: turn toward the facing target (or the movement), and age the action. Riding root
+   * motion it turns only toward an explicit facing target (an attacker tracking its foe through the
+   * wind-up), never toward the way the curve carries it.
+   */
   protected frame(dt: number, vx: number, vz: number) {
     let want: number | null = null;
     const f = this.faceTarget;
@@ -351,8 +370,8 @@ export abstract class AgentCore implements AgentControl, CrowdMember {
       const t = at(f);
       const dx = t.x - this.p.x, dz = t.z - this.p.z;
       if (dx * dx + dz * dz > 1e-4) want = yawOf(dx, dz);
-    } else if (Math.hypot(vx, vz) > 0.3) want = yawOf(vx, vz);
-    if (want !== null && !this.track) this.yawValue = turnToward(this.yawValue, want, this.turnRate, dt);
+    } else if (!this.track && Math.hypot(vx, vz) > 0.3) want = yawOf(vx, vz);
+    if (want !== null) this.yawValue = turnToward(this.yawValue, want, this.turnRate, dt);
     if (this.wobbleS.left > 0) this.wobbleS.left = Math.max(0, this.wobbleS.left - dt);
     const a = this.action;
     if (a && !a.loop) {

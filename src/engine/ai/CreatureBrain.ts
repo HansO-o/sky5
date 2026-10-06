@@ -6,16 +6,18 @@
  * - sleep: `asleep → stir → wake` on its beast sensor's noise meter (stir 0.5, wake 1.0; any blow,
  *   the player too close or a clash nearby wakes it at once), standing up before it fights;
  * - a leash: a target beyond it sends it home (a snarl), where it rests and falls asleep again
- *   after 20 s (`events` "leash", "sleep");
+ *   after 20 s (`events` "leash", "sleep"); a noise beyond it never wakes it (asleep it stirs: a
+ *   warning), and without senses it turns on a foe that comes within its aggro radius again;
  * - fear: within 2 m of a torch small spiders back off for 1 s;
- * - a charge before its special (the wolf runs at 7 m/s for up to 1.2 s, then pounces);
+ * - a charge before its special (the wolf runs at 7 m/s for up to 1.2 s, then pounces); a creature
+ *   without a run leaps at its foe instead (the spiders' jump from 3–5 m: `CombatBrain.attackMotion`);
  * - aggro: whoever hurt it last, switching to the companion 30 % of the time.
  */
 import type { Awareness, Combatant } from "../combat/CombatSystem";
 import type { XYZ } from "../combat/hit";
-import { CombatBrain, type BrainClips, type CombatBrainOptions } from "./CombatBrain";
-import type { BrainState } from "./fsm";
-import type { Perception, Sensor, SensorSpec } from "./perception";
+import { CombatBrain, type BrainClips, type CombatBrainOptions, type StaggerInfo } from "./CombatBrain";
+import type { BrainState } from "./Brain";
+import { BEAST, type Perception, type Sensor, type SensorSpec } from "./Perception";
 import type { XZ } from "./steering";
 import { AI } from "./tuning";
 
@@ -55,6 +57,11 @@ export interface CreatureBrainOptions extends CombatBrainOptions {
   clips?: Partial<BrainClips> & { idle?: string };
   /** start in the fight (default: true unless asleep or with a sensor) */
   aware?: boolean;
+  /**
+   * while calm and awake without senses, it turns on a foe within this (m) that its leash lets it
+   * chase (default: leashed creatures without a sensor `AI.creature.aggro`, others never)
+   */
+  aggro?: number | null;
 }
 
 export class CreatureBrain extends CombatBrain {
@@ -66,7 +73,10 @@ export class CreatureBrain extends CombatBrain {
   private fearAt = -Infinity;
   /** brain time its target was first seen beyond the leash (null: within) */
   private leashOut: number | null = null;
+  private aggro: number;
   private copts: CreatureBrainOptions;
+  /** `sleep()` under way: the reset puts it to sleep whatever it was built as */
+  private toSleep = false;
 
   constructor(o: CreatureBrainOptions) {
     super({ ...o, clips: { alert: null, ...o.clips } });
@@ -82,6 +92,7 @@ export class CreatureBrain extends CombatBrain {
       this.ownSensor = { p: o.perception, s: sensor };
     }
     this.sensor = sensor;
+    this.aggro = o.aggro ?? (this.leash && !sensor ? AI.creature.aggro : 0);
     if (sensor)
       this.offs.push(
         sensor.changes.on((c) => {
@@ -101,6 +112,43 @@ export class CreatureBrain extends CombatBrain {
     return this.sleepClips && this.leash ? "rest" : "idle";
   }
 
+  /** A beast built asleep goes back to sleep on `reset()` (a retry, a checkpoint: §11 "wolf asleep, meter 0"). */
+  protected resetState() {
+    return this.sleepClips && (this.toSleep || this.copts.asleep) ? "asleep" : super.resetState();
+  }
+
+  /**
+   * Back to sleep now with its meter at 0, on its bed when it has a leash (`home`: default true):
+   * a checkpoint's "a leashed wolf is back asleep" (§11) without despawning it. False when it can't
+   * (no sleep clips, dead).
+   */
+  sleep(o: { home?: boolean } = {}): boolean {
+    if (this.disposed || !this.sleepClips || !this.fsm || this.fsm.in("dead")) return false;
+    const h = this.leash?.home;
+    if (h && o.home !== false) this.agent.teleport(h, h.yaw);
+    this.toSleep = true;
+    try {
+      this.reset();
+    } finally {
+      this.toSleep = false;
+    }
+    return this.fsm.in("asleep");
+  }
+
+  /**
+   * A blow that breaks its poise while it sleeps, stirs or stands up: it reels where it lies (the
+   * procedural push and rock) and stands up first, the wake segment and its howl, before it fights
+   * (§6.3 E6), rather than skipping straight to a stagger.
+   */
+  protected staggered(s: StaggerInfo) {
+    if (this.fsm.in("asleep") || this.fsm.in("stir") || this.fsm.in("wake")) {
+      this.reel(s);
+      if (!this.fsm.in("wake")) this.fsm.go("wake");
+      return;
+    }
+    super.staggered(s);
+  }
+
   protected calmAwareness(): Awareness {
     return this.fsm.in("asleep") || this.fsm.in("stir") ? "asleep" : "unaware";
   }
@@ -108,6 +156,13 @@ export class CreatureBrain extends CombatBrain {
   protected onAlerted(at: XYZ | null) {
     const s = this.sensor;
     if (s && !s.alerted) s.alert(at);
+  }
+
+  protected senses(on: boolean) {
+    const s = this.sensor;
+    if (!s) return;
+    s.enabled = on;
+    if (on) s.calm();
   }
 
   /** Whether the leash lets it chase something at `p`. */
@@ -133,8 +188,39 @@ export class CreatureBrain extends CombatBrain {
   }
 
   alert(at: XYZ | null = null, by: Combatant | null = null, o: { relayed?: boolean } = {}) {
-    if (at && !this.canChase(at)) return;
+    if (at && !this.canChase(at)) {
+      this.beyondLeash();
+      return;
+    }
     super.alert(at, by, o);
+  }
+
+  /**
+   * Its sensor went off at something beyond the leash: no chase, and the sensor drops back below
+   * alert (which would otherwise stick, so nothing could wake it again and the stealth eye would
+   * read "seen" for good). Asleep or stirring it stays stirred, a warning; awake it settles.
+   */
+  private beyondLeash() {
+    const s = this.sensor;
+    if (!s?.alerted || !this.fsm || this.fsm.in("combat") || this.fsm.in("wake")) return;
+    if (this.fsm.in("asleep") || this.fsm.in("stir")) s.calm("suspicious", BEAST.stir);
+    else s.calm("unaware", 0.4);
+  }
+
+  /** The nearest foe within `r` m that the leash lets it chase. */
+  private foeWithin(r: number): Combatant | null {
+    const me = this.agent.position;
+    let best: Combatant | null = null;
+    let bd = r;
+    for (const c of this.combat.enemiesOf(this.self)) {
+      if (!this.canFight(c) || Math.abs(c.pose.y - me.y) > 3 || !this.canChase(c.pose)) continue;
+      const d = this.dist(c);
+      if (d <= bd) {
+        bd = d;
+        best = c;
+      }
+    }
+    return best;
   }
 
   /** Every combat update: the leash (a target beyond it for 1.5 s sends it home), the torch. */
@@ -180,10 +266,20 @@ export class CreatureBrain extends CombatBrain {
       calm: {
         update: () => {
           const s = this.sensor;
-          if (!s?.alerted || this.fsm.in("asleep") || this.fsm.in("stir")) return;
+          const asleep = this.fsm.in("asleep") || this.fsm.in("stir");
+          // no senses: a foe close by (inside the leash) is enough
+          if (!s && this.aggro > 0 && !asleep) {
+            const c = this.foeWithin(this.aggro);
+            if (c) {
+              this.target = c;
+              this.retargetAt = this.time + AI.target.every;
+              return "alert";
+            }
+          }
+          if (!s?.alerted) return;
+          if (this.canChase(s.lastKnown)) return asleep ? "wake" : "alert";
           // (a noise or a body beyond the leash: it stays put, watchful)
-          if (this.canChase(s.lastKnown)) return "alert";
-          s.calm("unaware", 0.4);
+          this.beyondLeash();
         },
       },
       idle: {

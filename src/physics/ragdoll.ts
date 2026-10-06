@@ -180,13 +180,41 @@ export class Ragdoll {
     }
   };
 
+  /** The bodies are frozen (`freeze()`) or gone. */
+  get frozen() {
+    return this.parts.length === 0;
+  }
+
+  /** Every body has come to rest: asleep, or moving slower than `speed` m/s. */
+  settled(speed = 0.12) {
+    if (this.ph.isDisposed) return true;
+    const bi = this.ph.bi;
+    for (const p of this.parts) {
+      if (!bi.IsActive(p.id)) continue;
+      if (bi.GetLinearVelocity(p.id).LengthSq() > speed * speed) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Done falling: the bones take the bodies' pose once more and keep it, and the bodies, joints and
+   * bone drive go (a settled corpse costs nothing). Idempotent; `dispose()` after it is a no-op.
+   */
+  freeze() {
+    if (this.frozen) return;
+    if (!this.ph.isDisposed) this.drive();
+    this.dispose();
+  }
+
   dispose() {
     this.off();
     this.ch.scene.onBeforeRenderObservable.removeCallback(this.drive);
-    for (const c of this.constraints) this.ph.system.RemoveConstraint(c);
-    for (const p of this.parts) {
-      this.ph.bi.RemoveBody(p.id);
-      this.ph.bi.DestroyBody(p.id);
+    if (!this.ph.isDisposed) {
+      for (const c of this.constraints) this.ph.system.RemoveConstraint(c);
+      for (const p of this.parts) {
+        this.ph.bi.RemoveBody(p.id);
+        this.ph.bi.DestroyBody(p.id);
+      }
     }
     this.parts = [];
     this.constraints = [];

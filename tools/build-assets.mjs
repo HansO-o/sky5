@@ -127,10 +127,10 @@ await step("cart/route", async () => {
 
 // Asset ids this build ships that cover a terrain hole (tools/gen/terrainHoles.mjs `cover`). The render
 // terrain is cut only under a cover that ships, as the runtime cuts the collider only then
-// (activeTerrainHoles); a gate before the manifest is written checks the two agree. A new cover's id
-// goes here, then rebuild cart/terrain. EXIT_HOLE's cover cave/mesh ships in segment exit, but the hole
-// is cut from the start: the outcrop over it (cave/outcrop, segment muster) is shown with the town.
-const HOLE_COVERS = new Set(["keep/interior", "cave/mesh"]);
+// (activeTerrainHoles); a gate before the manifest is written checks the two agree, against this
+// table and against the runtime's own (src/world/terrainHoles.ts). A new cover's id goes here, then
+// rebuild cart/terrain. EXIT_HOLE's cover is cave/outcrop (segment muster, shown with the town).
+const HOLE_COVERS = new Set(["keep/interior", "cave/outcrop"]);
 
 await step("cart/terrain", async () => {
   const holes = activeHoles((id) => HOLE_COVERS.has(id));
@@ -424,6 +424,20 @@ manifest.assets = manifest.assets.filter((a) => !a.id.endsWith("#aac"));
           ? `terrain hole "${h.id}": ${h.cover} ships but cart/terrain was built without the hole; add "${h.cover}" to HOLE_COVERS in tools/build-assets.mjs and rebuild with --only=cart/terrain,...`
           : `terrain hole "${h.id}": cart/terrain cuts it but ${h.cover} does not ship; remove "${h.cover}" from HOLE_COVERS and rebuild cart/terrain`,
       );
+  // The runtime opens the collider by its own table (src/world/terrainHoles.ts, activeTerrainHoles): the
+  // render cut must agree with that too. Its covers are read from the source; the build warns while
+  // they differ from tools/gen/terrainHoles.mjs (mirror the change in src) and fails on a disagreement.
+  const ts = await fs.readFile(path.join(ROOT, "src/world/terrainHoles.ts"), "utf8").catch(() => "");
+  for (const h of TERRAIN_HOLES) {
+    const runtimeCover = new RegExp(`id: "${h.id}",[\\s\\S]*?cover: "([^"]+)"`).exec(ts)?.[1];
+    if (!runtimeCover) {
+      console.warn(`warning: terrain hole "${h.id}": no cover found in src/world/terrainHoles.ts`);
+      continue;
+    }
+    if (runtimeCover !== h.cover) console.warn(`warning: terrain hole "${h.id}": src/world/terrainHoles.ts names ${runtimeCover} as its cover, tools/gen/terrainHoles.mjs ${h.cover}; mirror the tools table in src`);
+    if (ids.has(runtimeCover) !== cut.has(h.id))
+      throw new Error(`terrain hole "${h.id}": the runtime ${ids.has(runtimeCover) ? "opens" : "keeps closed"} its collider (its cover ${runtimeCover} ${ids.has(runtimeCover) ? "ships" : "does not ship"}), but cart/terrain ${cut.has(h.id) ? "cuts" : "does not cut"} the render terrain there`);
+  }
 }
 // The drain join: cave/ clips the cave to the keep's drain opening (keep/interior's room "drain") as it
 // was when cave/ ran. --only can rebuild one step and reuse the other, so the two shipped records must

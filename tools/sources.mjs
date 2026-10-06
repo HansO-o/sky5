@@ -32,6 +32,8 @@ export const PH_TEXTURES = {
   rocks_ground_08: { res: "1k", maps: ["Diffuse", "nor_gl", "arm"] },
   ganges_river_pebbles: { res: "1k", maps: ["Diffuse", "nor_gl", "arm"] },
   mossy_rock: { res: "1k", maps: ["Diffuse", "nor_gl", "arm"] },
+  // procedural props (tools/gen/procprops.mjs): the gallery drawbridge deck
+  weathered_planks: { res: "1k", maps: ["Diffuse", "nor_gl", "arm"] },
 };
 
 /** Extra texture maps that live inside a model asset (fir twig cards). */
@@ -59,8 +61,36 @@ export const PH_MODELS = {
   wicker_basket_01: "1k",
   wooden_axe_03: "1k",
   wooden_bucket_02: "1k",
+  // keep/exit props (design §10.2): hall cover tables, the cave camp fire, the outcrop brow
+  wooden_table_02: "1k",
+  stone_fire_pit: "1k",
+  rock_face_02: "1k",
 };
 
 export const PH_HDRIS = {
   kloofendal_overcast_puresky: { hdrRes: "1k" },
+};
+
+/**
+ * Quaternius "Fantasy Props MegaKit [Standard]" (CC0 1.0, License_Standard.txt in the zip), itch.io
+ * upload 13887750. tools/fetch-extra.mjs pulls only these glTF models (+ .bin), the trim textures
+ * and the licence out of the 150 MB zip with ranged requests; tools/gen/propkit.mjs merges them into
+ * the kit/fpm GLB (one node per model, named as here; `as` renames).
+ */
+export const FPM_KIT = {
+  game: "https://quaternius.itch.io/fantasy-props-megakit",
+  upload: 13887750,
+  dir: "Exports/glTF/",
+  models: [
+    "Sword_Bronze", "Axe_Bronze", "Shield_Wooden",
+    "Torch_Metal", "Lantern_Wall", "Candle_1", "CandleStick",
+    "Barrel", "Crate_Wooden", "Crate_Metal", "Chest_Wood", "Bag", "Pouch_Large",
+    "Table_Large", "Chair_1", "Bench", "Stool", "Bed_Twin1", "WeaponStand", "Peg_Rack", "Shelf_Small_Bottles", "Dummy",
+    "Chain_Coil", "Cage_Small", "Cauldron", "Key_Metal",
+    "Potion_1", "Potion_2", "Potion_4", "Bottle_1", "SmallBottle", "SmallBottles_1",
+    "Scroll_1", "Book_7", "Mug",
+  ],
+  /** kit node names that differ from the source model (the keep anchors ask for kit/Book) */
+  as: { Book_7: "Book" },
+  textures: ["T_Trim_Furniture", "T_Trim_Metal", "T_Trim_Props", "T_Trim_Cloth"].flatMap((t) => ["BaseColor", "Normal", "ORM"].map((m) => `${t}_${m}.png`)).concat(["T_Page_Noise.png"]),
 };

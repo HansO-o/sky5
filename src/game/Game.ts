@@ -29,6 +29,8 @@ export interface Stage {
    * `update`; skeletal animation follows it too. Read after `update`. Default 1.
    */
   readonly timeScale?: number;
+  /** false: the stage keeps no progress (a sandbox); 存档 and quicksave say so instead of writing */
+  readonly canSave?: boolean;
   dispose(): void;
 }
 
@@ -245,6 +247,10 @@ export class Game {
   /** Resolves with whether the save was written; a failure (storage full or blocked) is reported, never thrown. */
   async save(kind: SaveGame["kind"]) {
     if (!this.stage?.gameplay) return false;
+    if (this.stage.canSave === false) {
+      if (kind !== "auto") hud.toast("此处无法存档", 2000);
+      return false;
+    }
     const { label, state } = this.stage.saveState(kind);
     const id = kind === "manual" ? `manual-${Date.now()}` : kind;
     try {

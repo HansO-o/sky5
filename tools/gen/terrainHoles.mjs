@@ -1,5 +1,7 @@
 // Openings in the terrain where the world goes below ground (design §3.1). Mirrors
-// src/world/terrainHoles.ts: keep the two tables identical.
+// src/world/terrainHoles.ts: keep the two tables identical. (Pending in src: EXIT_HOLE.cover is
+// cave/outcrop here and still cave/mesh there. tools/build-assets.mjs reads the runtime's covers, warns
+// while they differ and fails if the runtime would open a hole the render terrain keeps closed.)
 //
 //   samples  height samples the gameplay collider drops (Physics.addHeightField). Jolt drops every
 //            triangle touching a dropped sample, so on the ~2 m grid the collider opening reaches
@@ -18,12 +20,16 @@ export const KEEP_HOLE = {
   cover: "keep/interior",
 };
 
-/** Where the cave tunnel comes up inside the balcony outcrop (footprint x −26…−9, z −684…−664). */
+/**
+ * Where the cave tunnel comes up inside the balcony outcrop (footprint x −26…−9, z −684…−664). Covered
+ * and floored by cave/outcrop (segment muster, shown with the town): its skin caps the hole and it
+ * ships the mouth in front of the plug, render and collider (tools/gen/cave.mjs).
+ */
 export const EXIT_HOLE = {
   id: "exit",
   samples: { x0: -22, x1: -16, z0: -680, z1: -676 },
   render: { x0: -24, x1: -14, z0: -682, z1: -674 },
-  cover: "cave/mesh",
+  cover: "cave/outcrop",
 };
 
 export const TERRAIN_HOLES = [KEEP_HOLE, EXIT_HOLE];

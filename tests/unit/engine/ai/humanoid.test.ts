@@ -23,6 +23,11 @@ test("engaged: alert → approach → attack (wind-up at 0.6×, then 1×) → re
   assert.ok(t < 8, `attacks within 8 s (states ${e.states.join(" ")})`);
   assert.ok(dist(e.agent.position, f.pl.p) <= 1.65, "struck from within its strike distance");
   assert.ok(windup, "the tell");
+  const glint = e.events.find((ev) => ev.type === "glint");
+  assert.ok(glint && glint.type === "glint", "the wind-up glints");
+  assert.equal(glint.attack, e.c.swing?.attack.id);
+  assert.ok(glint.seconds !== undefined && Math.abs(glint.seconds - e.c.swing!.attack.active[0] / 0.6) < 1e-6, `the glint knows the tell (${glint.seconds})`);
+  assert.ok(Math.abs(glint.at.y - 1.45) < 0.01 && dist(glint.at, e.agent.position) < 0.6, "at the weapon's height, in front");
   const swing = e.c.swing!;
   assert.ok(swing, "a swing in progress");
   assert.ok(Math.abs(swing.rate - 0.6) < 1e-9, "the wind-up plays at 0.6×");
@@ -85,14 +90,16 @@ test("block against a blow coming at it; staggers and knockdowns run their time,
   assert.ok(e.brain.fighting);
 });
 
-test("dead: a ragdoll for at most 2 at once, a death clip for the rest; the body stops for good", () => {
+test("dead: a ragdoll for at most 2 live at once, a death clip for the rest; the body stops for good", () => {
   const f = fight();
   let ragdolls = 0;
-  const es = [0, 1, 2].map((i) => f.enemy(`s${i}`, "soldier", { x: i * 2, y: 0, z: -6 }, { ragdoll: () => (ragdolls++, true) }));
+  const frozen: (() => void)[] = [];
+  const es = [0, 1, 2].map((i) => f.enemy(`s${i}`, "soldier", { x: i * 2, y: 0, z: -6 }, { ragdoll: (_hit, done) => (ragdolls++, frozen.push(done), true) }));
   f.run(0.5);
   f.combat.debugKillAll(f.player);
   for (const e of es) assert.equal(e.brain.state, "dead");
   assert.equal(ragdolls, 2);
+  assert.equal(f.ai.ragdolls.active, 2);
   const died = es.map((e) => e.events.find((ev) => ev.type === "died"));
   assert.equal(died.filter((d) => d && d.type === "died" && d.ragdoll).length, 2);
   const clip = es.find((e, i) => died[i]?.type === "died" && !(died[i] as { ragdoll: boolean }).ragdoll)!;
@@ -102,9 +109,24 @@ test("dead: a ragdoll for at most 2 at once, a death clip for the rest; the body
   f.run(2);
   assert.deepEqual(es[0].agent.position, at);
   assert.equal(f.combat.tokenHolders(f.player).length, 0);
-  // (the budget frees up as bodies settle)
-  f.run(6);
-  assert.ok(f.ai.ragdolls.take());
+  // the slots stay taken however long the ragdolls lie live: they free up when frozen, or with the brain
+  f.run(10);
+  assert.equal(f.ai.ragdolls.active, 2);
+  frozen[0]();
+  assert.equal(f.ai.ragdolls.active, 1, "frozen: a slot is free");
+  const ragdolled = es.filter((_, i) => died[i]?.type === "died" && (died[i] as { ragdoll: boolean }).ragdoll);
+  ragdolled[1].brain.dispose();
+  assert.equal(f.ai.ragdolls.active, 0, "a disposed brain lets go of its slot");
+  frozen[1]();
+  assert.equal(f.ai.ragdolls.active, 0);
+  // a ragdoll the content declines gives the slot straight back
+  const f2 = fight();
+  const e2 = f2.enemy("x", "soldier", { x: 0, y: 0, z: -6 }, { ragdoll: () => false });
+  f2.run(0.3);
+  f2.combat.debugKillAll(f2.player);
+  assert.equal(e2.brain.state, "dead");
+  assert.equal(f2.ai.ragdolls.active, 0);
+  assert.match(e2.agent.acting ?? "", /^Death0[12]$/);
 });
 
 test("surrender: the assistant gives up at 30 % HP, kneels and makes no more attacks", () => {
@@ -229,4 +251,15 @@ test("archer: shoots from range (draw 1.2 s, glint at 0.6 s, the arrow flies at 
   f.pl.p = { x: 0, y: 0, z: -9.5 };
   f.until(() => e.c.swing?.attack.id === "knife", 10);
   assert.equal(e.c.swing?.attack.id, "knife");
+});
+
+test("an arrow already in the air when its archer dies still lands (the flight is seen; arrows are unparryable, not cancelled)", () => {
+  const f = fight();
+  const e = f.enemy("arch", "archer", { x: 0, y: 0, z: -20, yaw: 0 });
+  f.until(() => e.events.some((ev) => ev.type === "shoot"), 4);
+  assert.ok(e.events.some((ev) => ev.type === "shoot"));
+  f.combat.debugKillAll(f.player);
+  assert.equal(e.brain.state, "dead");
+  f.run(0.8);
+  assert.equal(f.player.vitals.hp, 90, "the arrow landed");
 });

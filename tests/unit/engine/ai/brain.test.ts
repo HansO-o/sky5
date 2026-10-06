@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Brain, type BrainState } from "../../../../src/engine/ai/fsm";
+import { Brain, type BrainState } from "../../../../src/engine/ai/Brain";
 import { TimeSlicer } from "../../../../src/engine/ai/slicer";
 
 /** A machine that logs enters, exits and updates. */

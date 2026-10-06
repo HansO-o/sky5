@@ -28,6 +28,7 @@ import { PlayerController } from "./player";
 import { createPlayerBody } from "./playerBody";
 import { PlayerGear } from "./gear";
 import { PrologueCombat } from "./combat";
+import { PrologueAI } from "./ai";
 import { CombatHud } from "./combatHud";
 import { Interactables, type InteractablesOptions } from "../engine/world/Interactables";
 import { TimeScale } from "../engine/core/timeScale";
@@ -144,6 +145,8 @@ export class PrologueStage implements Stage {
   combat: PrologueCombat | null = null;
   /** the combat HUD (vitals, target and boss bars, death screen, combat tips), made with the combat */
   combatHud: CombatHud | null = null;
+  /** the AI: brains, perception, noises and the fighter spawners (made by `ensureAI()`, kept with the combat) */
+  ai: PrologueAI | null = null;
   /** hides the town (not the keep while on its ground floor) with the outdoor world */
   private townHider = new NodeHider();
   private townFxP: Promise<FireFx> | null = null;
@@ -531,6 +534,20 @@ export class PrologueStage implements Stage {
   }
 
   /**
+   * The AI (made on first use with the combat, kept with it; design §3.6, §9): enemies, creatures
+   * and the companion made by `ai.enemy()` / `ai.creature()` / `ai.companion()` think on the
+   * world's game time, see and hear the player, and are `EncounterActor`s. The chapter disposes the
+   * actors it made (or their encounters do).
+   */
+  async ensureAI(): Promise<PrologueAI> {
+    if (this.ai) return this.ai;
+    const combat = await this.ensureCombat();
+    if (this.world.disposed) throw new Cancelled();
+    this.ai ??= new PrologueAI(this.world, combat, this.player!);
+    return this.ai;
+  }
+
+  /**
    * Things the player uses with the activate button (design §3.7), wired to this stage: the nearest
    * target within 2 m and 35° of the camera's view is prompted (`hud.use("E 打开箱子")`), a press
    * uses it, hold targets kneel (`Fixing_Kneeling`) for 1.5 s. Nothing is usable while a line is
@@ -842,6 +859,8 @@ export class PrologueStage implements Stage {
     this.townFx?.dispose();
     this.townFx = null;
     for (const w of this.wagons) w.dispose();
+    this.ai?.dispose();
+    this.ai = null;
     this.combatHud?.dispose();
     this.combatHud = null;
     this.combat?.dispose();
