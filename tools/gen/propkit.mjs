@@ -76,8 +76,10 @@ const MODELS = {
   Bench: { turn: true, seat: 0.526, anchors: { sit: [0, 0.526, 0] } },
   Stool: { seat: 0.582, anchors: { sit: [0, 0.582, 0] } },
   Bed_Twin1: { turn: true, anchors: { lie: (b) => [0, b.max[1] - 0.12, 0.1] } },
-  // five notches in the top bar (y 0.84): an upright weapon stands at a slot (its lowest point on the
-  // slot node, its handle axis +Y, turned 90° so a blade's flat faces along the bar); a shield leans at `lean`
+  // five notches in the top bar (y 0.84) hold upright weapons; the slot nodes are on the floor under
+  // them (y 0): a weapon stands with its lowest point on its slot, handle axis +Y, turned 90° so a
+  // blade's flat faces along the bar. A shield leans at `lean` (floor, in front) against the bar's front
+  // face, which the build measures (meta `leanRest`)
   WeaponStand: {
     turn: true,
     anchors: Object.fromEntries([
@@ -214,6 +216,8 @@ function partBounds(name, parts) {
   if (name === "Sword_Bronze") b.grip = bounds(parts, colourIs(STEEL.grip[1]));
   if (name === "Axe_Bronze") b.handle = bounds(parts, (p, i) => !p.col || p.col[i * 3] > 0.99);
   if (name === "Shield_Wooden") b.handle = bounds(parts, (p) => p.srcMaterial === "MI_Trim_Props");
+  // the top bar's middle (where a leaning shield rests): the vertices 0.6…0.95 m up within 0.3 m of the centre
+  if (name === "WeaponStand") b.bar = bounds(parts, (p, i) => p.pos[i * 3 + 1] > 0.6 && p.pos[i * 3 + 1] < 0.95 && Math.abs(p.pos[i * 3]) < 0.3);
   if (name === "Torch_Metal") {
     // the basket: vertices in the top 0.12 m
     const top = b.all.max[1];
@@ -306,6 +310,7 @@ export async function buildPropKitDoc(SRC, { poses } = {}) {
     const tris = parts.reduce((s, p) => s + p.idx.length / 3, 0);
     const info = { source: `Fantasy Props MegaKit/${src}`, tris, bbox: { min: r3(b.all.min), max: r3(b.all.max) }, front: cfg.turn ? "-Z" : "source" };
     if (cfg.wall) info.wall = "back at z = 0: put that plane on the wall, facing out (−Z) into the room";
+    if (b.bar) info.leanRest = { z: +b.bar.min[2].toFixed(3), y: [+b.bar.min[1].toFixed(3), +b.bar.max[1].toFixed(3)], note: "the top bar's front face, where a shield leaning from `lean` rests (stand-local)" };
     if (cfg.seat) info.seat = cfg.seat;
 
     if (cfg.chest) {

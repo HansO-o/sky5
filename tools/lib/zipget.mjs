@@ -72,6 +72,7 @@ function parseEntries(cd) {
   let p = 0;
   while (p + 46 <= cd.length && cd.readUInt32LE(p) === 0x02014b50) {
     const method = cd.readUInt16LE(p + 10);
+    const crc = cd.readUInt32LE(p + 16);
     let csize = cd.readUInt32LE(p + 20), usize = cd.readUInt32LE(p + 24);
     const fl = cd.readUInt16LE(p + 28), el = cd.readUInt16LE(p + 30), cl = cd.readUInt16LE(p + 32);
     let off = cd.readUInt32LE(p + 42);
@@ -90,7 +91,7 @@ function parseEntries(cd) {
         q += 4 + sz;
       }
     }
-    out.push({ name, method, csize, usize, off });
+    out.push({ name, method, crc, csize, usize, off });
     p += 46 + fl + el + cl;
   }
   return out;
@@ -99,7 +100,8 @@ function parseEntries(cd) {
 /**
  * Extract the entries of the remote zip whose path matches `pattern` into `destDir`.
  * `strip`: a path prefix removed from each entry's name; `rename(name)`: final relative name.
- * Existing files are kept. Returns the relative names written or found.
+ * Existing files are kept. Each extracted entry is checked against the zip's size and CRC-32. Returns
+ * the relative names written or found.
  */
 export async function zipExtract(url, pattern, destDir, { strip = "", rename } = {}) {
   const head = await retry(async () => {
@@ -139,6 +141,7 @@ export async function zipExtract(url, pattern, destDir, { strip = "", rename } =
       const data = e.method === 8 ? zlib.inflateRawSync(raw) : e.method === 0 ? raw : null;
       if (!data) throw new Error(`${e.name}: unsupported zip method ${e.method}`);
       if (data.length !== e.usize) throw new Error(`${e.name}: inflated to ${data.length} bytes, expected ${e.usize}`);
+      if (zlib.crc32(data) >>> 0 !== e.crc) throw new Error(`${e.name}: CRC-32 ${(zlib.crc32(data) >>> 0).toString(16)} does not match the zip's ${e.crc.toString(16)}`);
       await fs.mkdir(path.dirname(dest), { recursive: true });
       await fs.writeFile(dest + ".part", data);
       await fs.rename(dest + ".part", dest);

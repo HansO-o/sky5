@@ -9,9 +9,13 @@
 //   held        every held item's attach recipes by asset#node (BoneSocket recipes, hand-local)
 //   placements  world placements derived from the keep and cave anchors (+ a yaw, game convention)
 //   ph          the Poly Haven props this unit added, with placement hints
-//   joins       the cave/keep anchor values the props were built against (build-assets checks them)
+//   joins       the shipped inputs the props were built against: `inputs` maps cave/anchors,
+//               cave/mesh_a (the rock field the gallery is fitted to) and keep/anchors to the sha256
+//               they had; build-assets.mjs fails while the manifest ships other versions
+//               (tools/lib/joins.mjs checkPropsJoin)
 import path from "node:path";
 import { io } from "../lib/gltf.mjs";
+import { heldRecipe, clipPoses, heldInPose, angleDeg } from "../lib/handheld.mjs";
 import { buildPropKit, PROPKIT } from "./propkit.mjs";
 import { buildProcProps, PROCPROPS } from "./procprops.mjs";
 
@@ -24,20 +28,18 @@ const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 const place = (at, yaw, local) => add(at, rotY(local, yaw));
 const qYaw = (yaw) => [0, +Math.sin(yaw / 2).toFixed(5), 0, +Math.cos(yaw / 2).toFixed(5)];
 
-/** The cave and keep anchor values the props depend on (compared again at manifest time). */
-export function propJoins(anchors) {
-  const c = anchors.cave.anchors;
-  const pick = (k) => r3(c[k].pos);
-  return {
-    cave: Object.fromEntries(["bridge_hinge", "slab_drop", "lever", "lever_stance", "winch"].map((k) => [k, pick(k)])),
-    keep: { drain: anchors.keep.rooms.drain ? { worldMin: r3(anchors.keep.rooms.drain.worldMin), worldMax: r3(anchors.keep.rooms.drain.worldMax) } : null },
-  };
-}
+/**
+ * The shipped files props/ reads, by manifest id: everything placements(), the gallery set piece and its
+ * rock checks consume comes from these (the anchors and rooms of both, the cave's rock field). Their
+ * sha256 goes to props/meta.joins.inputs; tools/lib/joins.mjs checkPropsJoin compares them with the
+ * manifest before it is written.
+ */
+export const PROPS_INPUTS = ["cave/anchors", "cave/mesh_a", "keep/anchors"];
 
-/** Lowest point of a Poly Haven source model (to stand it on a slot). */
-async function phMinY(SRC, id) {
+/** Model-space vertices of a Poly Haven source model (node transforms applied). */
+async function phVerts(SRC, id) {
   const doc = await io.read(path.join(SRC, "models", id, `${id}.gltf`));
-  let min = Infinity;
+  const out = [];
   for (const n of doc.getRoot().listNodes()) {
     const mesh = n.getMesh();
     if (!mesh) continue;
@@ -47,14 +49,41 @@ async function phMinY(SRC, id) {
       const v = [];
       for (let i = 0; i < P.getCount(); i++) {
         P.getElement(i, v);
-        min = Math.min(min, M[1] * v[0] + M[5] * v[1] + M[9] * v[2] + M[13]);
+        out.push([0, 1, 2].map((r) => M[r] * v[0] + M[4 + r] * v[1] + M[8 + r] * v[2] + M[12 + r]));
       }
     }
   }
-  return min;
+  return out;
 }
 
-function placements(anchors, kit, pp, phLift) {
+/** Babylon's Quaternion.RotationYawPitchRoll(yaw, pitch, 0): pitch about X first, then yaw about Y. */
+const qYawPitch = (yaw, pitch) => {
+  const cy = Math.cos(yaw / 2), sy = Math.sin(yaw / 2), cp = Math.cos(pitch / 2), sp = Math.sin(pitch / 2);
+  const q = [cy * sp, sy * cp, -sy * sp, cy * cp];
+  return q.map((v) => +(q[3] < 0 ? -v : v).toFixed(5) + 0);
+};
+const rotX = (p, a) => [p[0], p[1] * Math.cos(a) - p[2] * Math.sin(a), p[1] * Math.sin(a) + p[2] * Math.cos(a)];
+
+/**
+ * The kite shield leaning on a weapon stand (stand-local, the stand facing −Z): its face (+Z) turned to
+ * the stand's facing, its tip on the floor at `lean`, tilted back about X until its back rests on the
+ * front of the stand's top bar (`bar`: {z, y: [y0, y1]}). Returns the shield origin, the tilt and the
+ * stand-local Euler.
+ */
+function shieldLean(verts, lean, bar) {
+  for (let deg = 0; deg <= 40; deg += 0.25) {
+    const th = (deg * Math.PI) / 180;
+    const q = verts.map((p) => rotX([-p[0], p[1], -p[2]], th));
+    let low = q[0];
+    for (const v of q) if (v[1] < low[1]) low = v;
+    const o = [lean[0] - low[0], -low[1], lean[2] - low[2]];
+    const touch = q.some((v) => v[1] + o[1] >= bar.y[0] && v[1] + o[1] <= bar.y[1] && v[2] + o[2] >= bar.z);
+    if (touch) return { at: o, tilt: th, deg };
+  }
+  throw new Error("props: the kite shield does not reach the weapon stand's top bar within 40° of lean");
+}
+
+function placements(anchors, kit, ph) {
   const K = anchors.keep.anchors, rooms = anchors.keep.rooms, C = anchors.cave.anchors;
   const out = {};
   out.gallery_bridge = { asset: PROCPROPS.keep.id, node: "gallery_bridge", at: r3(C.bridge_hinge.pos), yaw: 0, note: "world axes; add at the origin of this transform (no recentring)" };
@@ -106,13 +135,16 @@ function placements(anchors, kit, pp, phLift) {
       note: "the anchor stands 0.6 m off the wall; the shelf's back (z = 0) is put on the wall",
     };
   }
-  // weapon stands: items upright in the notches (lifted so their lowest point is on the slot)
+  // weapon stands: items upright in the notches (lifted so their lowest point is on the slot; the
+  // wooden axe at the 1.25 scale it has in the hand, design §3.3) and the imperial kite shield leaning
+  // on the front of the top bar (its tip on the floor at `lean`)
   const stand = kit.models.WeaponStand.anchors;
   const swordLift = -kit.models.Sword_Bronze.bbox.min[1];
   const items = {
-    use_weaponstand_imp: [["kit/fpm#Sword_Bronze", "slot_1", swordLift]],
-    use_weaponstand_reb: [["ph/wooden_axe_03", "slot_1", phLift.wooden_axe_03], ["kit/fpm#Sword_Bronze", "slot_2", swordLift], ["kit/fpm#Axe_Bronze", "slot_3", -kit.models.Axe_Bronze.bbox.min[1]]],
+    use_weaponstand_imp: [["kit/fpm#Sword_Bronze", "slot_1", swordLift, 1]],
+    use_weaponstand_reb: [["ph/wooden_axe_03", "slot_1", -ph.axe.minY * ph.axe.scale, ph.axe.scale], ["kit/fpm#Sword_Bronze", "slot_2", swordLift, 1], ["kit/fpm#Axe_Bronze", "slot_3", -kit.models.Axe_Bronze.bbox.min[1], 1]],
   };
+  const lean = shieldLean(ph.shield.verts, stand.lean.at, kit.models.WeaponStand.leanRest);
   out.weapon_stands = Object.entries(items)
     .filter(([k]) => K[k])
     .map(([k, list]) => {
@@ -122,8 +154,18 @@ function placements(anchors, kit, pp, phLift) {
         item: "kit/fpm#WeaponStand",
         at: r3(a.world),
         yaw: y,
-        items: list.map(([item, slot, lift]) => ({ item, slot, at: r3(place(a.world, y, add(stand[slot].at, [0, lift, 0]))), rotation: qYaw(y + Math.PI / 2), note: "upright, handle +Y" })),
-        shield: { item: k.endsWith("imp") ? "ph/kite_shield" : null, at: r3(place(a.world, y, stand.lean.at)), yaw: y, note: "lean the shield against the stand's front (orientation by eye)" },
+        items: list.map(([item, slot, lift, scale]) => ({ item, slot, at: r3(place(a.world, y, add(stand[slot].at, [0, lift, 0]))), rotation: qYaw(y + Math.PI / 2), ...(scale !== 1 ? { scale } : {}), note: `upright, handle +Y${scale !== 1 ? `; scale ${scale}, as in the hand` : ""}` })),
+        shield: k.endsWith("imp")
+          ? {
+              item: "ph/kite_shield",
+              at: r3(place(a.world, y, lean.at)),
+              yaw: y,
+              rotation: qYawPitch(y + Math.PI, -lean.tilt),
+              euler: [+(-lean.tilt).toFixed(4), +(y + Math.PI).toFixed(4), 0],
+              tilt: +lean.tilt.toFixed(4),
+              note: `the shield's origin; its face (+Z) turned to the stand's facing, tilted back ${lean.deg}° so its back rests on the top bar, its tip on the floor at the stand's lean point. Use \`rotation\` (Babylon RotationYawPitchRoll(yaw + π, −tilt, 0), = node.rotation \`euler\`), not \`yaw\``,
+            }
+          : null,
       };
     });
   // the camp fire in the gallery
@@ -134,21 +176,59 @@ function placements(anchors, kit, pp, phLift) {
   return out;
 }
 
-/** Build kit/fpm, procprops/keep, procprops/exit and props/meta. */
-export async function buildProps({ emit, SRC, anchors }) {
+/**
+ * The kite shield's attach recipe: no handle in the model, so the fist sits 3.5 cm behind the back at
+ * the centre (y 0.05), the rotation of design §3.3 (the face +Z away from the back of the hand), checked
+ * like kit/fpm#Shield_Wooden.
+ */
+function kiteShieldHeld(verts, poses) {
+  let back = Infinity;
+  // the source mesh is sparse (rows about 0.2 m apart): the back-most vertex within 0.15 m of the grip height
+  for (const v of verts) if (Math.abs(v[0]) < 0.05 && Math.abs(v[1] - 0.05) < 0.15) back = Math.min(back, v[2]);
+  if (!Number.isFinite(back)) throw new Error("props: no kite_shield vertices at the centre of its back");
+  const grip = r3([0, 0.05, back - 0.035]);
+  const recipe = heldRecipe("l", grip, { Y: "+Z", Z: "-X" });
+  const checks = [];
+  for (const c of [{ clip: "Idle_Shield_Loop", t: 0.5 }, { clip: "Shield_OneShot", t: 0.3 }]) {
+    const r = heldInPose(poses, recipe, c.clip, c.t, [0, 0, 1], grip);
+    if (!r) throw new Error(`props: clip ${c.clip} missing for the kite shield check`);
+    const deg = angleDeg(r.dir, [0, 0, 1]);
+    if (deg > 30) throw new Error(`props: the kite shield's face points ${deg.toFixed(1)}° off forward in ${c.clip} (> 30°)`);
+    checks.push({ clip: c.clip, t: c.t, what: "face forward", deg: +deg.toFixed(1) });
+  }
+  return { grip, recipes: { hand_l: recipe }, checks, tune: true, source: "design §3.3 rotation; grip measured here", note: "the model has no handle or straps: the grip is 3.5 cm behind the back at its centre; tune the position by eye" };
+}
+
+/**
+ * Build kit/fpm, procprops/keep, procprops/exit and props/meta. `anchors`: the shipped cave/anchors and
+ * keep/anchors JSON; `inputs`: the sha256 of every PROPS_INPUTS file as shipped; `caveMeshA`: the
+ * shipped cave/mesh_a GLB.
+ */
+export async function buildProps({ emit, SRC, anchors, inputs, caveMeshA }) {
+  for (const id of PROPS_INPUTS) if (!/^[0-9a-f]{64}$/.test(inputs?.[id] ?? "")) throw new Error(`props: no sha256 for the input ${id}`);
   const kit = await buildPropKit({ emit, SRC });
-  const pp = await buildProcProps({ emit, SRC, anchors });
-  const phLift = { wooden_axe_03: -(await phMinY(SRC, "wooden_axe_03")) };
+  const pp = await buildProcProps({ emit, SRC, anchors, caveMeshA });
+  const poses = clipPoses([path.join(SRC, "chars/anim_full/UAL1.glb"), path.join(SRC, "chars/anim_full/UAL2.glb")]);
+  const AXE_SCALE = 1.25;
+  const axeVerts = await phVerts(SRC, "wooden_axe_03"), shieldVerts = await phVerts(SRC, "kite_shield");
+  const ph = { axe: { minY: Math.min(...axeVerts.map((v) => v[1])), scale: AXE_SCALE }, shield: { verts: shieldVerts } };
   const resolve = {};
   for (const m of Object.keys(kit.meta.models)) resolve[`kit/${m}`] = { asset: PROPKIT.id, node: m };
   for (const [k, part] of [["keep", pp.keep], ["exit", pp.exit]]) for (const n of Object.keys(part.meta)) resolve[`procprops/${n}`] = { asset: PROCPROPS[k].id, node: n };
+  // every kit/ and procprops/ suggestion of the shipped anchors must resolve (keep/anchors may gain one)
+  const unresolved = [];
+  for (const [file, list] of [["keep/anchors", anchors.keep.anchors], ["cave/anchors", anchors.cave.anchors]])
+    for (const [k, a] of Object.entries(list)) for (const p of String(a.prop ?? "").split(/[\s,+]+/)) if (/^(kit|procprops)\//.test(p) && !resolve[p]) unresolved.push(`${file} ${k}: ${p}`);
+  if (unresolved.length) throw new Error(`props: anchor prop suggestions with no kit/fpm model or procedural prop: ${unresolved.join(", ")} (add them to FPM_KIT / tools/gen/procprops.mjs, or rename them in the anchors)`);
   const held = {};
   for (const [m, info] of Object.entries(kit.meta.models)) if (info.held) held[`${PROPKIT.id}#${m}`] = info.held;
   for (const [k, part] of [["keep", pp.keep]]) for (const [n, info] of Object.entries(part.meta)) if (info.held) held[`${PROCPROPS[k].id}#${n}`] = info.held;
   held[`${PROCPROPS.keep.id}#cuffs_rope`] = { recipes: pp.keep.meta.cuffs_rope.recipes, worn: true };
-  // the existing Poly Haven items (design §3.3 recipes, not re-measured here)
-  held["ph/wooden_axe_03"] = { recipes: { hand_r: { bone: "hand_r", rotation: [0, 0.7071, 0.7071, 0], position: [-0.03, 0.095, 0.15], scale: 1.25 } }, source: "design §3.3" };
-  held["ph/kite_shield"] = { recipes: { hand_l: { bone: "hand_l", rotation: [0.5, -0.5, -0.5, 0.5], position: "tune" } }, source: "design §3.3" };
+  // the existing Poly Haven items: the axe as design §3.3 has it (not re-measured; scale 1.25, also on
+  // its stand), the kite shield measured here
+  // (its grip, the model point the recipe puts on the grip centre: R⁻¹(gripCentre − position) / scale)
+  held["ph/wooden_axe_03"] = { grip: [0, -0.12, 0], recipes: { hand_r: { bone: "hand_r", rotation: [0, 0.7071, 0.7071, 0], position: [-0.03, 0.095, 0.15], scale: AXE_SCALE } }, source: "design §3.3", note: "the grip is 0.10 m above the butt (model y −0.224)" };
+  held["ph/kite_shield"] = kiteShieldHeld(shieldVerts, poses);
   const meta = {
     version: 1,
     assets: {
@@ -166,14 +246,18 @@ export async function buildProps({ emit, SRC, anchors }) {
     kit: kit.meta.models,
     procprops: { keep: pp.keep.meta, exit: pp.exit.meta },
     held,
-    placements: placements(anchors, kit.meta, pp, phLift),
+    placements: placements(anchors, kit.meta, ph),
     ph: {
       "ph/wooden_table_02": { use: "hall cover tables (keep anchors prop_hall_table_1/2)", origin: "on the floor" },
       "ph/stone_fire_pit": { use: "the cave camp (cave anchor camp_fire)", origin: "mid-height of the stone ring: lift 0.15 m" },
       "ph/rock_face_02": { use: "the outcrop brow (cave/anchors outcrop.props brow)", segment: "muster, streamed" },
     },
-    joins: propJoins(anchors),
-    stats: { gallery: pp.gallery, notes: pp.notes },
+    joins: {
+      inputs: Object.fromEntries(PROPS_INPUTS.map((id) => [id, inputs[id]])),
+      note: "the sha256 of the shipped files props/ was built from (anchors and rooms, the cave's rock field); tools/build-assets.mjs fails while the manifest ships other versions: rebuild with --only=props/",
+      field: pp.field,
+    },
+    stats: { gallery: pp.gallery, lever: pp.lever, notes: pp.notes },
   };
   await emit(PROPS_META.id, { segment: PROPS_META.segment, priority: PROPS_META.priority, type: "json", ext: "json", data: Buffer.from(JSON.stringify(meta)), pos: PROPS_META.pos });
   return meta;

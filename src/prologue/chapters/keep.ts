@@ -1,10 +1,14 @@
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
+import { assets } from "../../core/assets/AssetClient";
+import { audio } from "../../core/audio";
 import { objective } from "../../ui/compass";
+import { hud } from "../../ui/hud";
 import { OUTFITS, type Character } from "../../world/characters";
 import { place3, stand } from "../actors";
 import { RAIDED_HOUSES } from "../fx/townFires";
 import type { Faction } from "../flags";
 import type { PlayerController } from "../player";
+import { fillLoadout, gearLootIds, lootId, rackTaken, routeGear } from "../keep/loot";
 import type { Underground } from "../keep/underground";
 import type { World } from "../World";
 import { KEEP_BEATS, objectiveOf, scriptState, type KeepBeat } from "./keepScript";
@@ -28,10 +32,20 @@ const CP: Record<number, { keep?: (f: Faction) => string; cave?: [string, string
   8: { cave: ["lever_stance", "comp_lever"] },
 };
 
-/** The beat a resumed step plays next and which of its objective lines comes first (§5.1). */
-const RESUME: Record<number, [KeepBeat, number]> = {
+/**
+ * Where the guide stands instead of the anchors' mark: the rebel E1 retry mark (55.4, −656.6) is
+ * 0.9 m in front of the player's face (§11's (53.6, −656.0) lies in the G1/G2 partition), so Brun
+ * waits just behind, in G2 by the door the two came through.
+ */
+const COMPANION_AT: Record<string, [number, number]> = { cp_k2_reb: [52.9, -657.0] };
+
+/**
+ * The beat a resumed step plays next and which of its objective lines comes first (§5.1); null: no
+ * line yet (step 1: still bound, K1's bonds shot comes first and K2's line follows it).
+ */
+const RESUME: Record<number, [KeepBeat, number] | null> = {
   0: ["K0", 0],
-  1: ["K2", 0],
+  1: null,
   2: ["K3", 0],
   3: ["K4", 1],
   4: ["K6", 0],
@@ -67,6 +81,8 @@ export class KeepChapter implements Chapter {
   private u: Underground | null = null;
   private alive = true;
   private started = false;
+  /** the guide's torch (from step 6, or the skip's end state) */
+  private torch: { dispose(): void } | null = null;
 
   constructor(private ctx: ChapterContext) {}
 
@@ -78,21 +94,29 @@ export class KeepChapter implements Chapter {
     const { stage } = this.ctx;
     this.step = Math.max(0, Math.min(KEEP_STEPS, Math.floor(Number(resume?.step ?? 0)) || 0));
     const q = new URLSearchParams(location.search);
-    if (q.has("debug") && q.get("from") !== null) {
+    // (the debug start's own parameters: `from` names another chapter's step when it started elsewhere)
+    const debug = q.has("debug") && q.get("chapter") === this.id;
+    if (debug && q.get("from") !== null) {
       const n = Number(q.get("from"));
       if (Number.isFinite(n)) this.step = Math.max(0, Math.min(KEEP_STEPS, Math.floor(n)));
     }
     const f = stage.flags;
-    const debugFaction = q.has("debug") ? q.get("faction") : null;
+    const debugFaction = debug ? q.get("faction") : null;
     if (this.step > 0 && !f.faction) stage.state.set("faction", debugFaction === "imperial" ? "imperial" : "rebel");
     this.faction = stage.flags.faction ?? null;
     await stage.ensureTown();
     if (this.step === 0) await this.prepareGate(continued);
     else await this.prepareInside();
-    const [beat, i] = RESUME[this.step];
-    const b = KEEP_BEATS.find((x) => x.id === beat)!;
-    const lines = objectiveOf(b, this.faction ?? "rebel", scriptState(stage.flags));
-    stage.objective(lines[i] ?? lines[0] ?? null);
+    stage.objective(this.objectiveLine());
+  }
+
+  /** The step's objective line (null: none yet). */
+  private objectiveLine(): string | null {
+    const r = RESUME[this.step];
+    if (!r) return null;
+    const b = KEEP_BEATS.find((x) => x.id === r[0])!;
+    const lines = objectiveOf(b, this.faction ?? "rebel", scriptState(this.ctx.stage.flags));
+    return lines[r[1]] ?? lines[0] ?? null;
   }
 
   /** Step 0: the forecourt; the town burns, the dragon circles; the underground loads behind it. */
@@ -105,8 +129,14 @@ export class KeepChapter implements Chapter {
       stand(w, brun, K0.brun.x, K0.brun.z, K0.player);
       stand(w, scribe, K0.scribe.x, K0.scribe.z, K0.player);
     }
-    const p = K0.player;
-    this.player = await stage.ensurePlayer(new Vector3(p.x, w.heightAt(p.x, p.z) + 0.05, p.z), p.yaw);
+    if (continued && stage.player) {
+      // picked up mid-shot from the dragon chapter: the player stays where it left them, facing
+      // where they looked (a skipped dragon chapter has put them on the K0 marks already)
+      this.player = stage.player;
+    } else {
+      const p = K0.player;
+      this.player = await stage.ensurePlayer(new Vector3(p.x, w.heightAt(p.x, p.z) + 0.05, p.z), p.yaw);
+    }
     this.player.enabled = true;
     this.player.canMove = true;
     this.player.firstPerson = true;
@@ -147,7 +177,8 @@ export class KeepChapter implements Chapter {
       const a = u.anchor(cp.keep(faction));
       at = a.pos;
       yaw = a.yaw;
-      const c = a.def.companion ?? [a.def.world[0] - 1, a.def.world[1], a.def.world[2]];
+      const o = COMPANION_AT[cp.keep(faction)];
+      const c = o ? [o[0], 0, o[1]] : (a.def.companion ?? [a.def.world[0] - 1, a.def.world[1], a.def.world[2]]);
       cAt = new Vector3(c[0], at.y, c[2]);
     } else {
       const a = u.caveAnchor(cp.cave![0]);
@@ -158,28 +189,24 @@ export class KeepChapter implements Chapter {
     const floor = u.floor(at.x, at.z, at.y) ?? at.y;
     this.player = await stage.ensurePlayer(new Vector3(at.x, floor + 0.02, at.z), yaw);
     place3(w, guide, cAt.x, cAt.z, cAt.y, at);
-    // the doors and blockers of the step
-    this.setWorld(u, faction, step);
+    // from the drain on (step 6) the guide carries a wall torch (§11)
+    if (step >= 6) this.torchFor(u, guide);
+    // inside, the town's wind and panic are behind the walls (§10.5 K1–K2); no music until a fight
+    this.quietOutside();
+    audio.stopMusic(3);
     // the kit: bound at step 1, geared from step 2 (filled if missing)
     const pl = this.player;
     pl.enabled = true;
     pl.canMove = true;
     pl.firstPerson = true;
     pl.bound = step === 1;
-    if (step >= 2) {
-      stage.state.update("inv", (inv) => {
-        if (inv.weapon === "none") inv.weapon = "sword";
-        if (faction === "imperial") inv.shield = true;
-        if (inv.armour === 0) inv.armour = faction === "rebel" ? 15 : 20;
-        if (step >= 3) {
-          inv.keyring = true;
-          inv.potions = Math.max(inv.potions, 1);
-        }
-        if (step >= 4) inv.potions = Math.max(inv.potions, 3);
-      });
-    }
+    // (what the player chose to leave at a stand stays left: keep/loot.ts fillLoadout)
+    const looted = stage.flags.looted;
+    stage.state.update("inv", (inv) => void fillLoadout(inv, looted, faction, step));
     const gear = stage.ensureGear();
     await gear.sync(stage.flags.inv, { dip: 0 });
+    // the doors, blockers and gear spots of the step (after the loadout: the stands lose what it holds)
+    this.setWorld(u, faction, step);
     // the profile, sets and beds of where the player now stands
     u.check();
   }
@@ -206,13 +233,18 @@ export class KeepChapter implements Chapter {
     d.torture_door?.set(step >= 5 ? 1 : 0);
     d.cell_gate?.set(1);
     if (step >= 6) u.openDrain();
-    // the gear is taken from step 2 on: the route's chest stands open, its weapons are off the rack
+    // the gear is taken from step 2 on: the route's chest stands open (its armour is worn), and the
+    // stand has lost what the flags say was taken (the loot ids, else the loadout; §3.8, §12), which
+    // the flags then record, so a later resume reads the same state from `looted` alone
     if (step >= 2) {
-      const chest = u.props.chest(rebel ? "use_chest_reb" : "use_locker_imp");
-      chest?.set(true);
-      const rack = u.props.rack(rebel ? "use_weaponstand_reb" : "use_weaponstand_imp");
-      rack?.take("sword");
-      if (!rebel) rack?.take("shield");
+      const f = stage.flags;
+      const g = routeGear(faction);
+      u.props.chest(g.chest)?.set(f.inv.armour > 0 || f.looted.includes(lootId(g.chest)));
+      const rack = u.props.rack(g.rack);
+      const taken = rack ? rackTaken(g.rack, rack.slots, f.inv, f.looted, rebel) : [];
+      for (const id of taken) rack!.take(id);
+      const ids = gearLootIds(faction, taken, f.inv, f.looted);
+      if (ids.length) stage.state.update("looted", (l) => void l.push(...ids));
     }
     if (step >= 4) u.props.shelf?.setLeft(0);
     if (step >= 5 && u.props.cage) u.props.cage.door.set(1);
@@ -220,43 +252,78 @@ export class KeepChapter implements Chapter {
 
   async run() {
     this.started = true;
-    const { director: d, stage } = this.ctx;
-    const u = this.u;
-    const [beat, i] = RESUME[this.step];
-    const b = KEEP_BEATS.find((x) => x.id === beat)!;
-    const lines = objectiveOf(b, this.faction ?? "rebel", scriptState(stage.flags));
-    const text = lines[i] ?? lines[0];
-    if (text) objective.set(text, this.target(u), false);
+    const { director: d } = this.ctx;
+    // a chapter fades itself in (a skip, or a failed chapter passed over, leaves the screen black;
+    // after a seamless handover this does nothing)
+    void hud.fade(false, 1.2);
+    // at the gate the town still burns round the player (§10.5 K0); inside, the walls keep it out.
+    // After the dragon chapter both beds are still running (they are the stage's until K1), and
+    // these do nothing: the ambience carries on through the cut instead of starting over
+    if (this.step === 0) {
+      void audio.startBed("wind", "audio/wind", 0.25, 3).catch(() => {});
+      void audio.startBed("panic", "audio/panic", 0.45, 3).catch(() => {});
+    }
+    const text = this.objectiveLine();
+    if (text) objective.set(text, this.target(this.u ?? this.ctx.stage.underground), false);
     // the beats come with the chapter's script; until then the checkpoint waits here
     await d.until(() => !this.alive);
   }
 
   /** Where the step's objective points (null: no marker). */
   private target(u: Underground | null): (() => { x: number; y: number; z: number } | null) | null {
-    if (!u || this.step === 0) return null;
+    const w = this.w;
+    if (this.step === 0) {
+      // the choice: between the two guides (each by his door), whichever way the player turns
+      const at = new Vector3();
+      return () => {
+        const b = w.npcs.get("brun"), s = w.npcs.get("scribe");
+        if (!b || !s) return null;
+        return at.copyFrom(b.root.position).addInPlace(s.root.position).scaleInPlace(0.5).addInPlaceFromFloats(0, 1.6, 0);
+      };
+    }
+    // (step 1: still bound, nothing to go to)
+    if (!u || this.step === 1) return null;
     const rebel = (this.faction ?? "rebel") === "rebel";
-    const name =
-      this.step === 1 ? (rebel ? "use_chest_reb" : "use_locker_imp")
-      : this.step === 3 ? null
-      : this.step === 4 ? "mark_interrog"
-      : null;
-    if (this.step === 3) {
-      const h = u.keep.doors.store_door.hinge.local;
-      const p = u.keepPoint(h).add(new Vector3(0, 1.4, 0));
+    const room = (name: string) => {
+      const r = u.keep.rooms[name];
+      if (!r) return null;
+      const p = u.keepPoint([(r.min[0] + r.max[0]) / 2, r.min[1] + 1.4, (r.min[2] + r.max[2]) / 2]);
+      return () => p;
+    };
+    // E1: the imperials come out of the barracks, the rebels in through the guard room's door
+    if (this.step === 2) return room(rebel ? "g3_door" : "g2_door");
+    if (this.step === 3) return room("store_door");
+    if (this.step === 4) {
+      const p = u.anchor("mark_interrog").pos.add(new Vector3(0, 1.2, 0));
       return () => p;
     }
-    if (!name) return null;
-    const p = u.anchor(name).pos.add(new Vector3(0, 1.2, 0));
-    return () => p;
+    return null;
+  }
+
+  /** A lit torch in the guide's hand (it goes with the guide, into the next chapter too). */
+  private torchFor(u: Underground, ch: Character) {
+    this.torch?.dispose();
+    this.torch = u.giveTorch(ch);
+    if (ch.hasClip("Idle_Torch_Loop")) ch.play("Idle_Torch_Loop", { blend: 0.3 });
+  }
+
+  /** The town's beds the dragon chapter left running (the wind outlasts it, §10.5) fade out. */
+  private quietOutside() {
+    audio.stopBed("wind", 3);
+    audio.stopBed("panic", 3);
   }
 
   save() {
     return { step: this.step };
   }
 
-  /** The choice at the gate (step 0) is the player's to make. */
+  /**
+   * Skippable at every step while `run()` is the checkpoints' placeholder: step 0 has no choice to
+   * make yet (no 跟随 prompts), so the skip is the only way on. With K0's beat (J2) the choice at the
+   * gate is the player's to make again: `return this.step > 0`.
+   */
   canSkip() {
-    return this.step > 0;
+    return true;
   }
 
   /**
@@ -272,19 +339,16 @@ export class KeepChapter implements Chapter {
     if (!stage.flags.faction) stage.state.set("faction", this.facing() ?? "rebel");
     const faction = stage.flags.faction ?? "rebel";
     this.faction = faction;
-    stage.state.update("inv", (inv) => {
-      inv.weapon = inv.weapon === "none" ? "sword" : inv.weapon;
-      if (faction === "imperial") inv.shield = true;
-      inv.armour = faction === "rebel" ? 15 : 20;
-      inv.potions = Math.max(inv.potions, 3);
-      inv.keyring = true;
-    });
+    const looted = stage.flags.looted;
+    stage.state.update("inv", (inv) => void fillLoadout(inv, looted, faction, KEEP_STEPS));
     stage.state.update("outcomes", (o) => {
       o.torture ??= faction === "rebel" ? "killed" : "bluff";
     });
     w.removeNpc(companionOf(faction) === "brun" ? "scribe" : "brun");
     if (this.player) this.player.bound = false;
-    void stage.gear?.sync(stage.flags.inv, { dip: 0 });
+    // the filled kit on the body (a skip from the gate, where nobody has handed the player gear yet,
+    // makes it: the next chapter starts from a body that matches the flags)
+    if (stage.player) void stage.ensureGear().sync(stage.flags.inv, { dip: 0 }).catch((e) => console.warn("keep: gear", e));
     const u = this.u ?? stage.underground;
     if (!u) {
       // the interior never came in: leave the player before the gate
@@ -294,17 +358,38 @@ export class KeepChapter implements Chapter {
     }
     this.step = KEEP_STEPS;
     this.setWorld(u, faction, KEEP_STEPS);
+    // the doors shut behind, both ways in barred; the lever pulled, the bridge down in the river
     u.doors.torture_door?.set(0);
     u.doors.g2_door?.set(0);
-    if (!u.cave) return;
-    const s = u.caveAnchor("gal_s_cp");
-    this.player?.teleport(new Vector3(s.pos.x, s.pos.y + 0.02, s.pos.z), 0.2);
+    u.setBlocker("blocker_postern", true);
+    u.setBlocker("blocker_gate", true);
+    u.props.bridge?.set("broken");
+    // the town's beds stop; the cave's come with its zone (u.check below); the walk-on music (§10.5 X0)
+    this.quietOutside();
+    if (assets.has("audio/music_explore")) void audio.playMusic("audio/music_explore", { fade: 3 }).catch(() => {});
+    else audio.stopMusic(3);
     const c = w.npcs.get(companionOf(faction));
-    if (c) {
-      const cs = u.caveAnchor("comp_s").pos;
-      place3(w, c, cs.x, cs.z, cs.y, s.pos);
+    let at: Vector3, yaw: number, cAt: Vector3 | null;
+    if (u.cave) {
+      // the gallery's far bank (gal_s_cp), the guide beside the player (comp_s)
+      const s = u.caveAnchor("gal_s_cp");
+      at = s.pos;
+      yaw = 0.2;
+      cAt = u.caveAnchor("comp_s").pos;
+      w.env.setInterior("cave", 0.5);
+    } else {
+      // no gallery in this build: the furthest the keep goes, by the drain in the guard room J
+      const a = u.anchor("cp_k6");
+      at = a.pos;
+      yaw = a.yaw;
+      const o = a.def.companion;
+      cAt = o ? new Vector3(o[0], at.y, o[2]) : null;
     }
-    w.env.setInterior("cave", 0.5);
+    this.player?.teleport(new Vector3(at.x, at.y + 0.02, at.z), yaw);
+    if (c) {
+      if (cAt) place3(w, c, cAt.x, cAt.z, cAt.y, at);
+      this.torchFor(u, c);
+    }
     u.check();
   }
 

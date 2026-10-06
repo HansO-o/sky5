@@ -39,7 +39,13 @@ try {
     await page.waitForTimeout(6000);
     await page.screenshot({ path: `/tmp/claude-0/shots/chain-${next}.png` });
   }
+  // the dragon chapter hands over to the keep (its gate choice can't be skipped from the menu: forced)
   await page.evaluate(() => { void window.__game.stage.skipChapter(); });
+  s = await waitFor("keep", (s) => s.ch === "keep", 300000);
+  console.log("keep:", s);
+  await page.waitForTimeout(6000);
+  await page.screenshot({ path: "/tmp/claude-0/shots/chain-keep.png" });
+  await page.evaluate(() => { void window.__game.stage.skipChapter(undefined, true); });
   s = await waitFor("the end card", (s) => s.end, 120000);
   console.log("end:", s);
 } catch (e) {

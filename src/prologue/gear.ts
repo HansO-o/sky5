@@ -7,7 +7,7 @@ import { PBRMaterial } from "@babylonjs/core/Materials/PBR/pbrMaterial";
 import type { Node } from "@babylonjs/core/node";
 import type { Scene } from "@babylonjs/core/scene";
 import { assets } from "../core/assets/AssetClient";
-import { loadGLB } from "../game/loaders";
+import { loadGLB, loadJSON } from "../game/loaders";
 import { hud } from "../ui/hud";
 import { applyLightBudget } from "../engine/render/lightBudget";
 import { BoneSocket } from "../engine/actors/BoneSocket";
@@ -195,13 +195,17 @@ export async function loadItem(world: World, id: ItemId): Promise<{ node: Transf
   const spec = ITEMS[id];
   let node: TransformNode | null = null;
   let stand = false;
+  let used: string | null = null;
   for (const src of spec.sources) {
     try {
       node = await instantiate(world, src);
     } catch (e) {
       console.warn(`gear: ${src} failed to load`, e);
     }
-    if (node) break;
+    if (node) {
+      used = src;
+      break;
+    }
   }
   if (world.disposed) {
     node?.dispose();
@@ -215,11 +219,35 @@ export async function loadItem(world: World, id: ItemId): Promise<{ node: Transf
   if (!node) return null;
   node.rotationQuaternion ??= node.rotation.toQuaternion();
   world.addShadowCasters(node.getChildMeshes(false));
-  // a stand-in is built with its grip at the origin
+  // the pipeline measured how its models are held (props/meta.held: the sword's grip is under the
+  // guard, not at its pommel); a stand-in is built with its grip at the origin
+  // (only the kit's models: the Poly Haven axe and shield keep the recipes tuned here)
+  const measured = used?.startsWith("kit/") ? (await heldRecipes(world))?.[used]?.recipes?.[spec.hand.bone] : null;
+  if (world.disposed) {
+    node.dispose();
+    return null;
+  }
   const g = stand ? undefined : spec.grip;
   const grip = g === "bounds" ? gripFromBounds(node) : g ? new Vector3(g[0], g[1], g[2]) : null;
-  const hand = gripped(spec, grip);
+  const hand: AttachRecipe = measured ? { bone: measured.bone, rotation: measured.rotation, position: measured.position, scale: spec.hand.scale } : gripped(spec, grip);
   return { node, place: { hand, stow: spec.stow(hand) } };
+}
+
+/** `props/meta.held`: attach recipes the content pipeline checked on the clips, by `asset#node` (or `ph/<id>`). */
+type HeldTable = Record<string, { recipes?: Record<string, { bone: string; rotation: QuatT; position: Vec3T }> }>;
+const heldTables = new WeakMap<World, Promise<HeldTable | null>>();
+function heldRecipes(world: World): Promise<HeldTable | null> {
+  let p = heldTables.get(world);
+  if (!p) {
+    p = assets.has("props/meta")
+      ? loadJSON<{ held?: HeldTable }>("props/meta").then(
+          (m) => m.held ?? null,
+          (e) => (console.warn("gear: props/meta", e), null),
+        )
+      : Promise.resolve(null);
+    heldTables.set(world, p);
+  }
+  return p;
 }
 
 const standInMats = new WeakMap<Scene, { steel: PBRMaterial; leather: PBRMaterial; rope: PBRMaterial }>();

@@ -6,7 +6,10 @@ import { chromium } from "playwright-core";
 
 const STEP = process.env.STEP ?? "3";
 const SHOTS = process.env.SHOTS ?? "/tmp/claude-0/shots";
-/** name → [player x, z, y hint], camera [x, y, z], look-at [x, y, z], extra setup (evaluated in the page) */
+/**
+ * name → [player x, z, y hint], camera [x, y, z], look-at [x, y, z], extra setup (evaluated in the
+ * page). A negative camera or player y is metres above the terrain there.
+ */
 const VIEWS = {
   gate_out: [[60, -647, 38.2], [60, 40.2, -644], [60, 40, -654], "st.gate.set(0)"],
   gate_open: [[60, -647, 38.2], [60, 40.2, -644], [60, 39.5, -660], "st.gate.set(1)"],
@@ -25,8 +28,17 @@ const VIEWS = {
   b3_cage: [[55, -657, 32.2], [54.5, 33.8, -655.0], [51.4, 32.8, -656.6], ""],
   b4: [[54.1, -665, 32.2], [54.1, 34.6, -664.5], [54.1, 32.8, -676], ""],
   b5: [[54.1, -683, 32.2], [57.6, 34.8, -682.4], [53, 32.6, -687.5], ""],
+  rack_reb: [[51.5, -661.5, 38.2], [51.6, 39.9, -661.6], [49, 38.8, -662.2], ""],
+  rack_reb_front: [[51.5, -659.5, 38.2], [50.7, 39.1, -662.2], [49, 38.9, -662.2], ""],
+  chest_reb: [[51, -656, 38.2], [51.0, 39.7, -655.0], [49, 38.4, -655.5], ""],
+  rack_imp: [[63.2, -656.2, 38.2], [63.2, 39.9, -656.4], [65.55, 38.8, -656.75], ""],
+  locker_imp: [[63.4, -660.5, 38.2], [63.4, 39.7, -660.5], [65.2, 38.4, -661], ""],
+  hall_in: [[60, -656, 38.2], [60, 40.3, -657.5], [60, 40, -652], ""],
+  postern_in: [[51, -659, 38.2], [51.2, 39.9, -658.4], [47.6, 39.4, -659], ""],
   gallery: [[51, -714, 28.2], [51.2, 30.6, -712.8], [48, 27.4, -728], ""],
   camp: [[50, -720, 28.2], [49.5, 30.4, -718.5], [54, 28, -725], ""],
+  outcrop: [[20, -665, -0.1], [8, -6, -662], [-16, 55, -673], ""],
+  outcrop_deck: [[-15, -670.5, 56.1], [-12.5, 58.2, -668.5], [-17.5, 56.5, -674], ""],
 };
 const pick = (process.env.VIEWS ?? Object.keys(VIEWS).join(",")).split(",");
 
@@ -38,7 +50,7 @@ const page = await (await browser.newContext({ viewport: { width: 960, height: 5
 const errors = [];
 page.on("console", (m) => (m.type() === "error" || m.type() === "warning") && errors.push(`[${m.type()}] ${m.text()}`));
 page.on("pageerror", (e) => errors.push(`${e.message}\n${e.stack}`));
-await page.goto(`http://localhost:4173/?webgl&debug&chapter=keep&from=${STEP}&faction=${process.env.FACTION ?? "rebel"}`);
+await page.goto(`http://localhost:4173/?webgl&debug&chapter=keep&from=${STEP}&faction=${process.env.FACTION ?? "rebel"}&timescale=${process.env.TS ?? "2"}`);
 await page.waitForFunction(() => performance.getEntriesByName("menu-3d-ready").length > 0, null, { timeout: 180000 });
 await page.click("text=新游戏");
 await page.waitForFunction(() => window.__game?.stage?.chapter?.id === "keep" && !!window.__game.stage.underground && !!window.__game.stage.player, null, { timeout: 600000 });
@@ -51,17 +63,18 @@ for (const name of pick) {
       const st = window.__game.stage;
       const V = st.player.position.constructor;
       const u = st.underground;
-      const y = u.floor(p[0], p[1], p[2]) ?? p[2];
+      const ground = (x, z, y) => (y < 0 ? st.world.heightAt(x, z) - y : y);
+      const y = p[2] < 0 ? ground(p[0], p[1], p[2]) : (u.floor(p[0], p[1], p[2]) ?? p[2]);
       st.player.teleport(new V(p[0], y + 0.02, p[1]), 0);
       if (setup) new Function("st", setup)(st);
       u.check();
-      st.world.rig.cut(new V(cam[0], cam[1], cam[2]), new V(look[0], look[1], look[2]));
-      return { zone: u.zone, level: u.level, profile: st.world.env.interior, y };
+      st.world.rig.cut(new V(cam[0], ground(cam[0], cam[2], cam[1]), cam[2]), new V(look[0], look[1], look[2]));
+      return { zone: u.zone, level: u.level, profile: st.world.env.interior, y, t0: st.world.time };
     },
     [v[0], v[1], v[2], v[3]],
   );
-  // the lighting blend and the light pool's crossfades
-  await page.waitForTimeout(3500);
+  // the lighting blend and the light pool's crossfades: 2.5 s of game time
+  await page.waitForFunction((t0) => window.__game.stage.world.time - t0 > 2.5, info.t0, { timeout: 120000, polling: 200 }).catch(() => {});
   const after = await page.evaluate((dump) => {
     const st = window.__game.stage;
     const pool = st.world.lights;

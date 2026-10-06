@@ -9,11 +9,14 @@
 // - One top-level node per prop, at the origin with an identity transform; geometry sits on
 //   `<node>_mesh` leaf children (mesh quantisation moves only those), colliders on `<x>_col` nodes
 //   (POSITION only, no material), anchors are empty nodes. Moving parts are pivot nodes whose
-//   identity is the rest pose (door closed, lever up, deck lowered).
+//   identity is the rest pose (door closed, lever at rest, deck lowered).
 // - Props face −Z (an anchor's yaw turns local −Z to the facing); wall props have the wall at +Z.
 // - The gallery set piece `gallery_bridge` is in world axes with its origin on the cave anchor
-//   `bridge_hinge`; the lever, winch, pulleys, chains and slab inside it are placed from the cave
-//   anchors at build time (checked against the cave's rock field when tools/gen/cave.mjs loads).
+//   `bridge_hinge`; the lever, winch, chains and slab inside it are placed from the cave anchors, the
+//   pulleys from the cave's rock field (the dome above the raised deck tip), and everything is checked
+//   against that field (tools/gen/cave.mjs `_debug`; the build fails when it does not load). The field
+//   must be the one the shipped cave was built from: checkCaveField compares it with the shipped
+//   cave/mesh_a colliders and cave/anchors floors, and props/meta pins those files (joins.inputs).
 // - glTF extras on each top-level node (Babylon: node.metadata.gltf.extras) describe pivots, tags,
 //   anchors and attach recipes; the same data goes to props/meta.
 import path from "node:path";
@@ -398,11 +401,22 @@ function galleryBridge(ctx) {
   };
   for (const [k, s] of Object.entries(states)) spec.children.push(N(s.col, { col: deckBox(s.angle, k === "broken" ? DECK.south : DECK.len), extras: { tag: `bridge_deck_${k}`, state: k, hingeAngle: +s.angle.toFixed(4) } }));
 
-  // ---- pulleys on the dome above mid-span (the slab, 2.4 m wide, falls between them)
-  const PUL = { dx: 1.4, y: 35.0 - H[1], z: -730.9 - H[2], r: 0.18 };
+  // ---- pulleys on the dome above mid-span (the slab, 2.4 m wide, falls between them): 0.5 m north of
+  // the raised deck's tip eyes, hung from the rock field's ceiling there (the bracket plate's top 4 cm
+  // into the rock at the highest point of its footprint)
+  const raisedEye = rotX(eye(0), ANG.raised);
+  const PUL = { dx: 1.4, z: raisedEye[2] + 0.5, r: 0.18, plateTop: 0.52, bite: 0.04 };
   const pulleys = {};
+  const pulleyInfo = {};
   for (const [side, sx] of [["w", -1], ["e", 1]]) {
-    const P = [sx * PUL.dx, PUL.y, PUL.z];
+    let top = -Infinity;
+    for (const [fx, fz] of [[0, 0], [-0.15, -0.17], [0.15, -0.17], [-0.15, 0.17], [0.15, 0.17]]) {
+      const c = ctx.field.ceilingAt(H[0] + sx * PUL.dx + fx, H[2] + PUL.z + fz, H[1] + raisedEye[1]);
+      if (c === null) throw new Error(`procprops: no rock above the ${side} pulley at (${r3([H[0] + sx * PUL.dx + fx, H[2] + PUL.z + fz]).join(", ")}) within 4 m of the raised deck tip`);
+      top = Math.max(top, c);
+    }
+    const P = [sx * PUL.dx, top + PUL.bite - PUL.plateTop - H[1], PUL.z];
+    pulleyInfo[side] = { at: r3(add(H, P)), ceiling: +top.toFixed(3) };
     pulleys[side] = P;
     const p = new Parts();
     // sheave (axle along X) and its cheeks, bolted up into the rock
@@ -411,7 +425,7 @@ function galleryBridge(ctx) {
     cylinder(p.get("iron"), P, 0.03, 0.2, [0, 0, Math.PI / 2], { sides: 8, tile: 0.4 });
     for (const dx of [-0.07, 0.07]) box(p.get("iron"), [P[0] + dx, P[1] + 0.2, P[2]], [0.02, 0.62, 0.26], [0, 0, 0], { tile: 0.5 });
     box(p.get("iron"), [P[0], P[1] + 0.5, P[2]], [0.3, 0.04, 0.34], [0, 0, 0], { tile: 0.5 });
-    spec.children.push(N(`bridge_pulley_${side}`, { parts: p }));
+    spec.children.push(N(`bridge_pulley_${side}`, { parts: p, pulley: P }));
   }
 
   // ---- winch (on the north ledge): drum axis across the haul direction
@@ -511,14 +525,16 @@ function galleryBridge(ctx) {
   const pivot = N("lever_pivot", { t: LV.pivot, children: [] });
   const hl = new Parts();
   {
+    // the shaft stops just past the hand (LEVER.end): at full pull a longer overhang reaches the
+    // puller's thigh and belly (checked in leverFromClip)
     const dir = [0, Math.cos(LV.rest), Math.sin(LV.rest)];
-    const a = mul(dir, -0.28), b = mul(dir, LV.radius + 0.12);
+    const a = mul(dir, -0.28), b = mul(dir, LV.radius + LEVER.end - 0.01);
     const m = mul(add(a, b), 0.5);
     box(hl.get("wood"), m, [0.07, len(sub(b, a)), 0.07], [LV.rest, 0, 0], { tile: 1 });
-    // counterweight, iron ferrules, leather grip
+    // counterweight, iron ferrules and end cap, leather grip (R − 0.10 … R + 0.04)
     box(hl.get("iron"), mul(dir, -0.24), [0.13, 0.14, 0.13], [LV.rest, 0, 0], { tile: 0.4 });
-    for (const t of [0.05, LV.radius - 0.16, LV.radius + 0.14]) box(hl.get("iron"), mul(dir, t), [0.085, 0.03, 0.085], [LV.rest, 0, 0], { tile: 0.4 });
-    cylinder(hl.get("leather"), mul(dir, LV.radius), 0.045, 0.24, [LV.rest, 0, 0], { sides: 10, tile: 0.3 });
+    for (const t of [0.05, LV.radius - 0.13, LV.radius + LEVER.end - 0.015]) box(hl.get("iron"), mul(dir, t), [0.085, 0.03, 0.085], [LV.rest, 0, 0], { tile: 0.4 });
+    cylinder(hl.get("leather"), mul(dir, LV.radius - 0.03), 0.045, 0.14, [LV.rest, 0, 0], { sides: 10, tile: 0.3 });
   }
   pivot.parts = hl;
   pivot.children.push(N("lever_grip", { t: [0, Math.cos(LV.rest) * LV.radius, Math.sin(LV.rest) * LV.radius] }));
@@ -559,9 +575,20 @@ function galleryBridge(ctx) {
     pulled: +LV.pulled.toFixed(4),
     grip: "lever_grip",
     clip: { name: "Farm_PickingTree", grab: LV.grab, release: LV.release, curve: LV.curve },
-    note: "identity = up (rest). Drive the angle by `curve` ([clip seconds, radians]) so the grip follows the puller's right hand",
+    restAngle: +LV.rest.toFixed(4),
+    length: +(LV.radius + LEVER.end).toFixed(3),
+    note: `identity = the rest pose: the handle leans ${Math.round((LV.rest * 180) / Math.PI)}° from vertical toward the puller (lever_grip at (0, ${(Math.cos(LV.rest) * LV.radius).toFixed(3)}, ${(Math.sin(LV.rest) * LV.radius).toFixed(3)}) from the pivot); pulling turns it further down toward the puller. Drive the angle by \`curve\` ([clip seconds, radians]) so the grip follows the puller's right hand`,
     handGap: LV.gap,
+    lateral: LV.lateral,
+    bodyClear: LV.bodyClear,
+    ik: {
+      bone: "hand_r",
+      target: "lever_grip",
+      window: [LV.grab, LV.release],
+      note: `the planar handle cannot follow the clip's hand exactly: without help the hand is up to ${LV.gap} m from lever_grip (mostly sideways: the hand drifts x ${LV.lateral.min}…${LV.lateral.max} m off the lever's plane during the pull). Pull the right hand onto lever_grip with a small two-bone IK over the window (blend in and out over ~0.1 s), or accept the gap`,
+    },
   };
+  extras.pulleys = { nodes: ["bridge_pulley_w", "bridge_pulley_e"], ...pulleyInfo, note: "world; hung from the rock field's ceiling 0.5 m north of the raised deck's tip eyes" };
   extras.slab = { node: "slab", drop: r3(A.slab_drop) };
   spec.extras = extras;
   return spec;
@@ -806,11 +833,33 @@ function torches() {
   const cup = add(base, mul(axis, 0.06));
   torus(iron, cup, 0.024, 0.007, [-lean, 0, 0], { segments: 12, sides: 4, tile: 0.2 });
   box(iron, [0, cup[1] - 0.01, cup[2] / 2 - 0.012], [0.02, 0.02, -cup[2]], [0, 0, 0], { tile: 0.3 });
+  // one vertex-coloured primitive per sconce (one draw call; 20 of them line the keep): the bracket plus
+  // the torch baked in place; `sconce_empty` is the bracket alone, for the sconce whose torch is taken
+  const leaning = copyParts(p, (v) => add(base, rotX(v, -lean)), (n) => rotX(n, -lean));
+  const extras = { kind: "wall", wall: "origin on the wall at the light anchor's `wall` point, facing −Z (yaw = the anchor's yaw); the `_flame` anchor lands on the light anchor itself", drawCalls: 1, material: "pp_vcol (shared by every sconce: merge or thin-instance them per zone if draw calls run short)" };
   const sconce = N("sconce", {
-    children: [N("sconce_bracket", { parts: s }), N("sconce_torch", { parts: copyParts(p, (v) => add(base, rotX(v, -lean)), (n) => rotX(n, -lean)) }), N("sconce_flame", { t: flameAt })],
-    extras: { kind: "wall", wall: "origin on the wall at the light anchor's `wall` point, facing −Z (yaw = the anchor's yaw); sconce_flame lands on the light anchor itself", takeTorch: "K9: hide sconce_torch and hang a `torch` on the companion's hand_l" },
+    parts: bakeVcol([s, leaning], SCONCE_COLOURS),
+    children: [N("sconce_flame", { t: flameAt })],
+    extras: { ...extras, takeTorch: "K9: replace this sconce by `sconce_empty` (same transform) and hang a `torch` on the companion's hand_l" },
   });
-  return [torch, sconce];
+  const empty = N("sconce_empty", { parts: bakeVcol([s], SCONCE_COLOURS), children: [N("sconce_empty_flame", { t: flameAt })], extras: { ...extras, note: "the bracket without its torch (K9)" } });
+  return [torch, sconce, empty];
+}
+
+/** Vertex colours for the baked sconce (the textured materials' mean colours). */
+const SCONCE_COLOURS = { iron: [0.2, 0.16, 0.13, 1], wood: [0.27, 0.18, 0.11, 1] };
+/** All of `list`'s geometry in one `vcol` builder: textured materials become flat `colours[k]`. */
+function bakeVcol(list, colours) {
+  const out = new Parts(), mb = out.get("vcol");
+  for (const parts of list)
+    for (const [k, src] of Object.entries(parts.m)) {
+      const base = mb.vertexCount;
+      const flat = k === "vcol" ? null : colours[k];
+      if (k !== "vcol" && !flat) throw new Error(`procprops: no bake colour for material ${k}`);
+      for (let v = 0; v < src.vertexCount; v++) mb.vertex(src.p.slice(v * 3, v * 3 + 3), src.n.slice(v * 3, v * 3 + 3), src.uv.slice(v * 2, v * 2 + 2), flat ?? src.c.slice(v * 4, v * 4 + 4));
+      for (const ix of src.i) mb.i.push(ix + base);
+    }
+  return out;
 }
 
 /** A straw bed for the cells: a low mound plus loose strands. */
@@ -1042,18 +1091,30 @@ function bonePile(name, seed, { skull = false } = {}) {
 // the lever: pivot from a fit to Farm_PickingTree's right-hand grip path; angles and the pull curve
 // measured from the clip at build time
 
+/**
+ * The lever (lever-local, world axes): pivot, grip radius, how far the shaft reaches past the grip,
+ * and the body bones its handle must stay clear of during the pull (`bodyClear` m between the bone
+ * segments and the handle's outer part, radius 0.9 … radius + end).
+ */
+export const LEVER = {
+  pivot: [0.1, 1.0, -0.4],
+  radius: 1.22,
+  end: 0.05,
+  bodyClear: 0.17,
+  bones: [["pelvis", "spine_01"], ["spine_01", "spine_02"], ["spine_02", "spine_03"], ["thigh_r", "calf_r"], ["thigh_l", "calf_l"], ["upperarm_r", "lowerarm_r"]],
+};
+
 function leverFromClip(poses, cave) {
   // lever-local frame: origin on the anchor `lever`, world axes; the puller stands on lever_stance facing −Z
   const stance = sub(cave.lever_stance, cave.lever);
-  const pivot = [0.1, 1.0, -0.4];
-  const radius = 1.22;
+  const { pivot, radius } = LEVER;
+  // character space (+X left, +Z forward) → facing −Z: x → −x, z → −z
+  const toLever = (g) => add(stance, [-g[0], g[1], -g[2]]);
   const gripAt = (t) => {
     const P = poses("Farm_PickingTree", t);
     if (!P) return null;
     const h = P("hand_r");
-    const g = add(h.p, qrot(h.q, [-0.03, 0.095, 0]));
-    // character space (+X left, +Z forward) → facing −Z: x → −x, z → −z
-    return add(stance, [-g[0], g[1], -g[2]]);
+    return toLever(add(h.p, qrot(h.q, [-0.03, 0.095, 0])));
   };
   const angleOf = (g) => Math.atan2(g[2] - pivot[2], g[1] - pivot[1]);
   const grab = 1.06, release = 1.68;
@@ -1074,7 +1135,39 @@ function leverFromClip(poses, cave) {
       gap = Math.max(gap, len(sub(handle, g)));
     }
   }
-  return { pivot, radius, rest, pulled: end - rest, curve, grab, release, gap: +gap.toFixed(3), stance };
+  // the hand's sideways drift off the lever's plane (x = pivot x) while it holds the grip
+  let lo = Infinity, hi = -Infinity;
+  for (let t = grab; t <= release + 1e-6; t += 0.02) {
+    const dx = gripAt(t)[0] - pivot[0];
+    (lo = Math.min(lo, dx)), (hi = Math.max(hi, dx));
+  }
+  // the handle's outer part against the puller's body, from the grab to the clip's last curve key (the
+  // handle stays pulled after the release while the body recovers)
+  const angleAt = (t) => {
+    const i = curve.findIndex(([ct]) => ct > t);
+    if (i < 0) return curve[curve.length - 1][1];
+    if (i === 0) return curve[0][1];
+    return curve[i - 1][1] + ((curve[i][1] - curve[i - 1][1]) * (t - curve[i - 1][0])) / (curve[i][0] - curve[i - 1][0]);
+  };
+  const segDist = (p, a, b) => {
+    const ab = sub(b, a);
+    const k = Math.max(0, Math.min(1, dot(sub(p, a), ab) / dot(ab, ab)));
+    return len(sub(p, add(a, mul(ab, k))));
+  };
+  const bodyClear = {};
+  for (let t = grab; t <= curve[curve.length - 1][0] + 1e-6; t += 0.02) {
+    const P = poses("Farm_PickingTree", t);
+    const th = rest + angleAt(t);
+    const dir = [0, Math.cos(th), Math.sin(th)];
+    const h0 = add(pivot, mul(dir, 0.9)), h1 = add(pivot, mul(dir, radius + LEVER.end));
+    for (const [j0, j1] of LEVER.bones) {
+      const c = toLever(P(j0).p), d = toLever(P(j1).p);
+      let m = Infinity;
+      for (let k = 0; k <= 16; k++) m = Math.min(m, segDist(lerp3(c, d, k / 16), h0, h1));
+      if (!(j0 in bodyClear) || m < bodyClear[j0].d) bodyClear[j0] = { d: +m.toFixed(3), t: +t.toFixed(2) };
+    }
+  }
+  return { pivot, radius, rest, pulled: end - rest, curve, grab, release, gap: +gap.toFixed(3), stance, lateral: { min: +lo.toFixed(3), max: +hi.toFixed(3) }, bodyClear };
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -1139,14 +1232,75 @@ function windingOf(mb) {
 // ------------------------------------------------------------------------------------------------
 // validation against the cave's rock field and the keep's rooms
 
-async function checkGallery(spec, cave, problems, notes) {
+/** The cave's rock field (tools/gen/cave.mjs `_debug`); the gallery is placed and checked against it. */
+export async function loadCaveField() {
   let D;
   try {
     D = (await import("./cave.mjs"))._debug;
   } catch (e) {
-    notes.push(`gallery not checked against the rock (tools/gen/cave.mjs: ${e.message})`);
-    return null;
+    throw new Error(`procprops: tools/gen/cave.mjs failed to load (${e.message}): the gallery set piece is placed and checked against its rock field, so props/ cannot build without it`);
   }
+  if (typeof D?.S !== "function" || typeof D?.floorAt !== "function" || typeof D?.clearAt !== "function") throw new Error("procprops: tools/gen/cave.mjs `_debug` no longer exports S, floorAt and clearAt; update tools/gen/procprops.mjs");
+  const { S } = D;
+  /** First rock going up from (x, y0, z) within 4 m (bisected to 5 mm); null when y0 is in rock or none. */
+  const ceilingAt = (x, z, y0) => {
+    if (S(x, y0, z) < 0) return null;
+    let y = y0;
+    while (S(x, y, z) > 0 && y < y0 + 4) y += 0.05;
+    if (S(x, y, z) > 0) return null;
+    let lo = y - 0.05, hi = y;
+    for (let i = 0; i < 4; i++) {
+      const m = (lo + hi) / 2;
+      if (S(x, m, z) > 0) lo = m;
+      else hi = m;
+    }
+    return hi;
+  };
+  return { ...D, ceilingAt };
+}
+
+/**
+ * The field cave.mjs computes now must be the one the shipped cave was built from (else the gallery
+ * would be fitted to rock that does not ship): the shipped cave/mesh_a colliders near the gallery lie
+ * on its surface, and every shipped cave anchor's probed floor and clear height reproduce.
+ * `meshA`: the shipped cave/mesh_a GLB (Buffer).
+ */
+export async function checkCaveField(D, caveAnchors, meshA, H) {
+  const problems = [];
+  const fix = "tools/gen/cave.mjs differs from the shipped cave (edited since cave/ last ran?): rebuild both with node tools/build-assets.mjs --only=cave/,props/";
+  const doc = await io.readBinary(new Uint8Array(meshA));
+  const dev = [];
+  for (const n of doc.getRoot().listNodes()) {
+    if (!/_col$/.test(n.getName()) || !n.getMesh()) continue;
+    const M = n.getWorldMatrix();
+    for (const prim of n.getMesh().listPrimitives()) {
+      const P = prim.getAttribute("POSITION"), v = [];
+      for (let i = 0; i < P.getCount(); i++) {
+        P.getElement(i, v);
+        const w = [0, 1, 2].map((r) => M[r] * v[0] + M[4 + r] * v[1] + M[8 + r] * v[2] + M[12 + r]);
+        if (Math.abs(w[0] - H[0]) > 20 || w[1] < H[1] - 6 || w[1] > H[1] + 12 || w[2] < H[2] - 6 || w[2] > H[2] + 16) continue;
+        dev.push(Math.abs(D.S(w[0], w[1], w[2])));
+      }
+    }
+  }
+  if (dev.length < 200) throw new Error(`procprops: the shipped cave/mesh_a has only ${dev.length} collider vertices (nodes *_col) around the gallery; update checkCaveField (tools/gen/procprops.mjs) to the cave's layout`);
+  dev.sort((a, b) => a - b);
+  const median = dev[dev.length >> 1], off = dev.filter((d) => d > 0.05).length / dev.length;
+  if (median > 0.01 || off > 0.03) problems.push(`the shipped cave/mesh_a colliders around the gallery are off the field: median ${median.toFixed(3)} m, ${(off * 100).toFixed(1)} % beyond 5 cm (built from it: ≤ 0.01 m and ≤ 3 %)`);
+  let floors = 0;
+  for (const [k, a] of Object.entries(caveAnchors.anchors)) {
+    if (a.sdfFloor === undefined) continue;
+    floors++;
+    const f = D.floorAt(a.pos[0], a.pos[2], a.sdfFloor + 0.5, 2);
+    const c = f === null ? null : D.clearAt(a.pos[0], a.pos[2], f);
+    if (f === null || Math.abs(f - a.sdfFloor) > 0.01 || (a.clear !== undefined && Math.abs(c - a.clear) > 0.06))
+      problems.push(`cave anchor ${k}: the field's floor ${f?.toFixed(3)} / clear ${c?.toFixed(2)} vs shipped ${a.sdfFloor} / ${a.clear}`);
+  }
+  if (problems.length) throw new Error(`procprops: ${fix}\n  ${problems.slice(0, 8).join("\n  ")}${problems.length > 8 ? `\n  … and ${problems.length - 8} more` : ""}`);
+  return { colliderVerts: dev.length, median: +median.toFixed(4), beyond5cm: +off.toFixed(4), anchorFloors: floors };
+}
+
+function checkGallery(spec, cave, problems, D) {
   const { S, floorAt } = D;
   const H = cave.bridge_hinge;
   const find = (name, s = spec) => (s.name === name ? s : s.children.map((c) => find(name, c)).find(Boolean));
@@ -1178,11 +1332,25 @@ async function checkGallery(spec, cave, problems, notes) {
   const tips = ["w", "e"].map((s) => find(`bridge_tip_${s}`).t);
   for (const [k, state] of [["raised", ex.angles.raised], ["lowered", 0]])
     clearOf(`chain ${k}`, tips.flatMap((t, i) => seg(W(rotX(t, state)), sheaves[i]).filter((p) => len(sub(p, sheaves[i])) > 0.35)), 0.05);
-  // pulleys hang in the air under rock: the sheave clear, the bracket's top in the rock
-  for (const [i, s] of sheaves.entries()) {
-    const sv = S(...s), top = S(s[0], s[1] + 0.75, s[2]);
-    if (sv < 0.15) problems.push(`gallery: pulley ${i ? "e" : "w"} sheave only ${sv.toFixed(2)} m from the rock`);
-    if (top > 0) problems.push(`gallery: pulley ${i ? "e" : "w"} bracket does not reach the rock (${top.toFixed(2)} m of air above it)`);
+  // pulleys hang in the air under rock: the sheave clear, the bracket plate's top in the rock across its
+  // footprint, and the slab (falling between them) clear of their inner cheeks
+  for (const side of ["w", "e"]) {
+    const P = W(find(`bridge_pulley_${side}`).pulley);
+    const sv = S(...add(P, [0, -0.054, 0]));
+    if (sv < 0.15) problems.push(`gallery: pulley ${side} sheave only ${sv.toFixed(2)} m from the rock`);
+    for (const [fx, fz] of [[0, 0], [-0.15, -0.17], [0.15, -0.17], [-0.15, 0.17], [0.15, 0.17]]) {
+      const top = S(P[0] + fx, P[1] + 0.515, P[2] + fz);
+      if (top > 0) problems.push(`gallery: pulley ${side} bracket plate does not reach the rock at (${fx}, ${fz}) (${top.toFixed(2)} m of air above it)`);
+    }
+  }
+  {
+    const sp = find("slab").parts.m.rock.p;
+    let mx = 0;
+    const sx = find("slab").t[0];
+    for (let i = 0; i < sp.length; i += 3) mx = Math.max(mx, Math.abs(sp[i] + sx));
+    const inner = Math.abs(find("bridge_pulley_e").pulley[0]) - 0.1;
+    out.slabHalfWidth = +mx.toFixed(3);
+    if (mx > inner - 0.01) problems.push(`gallery: the slab (half-width ${mx.toFixed(2)}) would hit the pulleys' inner cheeks (${inner.toFixed(2)}) as it falls`);
   }
   // winch foundation and the lever block sit on the floor (their footprint's floor lies between their bottom and top)
   const footprint = (label, centre, half, yaw, y0, y1) => {
@@ -1203,7 +1371,7 @@ async function checkGallery(spec, cave, problems, notes) {
   // the lever's handle sweep and the winch frame are in the air
   const sweep = [];
   const rest = find("lever_pivot").restAngle;
-  for (let a = 0; a <= LV.pulled + 1e-6; a += 0.05) for (let r = 0.1; r <= 1.34; r += 0.1) sweep.push(add(lp, [0, Math.cos(rest + a) * r, Math.sin(rest + a) * r]));
+  for (let a = 0; a <= LV.pulled + 1e-6; a += 0.05) for (let r = 0.1; r <= LEVER.radius + LEVER.end + 1e-6; r += 0.1) sweep.push(add(lp, [0, Math.cos(rest + a) * r, Math.sin(rest + a) * r]));
   clearOf("lever handle sweep", sweep, 0.05);
   const wt = W(winch.t);
   clearOf("winch frame top", [-0.5, 0, 0.5].flatMap((x) => [-0.3, 0.3].map((z) => add(wt, rotY([x, 0.95, z], wYaw)))), 0.05);
@@ -1219,15 +1387,13 @@ async function checkGallery(spec, cave, problems, notes) {
 }
 
 /** The rope cuffs clear both base bodies' wrists (bind pose, hand-local; the cuff recipe lifts the coil 8 mm). */
-async function checkWrists(SRC, problems, notes) {
+async function checkWrists(SRC, problems) {
   const out = {};
   for (const body of ["Superhero_Male_FullBody", "Superhero_Female_FullBody"]) {
     const file = path.join(SRC, "chars/base", `${body}.gltf`);
-    const doc = await io.read(file).catch(() => null);
-    if (!doc) {
-      notes.push(`cuffs not checked against ${body} (missing)`);
-      continue;
-    }
+    const doc = await io.read(file).catch((e) => {
+      throw new Error(`procprops: the rope cuffs are sized on the base bodies, but ${path.relative(path.dirname(SRC), file)} does not load (${e.message}); run node tools/fetch-extra.mjs`);
+    });
     const root = doc.getRoot();
     for (const skin of root.listSkins()) {
       const joints = skin.listJoints();
@@ -1289,19 +1455,25 @@ function checkKeep(keep, problems) {
 
 /**
  * Both documents (PNG textures, before compression) and their metadata.
- * `anchors`: {cave, keep} — the shipped cave/anchors and keep/anchors JSON.
+ * `anchors`: {cave, keep} — the shipped cave/anchors and keep/anchors JSON; `caveMeshA`: the shipped
+ * cave/mesh_a GLB, to check that tools/gen/cave.mjs's field is the shipped one (required by the build;
+ * a preview may leave it out, and `field.checked` then says so).
  */
-export async function buildProcPropsDocs(SRC, { anchors, poses } = {}) {
+export async function buildProcPropsDocs(SRC, { anchors, poses, caveMeshA } = {}) {
   if (!anchors?.cave?.anchors || !anchors?.keep?.anchors) throw new Error("procprops: needs the cave and keep anchors (build cave/ and keep/interior first)");
   const caveA = Object.fromEntries(Object.entries(anchors.cave.anchors).map(([k, v]) => [k, v.pos]));
   for (const k of ["bridge_hinge", "slab_drop", "lever", "lever_stance", "winch"]) if (!caveA[k]) throw new Error(`procprops: cave anchor ${k} missing`);
   poses ??= clipPoses([path.join(SRC, "chars/anim_full/UAL1.glb"), path.join(SRC, "chars/anim_full/UAL2.glb")]);
   const problems = [], notes = [];
+  const D = await loadCaveField();
+  const field = caveMeshA ? { checked: true, ...(await checkCaveField(D, anchors.cave, caveMeshA, caveA.bridge_hinge)) } : { checked: false };
+  if (!caveMeshA) notes.push("the cave field was not compared with a shipped cave/mesh_a (preview)");
   const lever = leverFromClip(poses, caveA);
   if (lever.gap > 0.25) problems.push(`lever: the handle grip strays ${lever.gap} m from the puller's hand during the pull (> 0.25)`);
-  const wrists = await checkWrists(SRC, problems, notes);
+  for (const [bone, c] of Object.entries(lever.bodyClear)) if (c.d < LEVER.bodyClear) problems.push(`lever: the handle comes within ${c.d} m of the puller's ${bone} bone at ${c.t} s (< ${LEVER.bodyClear})`);
+  const wrists = await checkWrists(SRC, problems);
 
-  const keepSpecs = [galleryBridge({ cave: caveA, lever }), cage(), strapChair(), shackles(), barsPanel(), ...chains(), cuffs(), ...bowAndArrow(), ...torches(), strawBed(), drainGrate(), ...papers(), dice(), brazierIrons(), keyRing()];
+  const keepSpecs = [galleryBridge({ cave: caveA, lever, field: D }), cage(), strapChair(), shackles(), barsPanel(), ...chains(), cuffs(), ...bowAndArrow(), ...torches(), strawBed(), drainGrate(), ...papers(), dice(), brazierIrons(), keyRing()];
   const exitSpecs = [bonePile("bones_a", 101, { skull: true }), bonePile("bones_b", 202), bonePile("bones_c", 303)];
   const gb = keepSpecs[0];
   const findIn = (name, s) => (s.name === name ? s : s.children.map((c) => findIn(name, c)).find(Boolean));
@@ -1341,7 +1513,7 @@ export async function buildProcPropsDocs(SRC, { anchors, poses } = {}) {
     spec.extras = { ...(spec.extras ?? {}), held: heldMeta[name] };
   }
 
-  const gallery = await checkGallery(gb, caveA, problems, notes);
+  const gallery = checkGallery(gb, caveA, problems, D);
   checkKeep(anchors.keep, problems);
 
   const build = async (specs, label) => {
@@ -1375,7 +1547,7 @@ export async function buildProcPropsDocs(SRC, { anchors, poses } = {}) {
   const keep = await build(keepSpecs, "procprops_keep");
   const exit = await build(exitSpecs, "procprops_exit");
   if (problems.length) throw new Error(`procprops:\n  ${problems.join("\n  ")}`);
-  return { keep, exit, gallery, lever, wrists, notes };
+  return { keep, exit, gallery, lever, wrists, notes, field };
 }
 
 function countTris(s) {
@@ -1383,9 +1555,10 @@ function countTris(s) {
 }
 
 /** Build and emit procprops/keep and procprops/exit; returns their metadata (for props/meta). */
-export async function buildProcProps({ emit, SRC, anchors }) {
-  const r = await buildProcPropsDocs(SRC, { anchors });
-  const result = { notes: r.notes, gallery: r.gallery, wrists: r.wrists };
+export async function buildProcProps({ emit, SRC, anchors, caveMeshA }) {
+  if (!caveMeshA) throw new Error("procprops: needs the shipped cave/mesh_a (to check tools/gen/cave.mjs's field against it)");
+  const r = await buildProcPropsDocs(SRC, { anchors, caveMeshA });
+  const result = { notes: r.notes, gallery: r.gallery, wrists: r.wrists, field: r.field, lever: { gap: r.lever.gap, lateral: r.lever.lateral, bodyClear: r.lever.bodyClear } };
   for (const [k, part] of [["keep", r.keep], ["exit", r.exit]]) {
     await compressTextures(part.doc, 1024, 512, 256);
     const glb = await finalize(part.doc, { keepLeaves: true });
@@ -1407,6 +1580,8 @@ export async function buildProcProps({ emit, SRC, anchors }) {
   }
   for (const n of r.notes) console.log(`  note: ${n}`);
   console.log(`  cuffs: wrist fill of the rope coil's inner section ${JSON.stringify(r.wrists)}`);
-  if (r.gallery) console.log(`  gallery: rock clearances ${JSON.stringify(r.gallery.minClear)}, deck steps ${JSON.stringify(r.gallery.steps)}; lever hand gap ${r.lever.gap} m`);
+  console.log(`  cave field = shipped cave: ${JSON.stringify(r.field)}`);
+  console.log(`  gallery: rock clearances ${JSON.stringify(r.gallery.minClear)}, deck steps ${JSON.stringify(r.gallery.steps)}, slab half-width ${r.gallery.slabHalfWidth}`);
+  console.log(`  lever: hand gap ${r.lever.gap} m, hand x off the plane ${r.lever.lateral.min}…${r.lever.lateral.max} m, body clearance ${JSON.stringify(r.lever.bodyClear)}`);
   return result;
 }

@@ -109,14 +109,15 @@ try {
   const chapter = () => page.evaluate(() => window.__game?.stage?.chapter?.id ?? null);
   await page.waitForFunction(() => window.__game?.stage?.chapter?.id === "muster", null, { timeout: 900000 });
   check("offline: ride plays through to the town", true, "");
-  for (const next of ["execution", "dragon"]) {
+  for (const next of ["execution", "dragon", "keep"]) {
     await page.waitForTimeout(3000);
     await page.evaluate(() => { void window.__game.stage.skipChapter(); });
     await page.waitForFunction((n) => window.__game?.stage?.chapter?.id === n, next, { timeout: 300000 });
     check(`offline: ${next} starts`, true, String(await chapter()));
   }
   await page.waitForTimeout(3000);
-  await page.evaluate(() => { void window.__game.stage.skipChapter(); });
+  // (the keep's choice at the gate can't be skipped from the menu: forced, as a test)
+  await page.evaluate(() => { void window.__game.stage.skipChapter(undefined, true); });
   await page.waitForSelector("#endcard", { timeout: 120000 });
   check("offline: plays through to the end card", true, "");
   await page.screenshot({ path: "/tmp/claude-0/shots/e2e-end.png" });

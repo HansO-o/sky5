@@ -583,10 +583,34 @@
    "authors": [
     "Wildfire Games"
    ],
-   "source": "https://play0ad.com",
+   "source": "http://www.wildfiregames.com/",
    "license": "CC BY-SA 3.0",
    "licenseUrl": "https://creativecommons.org/licenses/by-sa/3.0/",
-   "note": "经 ZeroAD-Godot 项目转换为 glTF；本作已修改（贴图缩小并转为 KTX2、调整材质、动画片段重命名），修改版同样以 CC BY-SA 3.0 授权"
+   "note": "出自 Wildfire Games 的游戏 0 A.D.（https://play0ad.com）；经 ZeroAD-Godot 项目转换为 glTF；本作已修改（贴图缩小并转为 KTX2、调整材质、动画片段重命名），修改版同样以 CC BY-SA 3.0 授权"
+  },
+  {
+   "id": "quaternius-easy-enemies",
+   "kind": "model",
+   "name": "Easy Enemy Pack（蜘蛛模型与动画）",
+   "authors": [
+    "Quaternius"
+   ],
+   "note": "已修改：FBX 转换为 glTF，统一缩放，材质改为不透明并调色（眼睛自发光），动画片段重命名",
+   "source": "https://quaternius.com/packs/easyenemy.html",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "0ad-wolf",
+   "kind": "model",
+   "name": "Wolf model, textures and animations (0 A.D.)",
+   "authors": [
+    "Wildfire Games"
+   ],
+   "source": "http://www.wildfiregames.com/",
+   "license": "CC BY-SA 3.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by-sa/3.0/",
+   "note": "出自 Wildfire Games 的游戏 0 A.D.（https://play0ad.com）；经 ZeroAD-Godot 项目转换为 glTF；本作的巨狼是其修改版（合并动画片段并重新计时、截取卧倒与起身片段、只保留骨骼旋转、贴合地面、放大 1.5 倍、贴图缩小并转为 KTX2），修改版同样以 CC BY-SA 3.0 授权（相同方式共享）"
   },
   {
    "id": "music-frost",
@@ -699,7 +723,7 @@
    "source": "https://incompetech.com",
    "license": "CC BY 4.0",
    "licenseUrl": "https://creativecommons.org/licenses/by/4.0/",
-   "note": "已修改：转码为 Opus/AAC，响度归一化，首尾淡入淡出"
+   "note": "\"Gathering Darkness\" Kevin MacLeod (incompetech.com) Licensed under Creative Commons: By Attribution 4.0 https://creativecommons.org/licenses/by/4.0/；已修改：转码为 Opus/AAC，响度归一化，首尾淡入淡出"
   },
   {
    "id": "fs-546391",
@@ -874,6 +898,844 @@
     "Takkyi"
    ],
    "source": "https://freesound.org/s/546871/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "music-medieval-battle",
+   "kind": "music",
+   "name": "Medieval: Battle",
+   "authors": [
+    "RandomMind"
+   ],
+   "source": "https://opengameart.org/content/medieval-battle",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "music-medieval-exploration",
+   "kind": "music",
+   "name": "Medieval: Exploration",
+   "authors": [
+    "RandomMind"
+   ],
+   "source": "https://opengameart.org/content/medieval-exploration",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "music-descent",
+   "kind": "music",
+   "name": "Descent",
+   "authors": [
+    "cinameng (James Gargette)"
+   ],
+   "source": "https://opengameart.org/content/descent",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "music-strength-titans",
+   "kind": "music",
+   "name": "Strength of the Titans",
+   "authors": [
+    "Kevin MacLeod (incompetech.com)"
+   ],
+   "source": "https://incompetech.com",
+   "license": "CC BY 4.0",
+   "licenseUrl": "https://creativecommons.org/licenses/by/4.0/",
+   "note": "\"Strength of the Titans\" Kevin MacLeod (incompetech.com) Licensed under Creative Commons: By Attribution 4.0 https://creativecommons.org/licenses/by/4.0/；已修改：转码为 Opus/AAC，响度归一化，去掉开头静音，结尾淡出"
+  },
+  {
+   "id": "fs-840716",
+   "kind": "sound",
+   "name": "Sword Swing 1",
+   "authors": [
+    "Nomagician"
+   ],
+   "source": "https://freesound.org/s/840716/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-840717",
+   "kind": "sound",
+   "name": "Sword Swing 3",
+   "authors": [
+    "Nomagician"
+   ],
+   "source": "https://freesound.org/s/840717/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-840715",
+   "kind": "sound",
+   "name": "Sword Swing 2",
+   "authors": [
+    "Nomagician"
+   ],
+   "source": "https://freesound.org/s/840715/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-367182",
+   "kind": "sound",
+   "name": "swing.mp3",
+   "authors": [
+    "GaussTheWizard"
+   ],
+   "source": "https://freesound.org/s/367182/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-547042",
+   "kind": "sound",
+   "name": "Hit Impact Sword 3",
+   "authors": [
+    "CogFireStudios"
+   ],
+   "source": "https://freesound.org/s/547042/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-547036",
+   "kind": "sound",
+   "name": "Hit Impact Sword 2",
+   "authors": [
+    "CogFireStudios"
+   ],
+   "source": "https://freesound.org/s/547036/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-547035",
+   "kind": "sound",
+   "name": "Hit Impact Sword",
+   "authors": [
+    "CogFireStudios"
+   ],
+   "source": "https://freesound.org/s/547035/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-522091",
+   "kind": "sound",
+   "name": "Pound of Flesh 1",
+   "authors": [
+    "magnuswaker"
+   ],
+   "source": "https://freesound.org/s/522091/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-452554",
+   "kind": "sound",
+   "name": "axe chop into wood little debris.wav",
+   "authors": [
+    "kyles"
+   ],
+   "source": "https://freesound.org/s/452554/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-616493",
+   "kind": "sound",
+   "name": "block3.wav",
+   "authors": [
+    "Empiremonkey"
+   ],
+   "source": "https://freesound.org/s/616493/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-616495",
+   "kind": "sound",
+   "name": "block1.wav",
+   "authors": [
+    "Empiremonkey"
+   ],
+   "source": "https://freesound.org/s/616495/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-616494",
+   "kind": "sound",
+   "name": "block2.wav",
+   "authors": [
+    "Empiremonkey"
+   ],
+   "source": "https://freesound.org/s/616494/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-326867",
+   "kind": "sound",
+   "name": "Sword_Clash (9).wav",
+   "authors": [
+    "JohnBuhr"
+   ],
+   "source": "https://freesound.org/s/326867/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-636102",
+   "kind": "sound",
+   "name": "SHIELDHIT2.wav",
+   "authors": [
+    "fonografico"
+   ],
+   "source": "https://freesound.org/s/636102/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-372877",
+   "kind": "sound",
+   "name": "Iron-Wood Slam",
+   "authors": [
+    "Hakren"
+   ],
+   "source": "https://freesound.org/s/372877/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-577619",
+   "kind": "sound",
+   "name": "Sword Drawing 1.wav",
+   "authors": [
+    "paulfabb"
+   ],
+   "source": "https://freesound.org/s/577619/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-547203",
+   "kind": "sound",
+   "name": "Voice_AdultMale_PainGrunts_01.wav",
+   "authors": [
+    "MrFossy"
+   ],
+   "source": "https://freesound.org/s/547203/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-547202",
+   "kind": "sound",
+   "name": "Voice_AdultMale_PainGrunts_02.wav",
+   "authors": [
+    "MrFossy"
+   ],
+   "source": "https://freesound.org/s/547202/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-547201",
+   "kind": "sound",
+   "name": "Voice_AdultMale_PainGrunts_03.wav",
+   "authors": [
+    "MrFossy"
+   ],
+   "source": "https://freesound.org/s/547201/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-547200",
+   "kind": "sound",
+   "name": "Voice_AdultMale_PainGrunts_04.wav",
+   "authors": [
+    "MrFossy"
+   ],
+   "source": "https://freesound.org/s/547200/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-547182",
+   "kind": "sound",
+   "name": "Voice_AdultMale_DeathScream_03.wav",
+   "authors": [
+    "MrFossy"
+   ],
+   "source": "https://freesound.org/s/547182/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-547181",
+   "kind": "sound",
+   "name": "Voice_AdultMale_DeathScream_04.wav",
+   "authors": [
+    "MrFossy"
+   ],
+   "source": "https://freesound.org/s/547181/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-547189",
+   "kind": "sound",
+   "name": "Voice_AdultMale_DeathScream_10.wav",
+   "authors": [
+    "MrFossy"
+   ],
+   "source": "https://freesound.org/s/547189/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-474651",
+   "kind": "sound",
+   "name": "Voice_Male_Attack_Mono.wav",
+   "authors": [
+    "Nox_Sound"
+   ],
+   "source": "https://freesound.org/s/474651/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-504626",
+   "kind": "sound",
+   "name": "BODY FALL - V HVY - DIRT",
+   "authors": [
+    "leonelmail"
+   ],
+   "source": "https://freesound.org/s/504626/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-517122",
+   "kind": "sound",
+   "name": "Footsteps Stone (2).wav",
+   "authors": [
+    "Wdomino"
+   ],
+   "source": "https://freesound.org/s/517122/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-517121",
+   "kind": "sound",
+   "name": "Footsteps Stone (3).wav",
+   "authors": [
+    "Wdomino"
+   ],
+   "source": "https://freesound.org/s/517121/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-517125",
+   "kind": "sound",
+   "name": "Footsteps Stone (5).wav",
+   "authors": [
+    "Wdomino"
+   ],
+   "source": "https://freesound.org/s/517125/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-517137",
+   "kind": "sound",
+   "name": "Footsteps Stone (6).wav",
+   "authors": [
+    "Wdomino"
+   ],
+   "source": "https://freesound.org/s/517137/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-517136",
+   "kind": "sound",
+   "name": "Footsteps Stone (7).wav",
+   "authors": [
+    "Wdomino"
+   ],
+   "source": "https://freesound.org/s/517136/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-517135",
+   "kind": "sound",
+   "name": "Footsteps Stone (8).wav",
+   "authors": [
+    "Wdomino"
+   ],
+   "source": "https://freesound.org/s/517135/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-517134",
+   "kind": "sound",
+   "name": "Footsteps Stone (9).wav",
+   "authors": [
+    "Wdomino"
+   ],
+   "source": "https://freesound.org/s/517134/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-517117",
+   "kind": "sound",
+   "name": "Footsteps Stone (10).wav",
+   "authors": [
+    "Wdomino"
+   ],
+   "source": "https://freesound.org/s/517117/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-517124",
+   "kind": "sound",
+   "name": "Footsteps Stone (11).wav",
+   "authors": [
+    "Wdomino"
+   ],
+   "source": "https://freesound.org/s/517124/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-517123",
+   "kind": "sound",
+   "name": "Footsteps Stone (12).wav",
+   "authors": [
+    "Wdomino"
+   ],
+   "source": "https://freesound.org/s/517123/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-384881",
+   "kind": "sound",
+   "name": "Knight Left Footstep on Gravel 2 (With Chainmail)",
+   "authors": [
+    "Ali_6868"
+   ],
+   "source": "https://freesound.org/s/384881/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-384882",
+   "kind": "sound",
+   "name": "Knight Left Footstep on Gravel 3 (With Chainmail)",
+   "authors": [
+    "Ali_6868"
+   ],
+   "source": "https://freesound.org/s/384882/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-384887",
+   "kind": "sound",
+   "name": "Knight Right Footstep on Gravel 1 (With Chainmail)",
+   "authors": [
+    "Ali_6868"
+   ],
+   "source": "https://freesound.org/s/384887/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-452608",
+   "kind": "sound",
+   "name": "door wood old heavy cellar door with metal latch in basement open nearby roomy various.wav",
+   "authors": [
+    "kyles"
+   ],
+   "source": "https://freesound.org/s/452608/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-734641",
+   "kind": "sound",
+   "name": "Lock - strong door",
+   "authors": [
+    "Vrymaa"
+   ],
+   "source": "https://freesound.org/s/734641/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-159552",
+   "kind": "sound",
+   "name": "Door Gate Slam In The Night With Courtyard Echo 96kHz.flac",
+   "authors": [
+    "qubodup"
+   ],
+   "source": "https://freesound.org/s/159552/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-207137",
+   "kind": "sound",
+   "name": "MetalGate.wav",
+   "authors": [
+    "ahill86"
+   ],
+   "source": "https://freesound.org/s/207137/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-771164",
+   "kind": "sound",
+   "name": "Treasure Chest Open",
+   "authors": [
+    "steprock"
+   ],
+   "source": "https://freesound.org/s/771164/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-347174",
+   "kind": "sound",
+   "name": "Coin Pickup Sound V 0.2",
+   "authors": [
+    "Davidsraba"
+   ],
+   "source": "https://freesound.org/s/347174/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-584891",
+   "kind": "sound",
+   "name": "big log on dirt throwing.wav",
+   "authors": [
+    "KrystianPawlowski"
+   ],
+   "source": "https://freesound.org/s/584891/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-381645",
+   "kind": "sound",
+   "name": "RockFall1b.wav",
+   "authors": [
+    "AlanCat"
+   ],
+   "source": "https://freesound.org/s/381645/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-567249",
+   "kind": "sound",
+   "name": "Bricks/Stones/Rocks/Gravel Falling",
+   "authors": [
+    "iwanPlays"
+   ],
+   "source": "https://freesound.org/s/567249/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-506146",
+   "kind": "sound",
+   "name": "lever_chains14.wav",
+   "authors": [
+    "mitchanary"
+   ],
+   "source": "https://freesound.org/s/506146/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-784229",
+   "kind": "sound",
+   "name": "Chain Driven Mechanism",
+   "authors": [
+    "apintofmild"
+   ],
+   "source": "https://freesound.org/s/784229/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-199282",
+   "kind": "sound",
+   "name": "Big Metal Chain",
+   "authors": [
+    "qubodup"
+   ],
+   "source": "https://freesound.org/s/199282/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+   "note": "自 2026-07-30 起为 CC0（见原页面）；是 miguelstar2 的 CC0 录音 DR05___0205_sandau_fähre 的放慢片段"
+  },
+  {
+   "id": "fs-637523",
+   "kind": "sound",
+   "name": "fire small campfire crackling short +air tone.flac",
+   "authors": [
+    "kyles"
+   ],
+   "source": "https://freesound.org/s/637523/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-530161",
+   "kind": "sound",
+   "name": "Dungeon Air",
+   "authors": [
+    "Flamiffer"
+   ],
+   "source": "https://freesound.org/s/530161/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-553080",
+   "kind": "sound",
+   "name": "Ambiance_Atmosphere_Cave_Loop_Stereo.ogg",
+   "authors": [
+    "Nox_Sound"
+   ],
+   "source": "https://freesound.org/s/553080/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-609161",
+   "kind": "sound",
+   "name": "Many drops of water in a big cave (Karstic system Ojo Guareña, Burgos, Spain)",
+   "authors": [
+    "nomadas"
+   ],
+   "source": "https://freesound.org/s/609161/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-552485",
+   "kind": "sound",
+   "name": "Water Flowing into Underground Sinkhole",
+   "authors": [
+    "hinchinbrook"
+   ],
+   "source": "https://freesound.org/s/552485/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-852822",
+   "kind": "sound",
+   "name": "AMBUndr_Subterranean Howling Wind Loop_KOLBYR_FREE SOUNDS",
+   "authors": [
+    "KolbyRFX"
+   ],
+   "source": "https://freesound.org/s/852822/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-459476",
+   "kind": "sound",
+   "name": "Hissing Cockroach",
+   "authors": [
+    "Spoxe"
+   ],
+   "source": "https://freesound.org/s/459476/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-758900",
+   "kind": "sound",
+   "name": "Insects - Madagascar Hissing Cockroach, Short Hiss",
+   "authors": [
+    "TheKingOfGeeks360"
+   ],
+   "source": "https://freesound.org/s/758900/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-443723",
+   "kind": "sound",
+   "name": "10. Pasos de araña Spider steps.wav",
+   "authors": [
+    "cabusta9"
+   ],
+   "source": "https://freesound.org/s/443723/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-202108",
+   "kind": "sound",
+   "name": "Spider Chattering.wav",
+   "authors": [
+    "spookymodem"
+   ],
+   "source": "https://freesound.org/s/202108/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-672710",
+   "kind": "sound",
+   "name": "Spider Attack",
+   "authors": [
+    "kongg_"
+   ],
+   "source": "https://freesound.org/s/672710/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-672712",
+   "kind": "sound",
+   "name": "Spider Attack 2",
+   "authors": [
+    "kongg_"
+   ],
+   "source": "https://freesound.org/s/672712/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-559621",
+   "kind": "sound",
+   "name": "monster_sound_medium_death.wav",
+   "authors": [
+    "Leadstarson"
+   ],
+   "source": "https://freesound.org/s/559621/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-515619",
+   "kind": "sound",
+   "name": "Splat/Squish 2",
+   "authors": [
+    "mrickey13"
+   ],
+   "source": "https://freesound.org/s/515619/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-659428",
+   "kind": "sound",
+   "name": "Stick though spider web.wav",
+   "authors": [
+    "Sadiquecat"
+   ],
+   "source": "https://freesound.org/s/659428/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-122183",
+   "kind": "sound",
+   "name": "Dog Growling Snarling Grumbling",
+   "authors": [
+    "qubodup"
+   ],
+   "source": "https://freesound.org/s/122183/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-434049",
+   "kind": "sound",
+   "name": "dog growls.wav",
+   "authors": [
+    "klangfabrik"
+   ],
+   "source": "https://freesound.org/s/434049/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-342204",
+   "kind": "sound",
+   "name": "Beast Snarling",
+   "authors": [
+    "Christopherderp"
+   ],
+   "source": "https://freesound.org/s/342204/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-380156",
+   "kind": "sound",
+   "name": "Howl_Echo.wav",
+   "authors": [
+    "taure"
+   ],
+   "source": "https://freesound.org/s/380156/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-734841",
+   "kind": "sound",
+   "name": "dyingBeast",
+   "authors": [
+    "QuantumFellow"
+   ],
+   "source": "https://freesound.org/s/734841/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-146765",
+   "kind": "sound",
+   "name": "Heart Beat",
+   "authors": [
+    "thenudo"
+   ],
+   "source": "https://freesound.org/s/146765/",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "fs-534336",
+   "kind": "sound",
+   "name": "Drink_Gulp.mp3",
+   "authors": [
+    "Defaultv"
+   ],
+   "source": "https://freesound.org/s/534336/",
    "license": "CC0 1.0",
    "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
   },

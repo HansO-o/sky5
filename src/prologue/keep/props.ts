@@ -1,17 +1,16 @@
-// The keep's props behind one module (design §4.2 anchors, §10.2): chests with lids, weapon racks
-// and their pickups, the storeroom shelf with its potions, the key ring, the prisoner cage with its
-// door, wall torches, the beam and bar that seal the doors, and the rooms' dressing (braziers,
-// tables, beds, barrels, the strap chair, the camp's fire pit). Each uses the content pipeline's
-// model when the manifest has it (`kit/<Model>`, `ph/<id>`, `procprops/<name>`, the ids the keep
-// anchors suggest) and a procedural stand-in made of boxes and cylinders in the interior's own
-// materials otherwise, so swapping in the real props later happens here only.
-import type { AnimationGroup } from "@babylonjs/core/Animations/animationGroup";
-import type { AssetContainer } from "@babylonjs/core/assetContainer";
+// The keep's props behind one module (design §4.2 anchors, §10.2, Appendix "Props"): chests with
+// lids, weapon stands and their pickups, the storeroom shelf with its potions, the key ring, the
+// prisoner cage with its door, the wall sconces, the beam and bar that seal the doors, the gallery's
+// drawbridge set piece, and the rooms' dressing (braziers, tables, beds, barrels, the strap chair,
+// shackles, straw, the drain grate, the camp's fire pit). Each uses the content pipeline's model when
+// the manifest has it (resolved through `props/meta`: `kit/fpm`, `procprops/keep`, `ph/<id>`) and a
+// procedural stand-in made of boxes and cylinders in the interior's own materials otherwise, so the
+// chapters see one API either way.
+import { VertexBuffer } from "@babylonjs/core/Buffers/buffer";
 import { Color3 } from "@babylonjs/core/Maths/math.color";
 import { Quaternion, Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { PBRMaterial } from "@babylonjs/core/Materials/PBR/pbrMaterial";
 import type { Material } from "@babylonjs/core/Materials/material";
-import { VertexBuffer } from "@babylonjs/core/Buffers/buffer";
 import { CreateBox } from "@babylonjs/core/Meshes/Builders/boxBuilder";
 import { CreateCylinder } from "@babylonjs/core/Meshes/Builders/cylinderBuilder";
 import { CreateTorus } from "@babylonjs/core/Meshes/Builders/torusBuilder";
@@ -20,15 +19,14 @@ import type { AbstractMesh } from "@babylonjs/core/Meshes/abstractMesh";
 import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import type { Node } from "@babylonjs/core/node";
 import type { Scene } from "@babylonjs/core/scene";
-import { assets } from "../../core/assets/AssetClient";
-import { loadGLB } from "../../game/loaders";
 import { applyLightBudget } from "../../engine/render/lightBudget";
 import { worldGeometry } from "../../engine/physics/meshGeometry";
 import type { BodyId, Physics } from "../../engine/physics/Physics";
 import { HingedDoor } from "../../engine/world/HingedDoor";
 import { loadItem, type ItemId } from "../gear";
 import type { World } from "../World";
-import type { KeepAnchor } from "./anchors";
+import type { KeepAnchor, V3 } from "./anchors";
+import { colliders, placeNode, spawn, v3, type Placement, type PropAssets, type Spawned } from "./propAssets";
 
 /** A visibility set of the underground ("gf", "stair", "bs", "caveA", …). */
 export type PropSet = string;
@@ -37,6 +35,8 @@ export type PropSet = string;
 export interface PropHost {
   readonly world: World;
   readonly physics: Physics;
+  /** the keep frame's runtime origin (the pipeline's keep placements use y 37.73) */
+  readonly origin: Vector3;
   readonly materials: Map<string, Material>;
   readonly keep: { anchors: Record<string, KeepAnchor> };
   readonly cave: { anchors: Record<string, { pos: readonly [number, number, number]; yaw?: number }> } | null;
@@ -61,22 +61,23 @@ export interface PropBase {
 /** A chest (the confiscation chest, the armour locker, the footlocker, J's chest). */
 export interface ChestProp extends PropBase {
   readonly opened: boolean;
-  /** lift the lid (the real model plays `Chest_Open`); resolves once open */
+  /** lift the lid; resolves once open */
   open(seconds?: number): Promise<void>;
   /** open or shut at once (a resumed checkpoint) */
   set(open: boolean): void;
   /** where something lies inside (world) */
   readonly inside: Vector3;
-  /** put an item's node in the chest (the armour bundle, the letter); `take` removes it */
+  /** an item's node in the chest (the armour bundle, the letter); `take` removes it */
   content: TransformNode | null;
   take(): void;
 }
 
-/** One thing on a rack. */
+/** One thing on a weapon stand. */
 export interface RackSlot {
+  /** "sword", "axe", "shield", or "father_axe" (Brun's, on the rebel stand) */
   readonly id: string;
   readonly kind: ItemId;
-  /** where it hangs (world) */
+  /** where it stands (world) */
   readonly pos: Vector3;
   node: TransformNode | null;
   readonly taken: boolean;
@@ -85,10 +86,10 @@ export interface RackSlot {
 /** A weapon stand with its weapons (the imperial sword and kite shield; Brun's father's axe, a sword and an axe). */
 export interface RackProp extends PropBase {
   readonly slots: readonly RackSlot[];
-  /** loaded once the weapon models are in */
+  /** resolves once the weapons are on it */
   readonly ready: Promise<void>;
   slot(id: string): RackSlot | null;
-  /** take a weapon off the rack (it disappears from it) */
+  /** take a weapon off the stand (it disappears from it) */
   take(id: string): void;
   has(id: string): boolean;
 }
@@ -103,7 +104,7 @@ export interface ShelfProp extends PropBase {
   setLeft(n: number): void;
 }
 
-/** A small thing lying somewhere (a potion in a cell, a key). */
+/** A small thing lying somewhere (a potion in a cell). */
 export interface PickupProp extends PropBase {
   readonly taken: boolean;
   take(): void;
@@ -117,6 +118,29 @@ export interface CageProp extends PropBase {
   open(seconds?: number): Promise<boolean>;
 }
 
+export type BridgeState = "raised" | "lowered" | "broken";
+
+/**
+ * The gallery's drawbridge set piece (deck, chains, winch, lever, slab): posed per state with its
+ * deck collider (`bridge_deck_<state>`). The chapter animates it through the nodes it exposes.
+ */
+export interface GalleryBridge {
+  readonly state: BridgeState;
+  /** pose the deck, chains and deck collider for `state`; the lever with it (at rest when raised, pulled otherwise) */
+  set(state: BridgeState): void;
+  /** the lever's handle at `t` of its full pull (0 rest … 1 pulled; K11 drives it along the clip's curve) */
+  pull(t: number): void;
+  /** the deck's pivot (RotationAxis(+X, angle)), the lever's pivot (+X, pulled 0.6457), the winch drum */
+  readonly hinge: TransformNode | null;
+  readonly lever: TransformNode | null;
+  readonly drum: TransformNode | null;
+  /** the slab over the chasm (hidden until K12) and the north planks that break away */
+  readonly slab: TransformNode | null;
+  readonly planks: readonly TransformNode[];
+  /** the deck angle of each state (rad) */
+  readonly angles: Readonly<Record<BridgeState, number>>;
+}
+
 /** A torch that can be carried (the companion's from K9), with its flame point. */
 export interface CarriedTorch {
   readonly root: TransformNode;
@@ -125,23 +149,13 @@ export interface CarriedTorch {
   dispose(): void;
 }
 
-const KIT_ASSETS = ["kit/fpm", "kit/props", "kit/megakit", "props/kit"];
+/** The lever's full pull about +X from its rest pose (rad; Appendix "Props": `extras.lever`, pulling adds up to 0.6457). */
+const LEVER_PULL = 0.6457;
+
 /** The flat "baked" shade stand-ins in the interior's materials get (its mean vertex luminance is about 0.3). */
 const BAKED_SHADE = 0.38;
-
-/** Manifest sources for an anchor's suggested prop (`kit/X`, `ph/x`, `procprops/x`), best first. */
-export function propSources(suggested: string): string[] {
-  const [ns, name] = suggested.split("/");
-  if (!name) return [];
-  if (ns === "kit") return [`kit/${name}`, ...KIT_ASSETS.map((k) => `${k}#${name}`)];
-  if (ns === "procprops") return [`procprops/${name}`, `procprops#${name}`, `props/procprops#${name}`];
-  return [suggested];
-}
-
-/** The first source the manifest has (null: build the stand-in). */
-export function shippedSource(suggested: string): string | null {
-  return propSources(suggested).find((s) => assets.has(s.split("#")[0])) ?? null;
-}
+/** design 37.73: the keep base the pipeline's world placements were computed with */
+const KEEP_BASE = 37.73;
 
 /** Plain materials for what the interior has none of (leather, glass, stone, cloth, rope, coals). */
 interface Mats {
@@ -157,7 +171,7 @@ interface Mats {
   paper: Material;
 }
 
-function plain(scene: Scene, name: string, c: [number, number, number], o: { metal?: number; rough?: number; emissive?: [number, number, number]; alpha?: number } = {}) {
+function plain(scene: Scene, name: string, c: [number, number, number], o: { metal?: number; rough?: number; emissive?: [number, number, number] } = {}) {
   const m = new PBRMaterial(`keepprop_${name}`, scene);
   m.albedoColor = new Color3(c[0], c[1], c[2]);
   m.metallic = o.metal ?? 0;
@@ -167,11 +181,18 @@ function plain(scene: Scene, name: string, c: [number, number, number], o: { met
   return m;
 }
 
+/** A node shown while wanted and while its set is shown. */
+interface Toggle {
+  want(on: boolean): void;
+  setEnabled(on: boolean): void;
+}
+
 /**
- * The keep's props, made from the anchors when the underground is built (`underground.props`), each
- * hidden and shown with its room's level. Chapters work them: `chest(name).open()`,
- * `rack(name).take("sword")`, `shelf.take()`, `cage.open()`, `beam(on)`, `gateBar(on)`, and get
- * fresh ones made with `keyring()`, `key()`, `carriedTorch()`.
+ * The keep's props, made from the anchors and the pipeline's placements when the underground is
+ * built (`underground.props`), each hidden and shown with its room's level. Chapters work them:
+ * `chest(name).open()`, `rack(name).take("sword")`, `shelf.take()`, `cage.open()`, `bridge.set()`,
+ * `beam(on)`, `gateBar(on)`, and get fresh items from `keyring()`, `key()`, `carriedTorch()`,
+ * `armour()`, `letter()`, `warrant()`.
  */
 export class KeepProps {
   readonly chests = new Map<string, ChestProp>();
@@ -179,6 +200,9 @@ export class KeepProps {
   readonly pickups = new Map<string, PickupProp>();
   shelf: ShelfProp | null = null;
   cage: CageProp | null = null;
+  bridge: GalleryBridge | null = null;
+  /** the wall sconces' torches by light anchor (K9: the companion takes one off its bracket) */
+  readonly sconces = new Map<string, { root: TransformNode; torch: TransformNode | null }>();
   private mats: Mats;
   /** the interior's own materials among `mats` (they expect its baked AO in the vertex colours) */
   private baked = new Set<Material>();
@@ -187,12 +211,17 @@ export class KeepProps {
   private doors: HingedDoor[] = [];
   private beamNode: Toggle | null = null;
   private barNode: Toggle | null = null;
-  private containers = new Map<string, Promise<AssetContainer | null>>();
   private disposed = false;
+  /** the keep placements' height correction (runtime keep base − 37.73) */
+  private dy: number;
 
-  constructor(private host: PropHost) {
+  constructor(
+    private host: PropHost,
+    private pa: PropAssets = { meta: null, containers: new Map() },
+  ) {
     const s = host.world.scene;
     const m = host.materials;
+    this.dy = host.origin.y - KEEP_BASE;
     this.mats = {
       wood: m.get("ki_wood") ?? plain(s, "wood", [0.24, 0.16, 0.1]),
       planks: m.get("ki_planks") ?? plain(s, "planks", [0.42, 0.33, 0.22]),
@@ -210,6 +239,11 @@ export class KeepProps {
       if (mat) this.baked.add(mat);
     }
     this.build();
+  }
+
+  /** The pipeline's placements (empty without `props/meta`). */
+  private get pl() {
+    return this.pa.meta?.placements ?? {};
   }
 
   // ---------------------------------------------------------------- lookups
@@ -236,10 +270,27 @@ export class KeepProps {
     this.barNode?.want(on);
   }
 
+  /** The attach recipe the pipeline measured for a held item (`kit/fpm#Sword_Bronze`, `procprops/keep#torch`, …). */
+  held(source: string) {
+    return this.pa.meta?.held[source] ?? null;
+  }
+
   // ---------------------------------------------------------------- factories for the chapter
 
-  /** A key ring (the leader's, handed to Kaja): a ring and three keys, about 12 cm across. */
+  /** A copy of a pipeline node (`asset#node`) as a free item, or null without it. */
+  private item(source: string, name: string): TransformNode | null {
+    const sp = spawn(this.pa, source, null, this.host.world.scene);
+    if (!sp) return null;
+    const root = new TransformNode(name, this.host.world.scene);
+    sp.node.parent = root;
+    this.nodes.push(root);
+    return root;
+  }
+
+  /** The key ring (the leader's, handed to Kaja): a ring and three keys. */
   keyring(): TransformNode {
+    const real = this.item("procprops/keep#key_ring", "keyring");
+    if (real) return real;
     const s = this.host.world.scene;
     const root = new TransformNode("keyring", s);
     const ring = CreateTorus("keyring_ring", { diameter: 0.08, thickness: 0.008, tessellation: 16 }, s);
@@ -252,21 +303,30 @@ export class KeepProps {
       k.position.set(Math.cos(i * 0.6 - 0.6) * 0.04, -0.05, Math.sin(i * 0.6 - 0.6) * 0.04);
       k.rotation.z = (i - 1) * 0.35;
     }
-    this.track(root);
+    this.nodes.push(root);
     return root;
   }
 
   /** One iron key (the cage key the interrogator throws). */
   key(): TransformNode {
+    const real = this.item("kit/fpm#Key_Metal", "key");
+    if (real) return real;
     const root = new TransformNode("key", this.host.world.scene);
     this.keyMesh("key_mesh").parent = root;
-    this.track(root);
+    this.nodes.push(root);
     return root;
   }
 
-  /** A wall torch to carry (`hand_l`, `Idle_Torch_Loop`): a stick with a pitch-wrapped head; the flame sits at `flame`. */
+  /** A torch to carry (`hand_l`, `Idle_Torch_Loop`; recipe `held("procprops/keep#torch")`); the flame sits at `flame`. */
   carriedTorch(): CarriedTorch {
     const s = this.host.world.scene;
+    const real = spawn(this.pa, "procprops/keep#torch", null, s);
+    if (real) {
+      const root = new TransformNode("carried_torch", s);
+      real.node.parent = root;
+      const flame = real.find("torch_flame") ?? root;
+      return { root, flame, dispose: () => root.dispose() };
+    }
     const root = new TransformNode("carried_torch", s);
     const stick = CreateCylinder("torch_stick", { height: 0.55, diameterTop: 0.035, diameterBottom: 0.028, tessellation: 7 }, s);
     stick.material = this.mats.wood;
@@ -282,12 +342,36 @@ export class KeepProps {
     const flame = new TransformNode("torch_flame", s);
     flame.parent = root;
     flame.position.y = 0.55;
-    this.host.world.addShadowCasters([mesh]);
-    return {
-      root,
-      flame,
-      dispose: () => root.dispose(),
-    };
+    return { root, flame, dispose: () => root.dispose() };
+  }
+
+  /** A folded leather armour bundle (the chest's armour: `chest.content = props.armour()`). */
+  armour(): TransformNode {
+    const root = new TransformNode("armour_bundle", this.host.world.scene);
+    const M = this.mats;
+    this.merge(root, "armour_mesh", [this.box("armour_fold", 0.55, 0.1, 0.36, 0, 0.05, 0, M.leather), this.box("armour_belt", 0.6, 0.025, 0.05, 0, 0.1, 0.06, M.iron), this.box("armour_strap", 0.04, 0.02, 0.4, 0.18, 0.105, 0, M.leather)]);
+    this.nodes.push(root);
+    return root;
+  }
+
+  /** A sealed letter (the barracks footlocker's, the courier's). */
+  letter(): TransformNode {
+    const real = this.item("procprops/keep#paper_letter", "letter");
+    if (real) return real;
+    const root = new TransformNode("letter", this.host.world.scene);
+    this.merge(root, "letter_mesh", [this.box("letter_sheet", 0.2, 0.01, 0.14, 0, 0.005, 0, this.mats.paper)]);
+    this.nodes.push(root);
+    return root;
+  }
+
+  /** The blank warrant Ivo shows (K6 imperial, `hand_l`; recipe `held("procprops/keep#paper_warrant")`). */
+  warrant(): TransformNode {
+    const real = this.item("procprops/keep#paper_warrant", "warrant");
+    if (real) return real;
+    const root = new TransformNode("warrant", this.host.world.scene);
+    this.merge(root, "warrant_mesh", [this.box("warrant_sheet", 0.21, 0.3, 0.004, 0, 0, 0, this.mats.paper)]);
+    this.nodes.push(root);
+    return root;
   }
 
   // ---------------------------------------------------------------- building
@@ -302,39 +386,41 @@ export class KeepProps {
         console.warn(`keep prop ${name}`, e);
       }
     }
-    // wall torches under the sconce flames
-    for (const [name, a] of Object.entries(an)) if (a.kind === "light" && a.light === "sconce" && a.wall) this.wallTorch(name);
+    // the wall sconces under the light anchors' flames, and the fixtures the pipeline placed
+    try {
+      this.buildSconces();
+      this.buildFixtures();
+    } catch (e) {
+      console.warn("keep props", e);
+    }
     // the beam behind the postern and the bar across the gate (hidden until a chapter bars them)
     if (an.blocker_postern) this.beamNode = this.postBeam();
     if (an.blocker_gate) this.barNode = this.gateBeam();
-    // the gallery camp's fire pit
-    const camp = this.host.cave?.anchors.camp_fire;
-    if (camp) this.firePit(new Vector3(camp.pos[0], camp.pos[1], camp.pos[2]));
   }
 
   private buildUse(name: string, a: KeepAnchor) {
     const prop = a.prop ?? "";
-    if (/Chest_Wood/.test(prop)) this.chests.set(name, this.makeChest(name));
+    if (/Chest_Wood/.test(prop)) this.chests.set(name, this.makeChest(name, a));
     else if (/WeaponStand/.test(prop)) this.racks.set(name, this.makeRack(name, a.items ?? []));
     else if (/Shelf_Small_Bottles/.test(prop)) this.shelf = this.makeShelf(name, (a.items ?? []).length || 2);
-    else if (/Table_Large/.test(prop)) this.table(name, { records: true });
+    else if (/Table_Large/.test(prop)) this.table(name, a, { records: true });
     else if (name === "use_cell_potion") this.pickups.set(name, this.makePotionPickup(name));
   }
 
   private buildDressing(name: string, a: KeepAnchor) {
     const prop = a.prop ?? "";
-    if (/Cauldron/.test(prop)) this.brazier(name);
-    else if (/wooden_table_02/.test(prop)) this.table(name, { small: true });
-    else if (/Table_Large/.test(prop)) this.table(name, { dice: true });
-    else if (/Bed_Twin1/.test(prop)) this.bed(name);
-    else if (/Stool/.test(prop)) this.stool(name);
+    if (/Cauldron/.test(prop)) this.brazier(name, a);
+    else if (/wooden_table_02/.test(prop)) this.table(name, a, { small: true });
+    else if (/Table_Large/.test(prop)) this.table(name, a, { dice: true });
+    else if (/Bed_Twin1/.test(prop)) this.bed(name, a);
+    else if (/Stool/.test(prop)) this.stool(name, a);
     else if (/procprops\/cage/.test(prop)) this.cage = this.makeCage(name);
     else if (/strap_chair/.test(prop)) this.strapChair(name);
     else if (/shackles/.test(prop)) this.shackles(name);
-    else if (/^ph\//.test(prop)) this.shipped(name, prop);
+    else if (/^ph\//.test(prop)) this.phDressing(name, prop);
   }
 
-  /** A prop root at an anchor: on the floor, facing the anchor's yaw (its front is local −Z). */
+  /** A prop root at an anchor (or a placement): on the floor, facing the yaw (its front is local −Z). */
   private rootAt(name: string, o: { at?: Vector3; yaw?: number; set?: PropSet } = {}) {
     const s = this.host.world.scene;
     const an = this.host.anchor(name);
@@ -350,8 +436,38 @@ export class KeepProps {
     if (set) this.host.addToSet(set, root);
   }
 
-  /** Merge parts (each with its material) into one mesh under `root`, a shadow caster that never moves. */
-  private merge(root: TransformNode, name: string, parts: Mesh[], o: { cast?: boolean } = {}) {
+  /** A keep placement's position at the runtime keep base. */
+  private kp(p: Placement) {
+    return v3(p.at, this.dy);
+  }
+
+  /** The pipeline's model for an anchor's suggestion (`kit/X`, `procprops/x`, `ph/x`) under `root`, or null. */
+  private model(root: TransformNode, suggested: string | undefined): Spawned | null {
+    if (!suggested) return null;
+    const r = this.pa.meta?.resolve[suggested];
+    const source = r ? `${r.asset}#${r.node}` : /^ph\//.test(suggested) ? suggested : null;
+    if (!source) return null;
+    return spawn(this.pa, source, root, this.host.world.scene);
+  }
+
+  /** A box collider from a kit model's bounds (meta), in the root's frame. */
+  private bboxCollider(root: TransformNode, kitName: string, fallback: [number, number, number]) {
+    const b = this.pa.meta?.kit[kitName]?.bbox;
+    if (b) return this.collider(root, (b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2, (b.max[0] - b.min[0]) / 2, (b.max[1] - b.min[1]) / 2, (b.max[2] - b.min[2]) / 2);
+    return this.collider(root, 0, fallback[1], 0, fallback[0], fallback[1], fallback[2]);
+  }
+
+  /** Static bodies for a spawned prop's own colliders (tags from their extras). */
+  private colliders(sp: Spawned, root: TransformNode, only?: (m: AbstractMesh) => boolean) {
+    root.computeWorldMatrix(true);
+    for (const n of root.getDescendants(false)) (n as TransformNode).computeWorldMatrix?.(true);
+    const bodies = colliders(this.host.physics, sp, "prop", only);
+    this.bodies.push(...bodies.values());
+    return bodies;
+  }
+
+  /** Merge parts (each with its material) into one mesh under `root`. */
+  private merge(root: TransformNode, name: string, parts: Mesh[]) {
     if (!parts.length) return null;
     // the interior's materials are lit through its baked ambient occlusion (vertex colours, mean
     // ≈ 0.3): stand-in parts in them get a matching flat shade, the rest white
@@ -363,7 +479,6 @@ export class KeepProps {
     m.parent = root;
     m.isPickable = false;
     m.receiveShadows = true;
-    if (o.cast !== false) this.host.world.env.addShadowCaster(m);
     return m;
   }
 
@@ -420,43 +535,51 @@ export class KeepProps {
     if (gap > 0.01 && gap < 1.2) root.position.addInPlace(back.scale(gap));
   }
 
-  // ---------------------------------------------------------------- the props
+  // ---------------------------------------------------------------- chests
 
-  private makeChest(name: string): ChestProp {
-    const { root, an } = this.rootAt(name);
+  private makeChest(name: string, a: KeepAnchor): ChestProp {
+    const { root } = this.rootAt(name);
+    const sp = this.model(root, a.prop);
+    const h = this.pa.meta?.kit.Chest_Wood?.hinge;
+    const lid = sp && h ? sp.find(h.node) : null;
+    if (sp && lid && h) {
+      const door = new HingedDoor({ hinge: lid, openYaw: h.openAngle, axis: v3(h.axis), bus: this.host.world });
+      this.doors.push(door);
+      const body = this.bboxCollider(root, "Chest_Wood", [0.6, 0.35, 0.35]);
+      const loot = sp.find("Chest_Wood_loot");
+      const at = loot ? loot.position.clone() : new Vector3(0, 0.32, 0);
+      return this.chestHandle(name, root, door, body, at, true);
+    }
+    sp?.dispose();
     const M = this.mats;
     const W = 0.9, H = 0.48, D = 0.55;
-    const real = this.model(root, an.def.prop);
-    if (real) return this.realChest(name, root, real, { W, H, D });
     const parts = [
       this.box(`${name}_body`, W, H, D, 0, H / 2, 0, M.wood),
       this.box(`${name}_band1`, W + 0.02, 0.05, D + 0.02, 0, 0.12, 0, M.iron),
       this.box(`${name}_band2`, W + 0.02, 0.05, D + 0.02, 0, H - 0.08, 0, M.iron),
-      this.box(`${name}_foot1`, 0.08, 0.04, D, -W / 2 + 0.06, 0.02, 0, M.iron),
-      this.box(`${name}_foot2`, 0.08, 0.04, D, W / 2 - 0.06, 0.02, 0, M.iron),
+      this.box(`${name}_inner`, W - 0.08, 0.02, D - 0.08, 0, H - 0.04, 0, M.planks),
     ];
-    // the hollow: a dark inner floor seen with the lid up
-    parts.push(this.box(`${name}_inner`, W - 0.08, 0.02, D - 0.08, 0, H - 0.04, 0, M.planks));
     this.merge(root, `${name}_mesh`, parts);
     // the lid on a hinge along the back edge (local +Z is the back: the front faces −Z)
-    const s = this.host.world.scene;
-    const hinge = new TransformNode(`${name}_lid_hinge`, s);
+    const hinge = new TransformNode(`${name}_lid_hinge`, this.host.world.scene);
     hinge.parent = root;
     hinge.position.set(0, H, D / 2);
-    const lid = this.merge(hinge, `${name}_lid`, [this.box(`${name}_lidb`, W + 0.02, 0.1, D + 0.02, 0, 0.05, -D / 2, M.wood), this.box(`${name}_lidband`, W + 0.04, 0.03, 0.06, 0, 0.05, -D + 0.04, M.iron), this.box(`${name}_lock`, 0.08, 0.1, 0.03, 0, 0.0, -D - 0.005, M.iron)]);
-    void lid;
+    this.merge(hinge, `${name}_lid`, [this.box(`${name}_lidb`, W + 0.02, 0.1, D + 0.02, 0, 0.05, -D / 2, M.wood), this.box(`${name}_lidband`, W + 0.04, 0.03, 0.06, 0, 0.05, -D + 0.04, M.iron), this.box(`${name}_lock`, 0.08, 0.1, 0.03, 0, 0.0, -D - 0.005, M.iron)]);
     const door = new HingedDoor({ hinge, openYaw: (105 * Math.PI) / 180, axis: new Vector3(1, 0, 0), bus: this.host.world });
     this.doors.push(door);
     const body = this.collider(root, 0, H / 2, 0, W / 2, H / 2, D / 2);
-    const inside = Vector3.TransformCoordinates(new Vector3(0, H - 0.02, 0), root.computeWorldMatrix(true));
+    return this.chestHandle(name, root, door, body, new Vector3(0, H - 0.03, 0), false);
+  }
+
+  private chestHandle(name: string, root: TransformNode, door: HingedDoor, body: BodyId, inside: Vector3, real: boolean): ChestProp {
     let content: TransformNode | null = null;
-    const chest: ChestProp = {
+    return {
       name,
       root,
-      use: this.front(root, 0.45),
+      use: this.front(root, 0.5),
       body,
-      real: false,
-      inside,
+      real,
+      inside: Vector3.TransformCoordinates(inside, root.computeWorldMatrix(true)),
       get opened() {
         return door.t > 0.5;
       },
@@ -471,7 +594,7 @@ export class KeepProps {
         content = n;
         if (n) {
           n.parent = root;
-          n.position.set(0, H - 0.03, 0);
+          n.position.copyFrom(inside);
         }
       },
       take: () => {
@@ -479,143 +602,84 @@ export class KeepProps {
         content = null;
       },
     };
-    return chest;
   }
 
-  /** A chest from the pipeline's kit: its `Chest_Open` clip lifts the lid. */
-  private realChest(name: string, root: TransformNode, groups: Promise<AnimationGroup[]>, size: { W: number; H: number; D: number }): ChestProp {
-    const { W, H, D } = size;
-    const body = this.collider(root, 0, H / 2, 0, W / 2, H / 2, D / 2);
-    let group: AnimationGroup | null = null;
-    let opened = false;
-    void groups.then((gs) => {
-      group = gs.find((g) => /open/i.test(g.name)) ?? gs[0] ?? null;
-      for (const g of gs) g.stop();
-      if (group) group.goToFrame(opened ? group.to : group.from);
-    });
-    let content: TransformNode | null = null;
+  // ---------------------------------------------------------------- weapon stands
+
+  private makeRack(name: string, items: readonly string[]): RackProp {
+    const place = this.pl.weapon_stands?.find((p) => p.anchor === name);
+    const at = place ? this.kp(place) : undefined;
+    const { root } = this.rootAt(name, { at, yaw: place?.yaw });
+    const sp = place ? spawn(this.pa, place.item ?? "kit/fpm#WeaponStand", root, this.host.world.scene) : null;
+    const kinds = items.map((s): ItemId => (/shield/i.test(s) ? "shield" : /axe/i.test(s) ? "axe" : "sword"));
+    const ids: string[] = [];
+    kinds.forEach((k, i) => ids.push(k === "axe" && /father|Brun/.test(items[i]) ? "father_axe" : ids.includes(k) ? `${k}${i}` : k));
+    type Slot = RackSlot & { taken: boolean };
+    let slots: Slot[];
+    let ready: Promise<void>;
+    let body: BodyId;
+    const real = !!sp;
+    if (sp && place) {
+      body = this.bboxCollider(root, "WeaponStand", [0.65, 0.55, 0.45]);
+      // the pipeline put each weapon in its notch: copy them where it says (world), in its order
+      const list: (Placement & { kind: ItemId; id: string })[] = place.items.map((it, i) => ({ ...it, kind: kinds[i] ?? "sword", id: ids[i] ?? `item${i}` }));
+      const si = kinds.indexOf("shield");
+      if (place.shield?.item && si >= 0) list.push({ ...place.shield, kind: "shield", id: ids[si] });
+      const set = this.host.setAt(root.position.add(new Vector3(0, 0.3, 0)));
+      slots = list.map((it) => {
+        const node = it.item ? (spawn(this.pa, it.item, null, this.host.world.scene)?.node ?? null) : null;
+        const pos = this.kp(it);
+        if (node) {
+          placeNode(node, pos, it.yaw ?? 0, it.rotation, it.scale);
+          // the kite shield leans back against the stand's front
+          if (it.kind === "shield" && !it.rotation) node.rotation.x = -0.22;
+          this.track(node, set);
+        }
+        return { id: it.id, kind: it.kind, pos, node, taken: false };
+      });
+      ready = Promise.resolve();
+    } else {
+      // the stand-in: a frame against the wall with the weapons upright in it
+      const M = this.mats;
+      const W = 1.3, D = 0.4;
+      this.toWall(root, D);
+      this.merge(root, `${name}_mesh`, [
+        this.box(`${name}_base`, W, 0.08, D, 0, 0.04, 0, M.wood),
+        this.box(`${name}_postl`, 0.08, 1.35, 0.08, -W / 2 + 0.05, 0.7, 0.1, M.wood),
+        this.box(`${name}_postr`, 0.08, 1.35, 0.08, W / 2 - 0.05, 0.7, 0.1, M.wood),
+        this.box(`${name}_top`, W, 0.07, 0.1, 0, 1.25, 0.1, M.wood),
+        this.box(`${name}_rail`, W - 0.1, 0.05, 0.08, 0, 0.42, -0.02, M.wood),
+      ]);
+      body = this.collider(root, 0, 0.68, 0.05, W / 2, 0.68, D / 2);
+      const n = kinds.length;
+      const xOf = (i: number) => (n === 1 ? 0 : -0.4 + (0.8 * i) / (n - 1));
+      slots = kinds.map((kind, i) => ({ id: ids[i], kind, pos: Vector3.TransformCoordinates(new Vector3(xOf(i), 0.08, 0), root.computeWorldMatrix(true)), node: null, taken: false }));
+      ready = Promise.all(
+        slots.map(async (sl, i) => {
+          const it = await loadItem(this.host.world, sl.kind);
+          if (!it) return;
+          if (this.disposed || sl.taken) return it.node.dispose();
+          const node = it.node;
+          node.parent = root;
+          node.rotationQuaternion = null;
+          if (sl.kind === "shield") {
+            node.position.set(xOf(i), 0.62, -0.16);
+            node.rotation.set(-0.18, Math.PI, 0);
+          } else {
+            node.position.set(xOf(i), sl.kind === "sword" ? 0.33 : 0.1, 0.02);
+            node.rotation.set(0.06, 0, 0);
+          }
+          for (const m of node.getChildMeshes(false)) m.isPickable = false;
+          sl.node = node;
+        }),
+      ).then(() => undefined);
+    }
     return {
       name,
       root,
-      use: this.front(root, 0.45),
+      use: this.front(root, 0.75),
       body,
-      real: true,
-      inside: Vector3.TransformCoordinates(new Vector3(0, H - 0.02, 0), root.computeWorldMatrix(true)),
-      get opened() {
-        return opened;
-      },
-      open: async (seconds = 0.9) => {
-        if (opened) return;
-        opened = true;
-        await groups;
-        const g = group;
-        if (!g) return;
-        const len = (g.to - g.from) / 60;
-        g.start(false, len > 0 && seconds > 0 ? len / seconds : 1, g.from, g.to);
-        await new Promise<void>((r) => g.onAnimationGroupEndObservable.addOnce(() => r()));
-      },
-      set: (open) => {
-        opened = open;
-        if (group) {
-          group.stop();
-          group.goToFrame(open ? group.to : group.from);
-        }
-      },
-      get content() {
-        return content;
-      },
-      set content(n) {
-        content = n;
-        if (n) {
-          n.parent = root;
-          n.position.set(0, H - 0.03, 0);
-        }
-      },
-      take: () => {
-        content?.dispose();
-        content = null;
-      },
-    };
-  }
-
-  /** A folded leather armour bundle (the chest's armour; `chest.content = props.armour()`). */
-  armour(): TransformNode {
-    const root = new TransformNode("armour_bundle", this.host.world.scene);
-    const M = this.mats;
-    this.merge(root, "armour_mesh", [this.box("armour_fold", 0.55, 0.1, 0.36, 0, 0.05, 0, M.leather), this.box("armour_belt", 0.6, 0.025, 0.05, 0, 0.1, 0.06, M.iron), this.box("armour_strap", 0.04, 0.02, 0.4, 0.18, 0.105, 0, M.leather)], { cast: false });
-    this.track(root);
-    return root;
-  }
-
-  /** A folded letter (the barracks footlocker's). */
-  letter(): TransformNode {
-    const root = new TransformNode("letter", this.host.world.scene);
-    this.merge(root, "letter_mesh", [this.box("letter_sheet", 0.2, 0.01, 0.14, 0, 0.005, 0, this.mats.paper)], { cast: false });
-    this.track(root);
-    return root;
-  }
-
-  private makeRack(name: string, items: readonly string[]): RackProp {
-    const { root, an } = this.rootAt(name);
-    const M = this.mats;
-    const W = 1.3, D = 0.4;
-    this.toWall(root, D);
-    if (!this.model(root, an.def.prop))
-      this.merge(root, `${name}_mesh`, [
-      this.box(`${name}_base`, W, 0.08, D, 0, 0.04, 0, M.wood),
-      this.box(`${name}_postl`, 0.08, 1.35, 0.08, -W / 2 + 0.05, 0.7, 0.1, M.wood),
-      this.box(`${name}_postr`, 0.08, 1.35, 0.08, W / 2 - 0.05, 0.7, 0.1, M.wood),
-      this.box(`${name}_top`, W, 0.07, 0.1, 0, 1.25, 0.1, M.wood),
-      this.box(`${name}_rail`, W - 0.1, 0.05, 0.08, 0, 0.42, -0.02, M.wood),
-      this.box(`${name}_brace`, W - 0.1, 0.03, 0.03, 0, 1.25, 0.16, M.iron),
-    ]);
-    const body = this.collider(root, 0, 0.68, 0.05, W / 2, 0.68, D / 2);
-    const kinds = items.map((s): ItemId => (/shield/.test(s) ? "shield" : /axe/.test(s) ? "axe" : "sword"));
-    const ids: string[] = [];
-    kinds.forEach((k, i) => {
-      // Brun's father's axe comes first on the rebel stand
-      const id = k === "axe" && /father|Brun/.test(items[i]) ? "father_axe" : ids.includes(k) ? `${k}${i}` : k;
-      ids.push(id);
-    });
-    const n = kinds.length;
-    const slots: (RackSlot & { taken: boolean })[] = kinds.map((kind, i) => {
-      const x = n === 1 ? 0 : -0.4 + (0.8 * i) / (n - 1);
-      return { id: ids[i], kind, pos: Vector3.TransformCoordinates(new Vector3(x, 0.08, 0), root.computeWorldMatrix(true)), node: null, taken: false };
-    });
-    const ready = Promise.all(
-      slots.map(async (sl, i) => {
-        const it = await loadItem(this.host.world, sl.kind);
-        if (!it) return;
-        if (this.disposed || sl.taken) {
-          it.node.dispose();
-          return;
-        }
-        const x = n === 1 ? 0 : -0.4 + (0.8 * i) / (n - 1);
-        const node = it.node;
-        node.parent = root;
-        node.rotationQuaternion = null;
-        if (sl.kind === "shield") {
-          // leaning against the front of the rail, its face out
-          node.position.set(x, 0.62, -0.16);
-          node.rotation.set(-0.18, Math.PI, 0);
-        } else if (sl.kind === "sword") {
-          // grip low, blade up against the top rail
-          node.position.set(x, 0.33, 0.02);
-          node.rotation.set(0.06, 0, 0);
-        } else {
-          node.position.set(x, 0.1, 0.02);
-          node.rotation.set(0.08, 0, 0);
-        }
-        for (const m of node.getChildMeshes(false)) m.isPickable = false;
-        sl.node = node;
-      }),
-    ).then(() => undefined);
-    const rack: RackProp = {
-      name,
-      root,
-      use: this.front(root, 0.6),
-      body,
-      real: false,
+      real,
       slots,
       ready,
       slot: (id) => slots.find((s) => s.id === id) ?? null,
@@ -628,42 +692,52 @@ export class KeepProps {
         s.node = null;
       },
     };
-    return rack;
   }
+
+  // ---------------------------------------------------------------- the storeroom shelf, potions
 
   private potionMesh(name: string, parent: TransformNode, x: number, y: number, z: number) {
     const M = this.mats;
-    const m = this.merge(parent, name, [this.cyl(`${name}_b`, 0.09, 0.11, x, y + 0.055, z, M.potion, { tess: 10 }), this.cyl(`${name}_n`, 0.035, 0.05, x, y + 0.135, z, M.potion, { tess: 8 }), this.cyl(`${name}_c`, 0.04, 0.025, x, y + 0.17, z, M.wood, { tess: 8 })], { cast: false });
-    return m!;
+    return this.merge(parent, name, [this.cyl(`${name}_b`, 0.09, 0.11, x, y + 0.055, z, M.potion, { tess: 10 }), this.cyl(`${name}_n`, 0.035, 0.05, x, y + 0.135, z, M.potion, { tess: 8 }), this.cyl(`${name}_c`, 0.04, 0.025, x, y + 0.17, z, M.wood, { tess: 8 })])!;
   }
 
   private makeShelf(name: string, count: number): ShelfProp {
-    // a small shelf on the wall at the anchor's height (the potions stand on it), in brackets
-    const { root, an } = this.rootAt(name);
-    const M = this.mats;
-    const W = 0.9, D = 0.26;
-    this.toWall(root, D);
-    const real = this.model(root, an.def.prop);
-    const parts = [this.box(`${name}_board`, W, 0.04, D, 0, -0.02, 0, M.planks), this.box(`${name}_board2`, W, 0.04, D, 0, 0.42, 0, M.planks)];
-    for (const x of [-0.36, 0.36]) parts.push(this.box(`${name}_br${x}`, 0.04, 0.2, 0.04, x, -0.13, D / 2 - 0.03, M.iron), this.box(`${name}_bru${x}`, 0.04, 0.16, 0.04, x, 0.32, D / 2 - 0.03, M.iron));
-    // dressing that stays: jars and a bottle on the top board
-    parts.push(this.cyl(`${name}_jar1`, 0.13, 0.17, -0.28, 0.525, 0, M.stone), this.cyl(`${name}_jar2`, 0.1, 0.13, 0.05, 0.505, 0, M.stone), this.cyl(`${name}_jar3`, 0.07, 0.2, 0.3, 0.54, 0, M.leather, { tess: 8 }));
-    if (real) for (const m of parts) m.dispose();
-    else this.merge(root, `${name}_mesh`, parts);
-    const potions: Mesh[] = [];
-    for (let i = 0; i < count; i++) potions.push(this.potionMesh(`${name}_potion${i}`, root, -0.1 + i * 0.2, 0, -0.02));
-    let left = count;
+    const place = this.pl.store_shelf;
+    const at = place ? this.kp(place) : undefined;
+    const { root } = this.rootAt(name, { at, yaw: place?.yaw });
+    const sp = place ? spawn(this.pa, place.item ?? "kit/fpm#Shelf_Small_Bottles", root, this.host.world.scene) : null;
+    const potions: TransformNode[] = [];
+    if (sp && place) {
+      for (const p of place.potions.slice(0, count)) {
+        const n = spawn(this.pa, p.item ?? "kit/fpm#Potion_2", null, this.host.world.scene)?.node;
+        if (!n) continue;
+        placeNode(n, this.kp(p), p.yaw ?? 0, p.rotation, p.scale);
+        this.track(n, this.host.setAt(root.position));
+        potions.push(n);
+      }
+    } else {
+      // a small wall shelf at the anchor's height, in brackets, with a jar either side
+      const M = this.mats;
+      const W = 0.9, D = 0.26;
+      this.toWall(root, D);
+      const parts = [this.box(`${name}_board`, W, 0.04, D, 0, -0.02, 0, M.planks)];
+      for (const x of [-0.36, 0.36]) parts.push(this.box(`${name}_br${x}`, 0.04, 0.22, 0.04, x, -0.13, D / 2 - 0.03, M.iron));
+      parts.push(this.cyl(`${name}_jar1`, 0.13, 0.17, -0.33, 0.085, 0, M.stone), this.cyl(`${name}_jar2`, 0.1, 0.13, 0.34, 0.065, 0.02, M.stone));
+      this.merge(root, `${name}_mesh`, parts);
+      for (let i = 0; i < count; i++) potions.push(this.potionMesh(`${name}_potion${i}`, root, -0.1 + i * 0.2, 0, -0.02));
+    }
+    let left = potions.length;
     const show = () => potions.forEach((p, i) => p.setEnabled(i < left));
-    // (the prompt's point on the floor in front of it)
+    // the prompt on the floor in front of it
     const use = this.front(root, 0.6);
     const down = this.host.physics.rayCastStatic(use.add(new Vector3(0, 0.1, 0)), new Vector3(0, -1, 0), 2);
     if (Number.isFinite(down)) use.y += 0.1 - down;
-    const shelf: ShelfProp = {
+    return {
       name,
       root,
       use,
       body: null,
-      real: !!real,
+      real: !!sp,
       get left() {
         return left;
       },
@@ -674,23 +748,23 @@ export class KeepProps {
         return k;
       },
       setLeft: (n) => {
-        left = Math.max(0, Math.min(count, n));
+        left = Math.max(0, Math.min(potions.length, n));
         show();
       },
     };
-    return shelf;
   }
 
   private makePotionPickup(name: string): PickupProp {
     const { root } = this.rootAt(name);
-    const mesh = this.potionMesh(`${name}_potion`, root, 0, 0, 0);
+    const sp = spawn(this.pa, "kit/fpm#Potion_2", root, this.host.world.scene);
+    const mesh: Node = sp ? sp.node : this.potionMesh(`${name}_potion`, root, 0, 0, 0);
     let taken = false;
     return {
       name,
       root,
       use: root.position.clone(),
       body: null,
-      real: false,
+      real: !!sp,
       get taken() {
         return taken;
       },
@@ -703,40 +777,67 @@ export class KeepProps {
 
   private keyMesh(name: string) {
     const M = this.mats;
-    const parts = [this.cyl(`${name}_shaft`, 0.008, 0.075, 0, 0, 0, M.iron, { tess: 6 }), CreateTorusAt(this.host.world.scene, `${name}_bow`, 0.025, 0.006, 0, 0.045, 0, M.iron), this.box(`${name}_bit`, 0.018, 0.012, 0.004, 0.008, -0.03, 0, M.iron)];
+    const parts = [this.cyl(`${name}_shaft`, 0.008, 0.075, 0, 0, 0, M.iron, { tess: 6 }), torusAt(this.host.world.scene, `${name}_bow`, 0.025, 0.006, 0, 0.045, 0, M.iron), this.box(`${name}_bit`, 0.018, 0.012, 0.004, 0.008, -0.03, 0, M.iron)];
     for (const p of parts) this.shade(p);
     return Mesh.MergeMeshes(parts, true, true, undefined, false, true)!;
   }
 
+  // ---------------------------------------------------------------- the cage
+
   private makeCage(name: string): CageProp {
-    const { root, an } = this.rootAt(name);
+    const place = this.pl.cage;
+    const { root, an } = this.rootAt(name, { at: place ? this.kp(place) : undefined, yaw: place?.yaw });
+    const s = this.host.world.scene;
+    const sp = spawn(this.pa, "procprops/keep#cage", root, s);
+    const meta = this.pa.meta?.procprops.keep?.cage?.door;
+    const hingeNode = sp && meta ? sp.find(meta.node) : null;
+    if (sp && meta && hingeNode) {
+      // the frame's colliders are static; the door's follows its hinge
+      const doorCol = sp.cols.filter((m) => m.isDescendantOf(hingeNode));
+      this.colliders(sp, root, (m) => !doorCol.includes(m));
+      const g = worldGeometry(doorCol);
+      const body = g.idx.length ? this.host.physics.addStaticMesh(g.pos, g.idx, { tag: "cage_door" }) : null;
+      if (body) this.bodies.push(body);
+      const door = new HingedDoor({ hinge: hingeNode, openYaw: meta.openYaw, axis: v3(meta.axis), physics: this.host.physics, body, bus: this.host.world });
+      this.doors.push(door);
+      const inside = sp.find("cage_inside");
+      return {
+        name,
+        root,
+        use: this.front(root, 1.5),
+        body,
+        real: true,
+        door,
+        inside: Vector3.TransformCoordinates(inside?.position ?? new Vector3(0, 0, 0.2), root.computeWorldMatrix(true)),
+        open: (seconds = 1.2) => door.open(seconds),
+      };
+    }
+    sp?.dispose();
+    return this.standInCage(name, root, an.def.size ?? [2, 2.2, 2]);
+  }
+
+  private standInCage(name: string, root: TransformNode, size: V3): CageProp {
     const M = this.mats;
-    const size = an.def.size ?? [2, 2.2, 2];
     const [W, H, D] = size;
     const s = this.host.world.scene;
     const bars: Mesh[] = [];
     const r = 0.015, step = 0.12;
     const hw = W / 2, hd = D / 2, doorW = 0.9;
-    // the frame: bottom and top rings and a mid band (flat iron), and corner posts
     for (const y of [0.04, H / 2, H - 0.03])
       bars.push(this.box(`${name}_fb${y}`, W, 0.05, 0.03, 0, y, -hd, M.iron), this.box(`${name}_bb${y}`, W, 0.05, 0.03, 0, y, hd, M.iron), this.box(`${name}_lb${y}`, 0.03, 0.05, D, -hw, y, 0, M.iron), this.box(`${name}_rb${y}`, 0.03, 0.05, D, hw, y, 0, M.iron));
     for (const [x, z] of [[-hw, -hd], [hw, -hd], [-hw, hd], [hw, hd]]) bars.push(this.box(`${name}_post${x}${z}`, 0.06, H, 0.06, x, H / 2, z, M.iron));
     const vbar = (x: number, z: number) => bars.push(this.cyl(`${name}_v${x.toFixed(2)}_${z.toFixed(2)}`, r * 2, H, x, H / 2, z, M.iron, { tess: 5 }));
     for (let x = -hw + step; x < hw - 0.01; x += step) {
       vbar(x, hd);
-      // the front: no bars where the door is
       if (Math.abs(x) > doorW / 2 + 0.02) vbar(x, -hd);
     }
     for (let z = -hd + step; z < hd - 0.01; z += step) {
       vbar(-hw, z);
       vbar(hw, z);
     }
-    // the roof: bars across
     for (let x = -hw + step; x < hw - 0.01; x += step * 2) bars.push(this.cyl(`${name}_t${x.toFixed(2)}`, r * 2, D, x, H - 0.02, 0, M.iron, { tess: 5, rx: Math.PI / 2 }));
     this.merge(root, `${name}_bars`, bars);
-    // the floor boards and a little straw
-    this.merge(root, `${name}_floor`, [this.box(`${name}_planks`, W - 0.05, 0.05, D - 0.05, 0, 0.025, 0, M.planks), this.box(`${name}_straw`, 0.9, 0.06, 0.7, 0.3, 0.06, 0.4, M.cloth)], { cast: false });
-    // walls: one thin box per side (the front in two pieces either side of the door)
+    this.merge(root, `${name}_floor`, [this.box(`${name}_planks`, W - 0.05, 0.05, D - 0.05, 0, 0.025, 0, M.planks), this.box(`${name}_straw`, 0.9, 0.06, 0.7, 0.3, 0.06, 0.4, M.cloth)]);
     const t = 0.05;
     this.collider(root, 0, H / 2, hd, hw, H / 2, t);
     this.collider(root, -hw, H / 2, 0, t, H / 2, hd);
@@ -744,7 +845,6 @@ export class KeepProps {
     const side = (hw - doorW / 2) / 2;
     this.collider(root, -hw + side, H / 2, -hd, side, H / 2, t);
     this.collider(root, hw - side, H / 2, -hd, side, H / 2, t);
-    // the door: hinged on its left post (seen from the front), swinging outward
     const hinge = new TransformNode(`${name}_door_hinge`, s);
     hinge.parent = root;
     hinge.position.set(-doorW / 2, 0, -hd);
@@ -753,7 +853,6 @@ export class KeepProps {
     for (const y of [0.1, (H - 0.1) / 2, H - 0.2]) db.push(this.box(`${name}_dh${y}`, doorW, 0.05, 0.03, doorW / 2, y, 0, M.iron));
     db.push(this.box(`${name}_lock`, 0.1, 0.14, 0.06, doorW - 0.06, (H - 0.1) / 2, -0.02, M.iron));
     this.merge(hinge, `${name}_door`, db);
-    // its collider: a box mesh under the hinge, made a body from its world geometry at rest
     const dc = CreateBox(`${name}_door_col`, { width: doorW, height: H - 0.1, depth: 0.06 }, s);
     dc.parent = hinge;
     dc.position.set(doorW / 2, (H - 0.1) / 2 + 0.05, 0);
@@ -763,12 +862,12 @@ export class KeepProps {
     dc.dispose();
     const body = this.host.physics.addStaticMesh(g.pos, g.idx, { tag: "cage_door" });
     this.bodies.push(body);
-    const door = new HingedDoor({ hinge, openYaw: 1.75, physics: this.host.physics, body, bus: this.host.world, locked: false });
+    const door = new HingedDoor({ hinge, openYaw: Math.PI / 2, physics: this.host.physics, body, bus: this.host.world });
     this.doors.push(door);
     return {
       name,
       root,
-      use: this.front(root, 0.5),
+      use: this.front(root, 1.5),
       body,
       real: false,
       door,
@@ -777,151 +876,257 @@ export class KeepProps {
     };
   }
 
+  // ---------------------------------------------------------------- sconces, fixtures, the gallery
+
+  /** Wall sconces under the light anchors' flames (`placements.sconces`; else a stand-in torch per sconce anchor). */
+  private buildSconces() {
+    const list = this.pl.sconces;
+    const s = this.host.world.scene;
+    if (list?.length && this.pa.containers.has("procprops/keep")) {
+      for (const p of list) {
+        const flame = p.flame ? v3(p.flame, this.dy) : this.kp(p);
+        const root = new TransformNode(`sconce_${p.anchor}`, s);
+        placeNode(root, this.kp(p), p.yaw ?? 0);
+        const sp = spawn(this.pa, "procprops/keep#sconce", root, s);
+        if (!sp) {
+          root.dispose();
+          continue;
+        }
+        this.track(root, this.host.setAt(flame));
+        this.sconces.set(p.anchor ?? root.name, { root, torch: sp.find("sconce_torch") });
+      }
+      return;
+    }
+    for (const [name, a] of Object.entries(this.host.keep.anchors)) if (a.kind === "light" && a.light === "sconce" && a.wall) this.wallTorch(name);
+  }
+
   private wallTorch(name: string) {
     const a = this.host.keep.anchors[name];
     const flame = this.host.anchor(name).pos;
-    const wall = this.host.anchor(name).pos.clone();
-    if (a.wall) {
-      // the bracket point is in keep-local coordinates like the anchor
-      const d = new Vector3(a.wall.local[0] - a.local[0], a.wall.local[1] - a.local[1], a.wall.local[2] - a.local[2]);
-      wall.addInPlace(d);
-    }
+    const wall = flame.clone();
+    if (a.wall) wall.addInPlace(new Vector3(a.wall.local[0] - a.local[0], a.wall.local[1] - a.local[1], a.wall.local[2] - a.local[2]));
     const s = this.host.world.scene;
     const root = new TransformNode(`torch_${name}`, s);
     root.position.copyFrom(wall);
     this.track(root, this.host.setAt(flame));
     const M = this.mats;
-    // the stick from below the bracket out to just under the flame
     const tip = flame.subtract(wall).add(new Vector3(0, -0.14, 0));
     const base = new Vector3(tip.x * 0.15, -0.32, tip.z * 0.15);
     const dir = tip.subtract(base);
-    const len = dir.length();
-    const stick = this.cyl(`${name}_stick`, 0.035, len, 0, 0, 0, M.wood, { top: 0.05, tess: 7 });
+    const stick = this.cyl(`${name}_stick`, 0.035, dir.length(), 0, 0, 0, M.wood, { top: 0.05, tess: 7 });
     stick.position.copyFrom(base.add(tip).scale(0.5));
     stick.rotationQuaternion = rotationFromUp(dir.normalize());
     const head = this.cyl(`${name}_head`, 0.065, 0.11, tip.x, tip.y + 0.02, tip.z, M.rope, { tess: 7 });
     const plate = this.box(`${name}_plate`, 0.1, 0.18, 0.02, 0, -0.26, 0, M.iron);
     const n = a.normal ?? [0, 0, 1];
     plate.rotation.y = Math.atan2(n[0], n[2]);
-    const ring = this.cyl(`${name}_ring`, 0.08, 0.03, tip.x * 0.55, -0.32 + (tip.y + 0.32) * 0.55, tip.z * 0.55, M.iron, { tess: 8 });
-    this.merge(root, `${name}_mesh`, [stick, head, plate, ring], { cast: false });
+    this.merge(root, `${name}_mesh`, [stick, head, plate]);
+    this.sconces.set(name, { root, torch: null });
   }
 
-  private brazier(name: string) {
-    const { root, an } = this.rootAt(name);
-    const M = this.mats;
-    if (this.model(root, an.def.prop)) {
-      this.collider(root, 0, 0.4, 0, 0.32, 0.4, 0.32);
+  /** The straw in the cells, the drain grate, the B3 irons, the J dice, the records, the camp's fire pit and the drawbridge. */
+  private buildFixtures() {
+    const s = this.host.world.scene;
+    const P = this.pl;
+    const simple = (p: Placement | undefined, source: string, set?: PropSet, cave = false) => {
+      if (!p) return null;
+      const root = new TransformNode(`fixture_${source.split("#").pop()}`, s);
+      placeNode(root, cave ? v3(p.at) : this.kp(p), p.yaw ?? 0, p.rotation, p.scale);
+      const sp = spawn(this.pa, p.item ?? source, root, s);
+      if (!sp) {
+        root.dispose();
+        return null;
+      }
+      this.track(root, set ?? this.host.setAt(root.position.add(new Vector3(0, 0.3, 0))));
+      this.colliders(sp, root);
+      return { root, sp };
+    };
+    for (const p of P.straw_beds ?? []) simple(p, "procprops/keep#straw_bed");
+    simple(P.drain_grate, "procprops/keep#drain_grate", "bs");
+    simple(P.brazier_irons, "procprops/keep#brazier_irons");
+    simple(P.dice, "procprops/keep#dice");
+    for (const p of P.records ?? []) simple(p, p.item ?? "kit/fpm#Scroll_1");
+    // the gallery (cave coordinates): the fire pit and the drawbridge set piece
+    const camp = this.host.cave?.anchors.camp_fire;
+    if (!simple(P.camp_fire, "ph/stone_fire_pit", "caveA", true) && camp) this.firePit(new Vector3(camp.pos[0], camp.pos[1], camp.pos[2]));
+    const gb = simple(P.gallery_bridge, "procprops/keep#gallery_bridge", "caveA", true);
+    if (gb) this.bridge = this.makeBridge(gb.sp);
+  }
+
+  /** The drawbridge (raised at first: the K11 lever lowers it, the K12 slab breaks it). */
+  private makeBridge(sp: Spawned): GalleryBridge {
+    const meta = this.pa.meta?.procprops.keep?.gallery_bridge;
+    const angles = meta?.deck?.angles ?? { raised: -1.0472, lowered: 0, broken: 0.6109 };
+    const hinge = sp.find(meta?.deck?.node ?? "bridge_hinge");
+    const planks = (meta?.deck?.planks ?? []).map((n) => sp.find(n)).filter((n): n is TransformNode => !!n);
+    const slab = sp.find(meta?.slab?.node ?? "slab");
+    const chains: Record<BridgeState, TransformNode | null> = { raised: sp.find("bridge_chain_raised"), lowered: sp.find("bridge_chain_lowered"), broken: sp.find("bridge_chain_broken") };
+    // every collider was built static; the deck's three take turns, one per state
+    const ph = this.host.physics;
+    const deckBodies: Record<BridgeState, BodyId[]> = { raised: ph.tagged("bridge_deck_raised"), lowered: ph.tagged("bridge_deck_lowered"), broken: ph.tagged("bridge_deck_broken") };
+    slab?.setEnabled(false);
+    const lever = sp.find("lever_pivot");
+    const pull = (t: number) => {
+      if (lever) lever.rotationQuaternion = Quaternion.RotationAxis(Vector3.Right(), LEVER_PULL * Math.max(0, Math.min(1, t)));
+    };
+    let state: BridgeState = "raised";
+    const set = (st: BridgeState) => {
+      state = st;
+      pull(st === "raised" ? 0 : 1);
+      if (hinge) hinge.rotationQuaternion = Quaternion.RotationAxis(Vector3.Right(), angles[st]);
+      for (const k of ["raised", "lowered", "broken"] as const) {
+        chains[k]?.setEnabled(k === st);
+        for (const id of deckBodies[k]) ph.setBodyEnabled(id, k === st);
+      }
+      for (const p of planks) p.setEnabled(st !== "broken");
+    };
+    set("raised");
+    return {
+      get state() {
+        return state;
+      },
+      set,
+      pull,
+      hinge,
+      lever,
+      drum: sp.find("winch_drum"),
+      slab,
+      planks,
+      angles,
+    };
+  }
+
+  // ---------------------------------------------------------------- dressing
+
+  private brazier(name: string, a: KeepAnchor) {
+    const { root } = this.rootAt(name);
+    if (this.model(root, a.prop)) {
+      this.bboxCollider(root, "Cauldron", [0.45, 0.4, 0.45]);
       return;
     }
+    const M = this.mats;
     const parts: Mesh[] = [
       this.cyl(`${name}_bowl`, 0.42, 0.22, 0, 0.6, 0, M.iron, { top: 0.7, tess: 14 }),
       this.cyl(`${name}_coals`, 0.62, 0.05, 0, 0.73, 0, M.coals, { tess: 14 }),
       this.cyl(`${name}_ring`, 0.3, 0.06, 0, 0.06, 0, M.iron, { tess: 12 }),
     ];
     for (let i = 0; i < 3; i++) {
-      const a = (i * Math.PI * 2) / 3;
-      const leg = this.cyl(`${name}_leg${i}`, 0.04, 0.62, Math.sin(a) * 0.2, 0.3, Math.cos(a) * 0.2, M.iron, { tess: 6 });
-      leg.rotation.x = Math.cos(a) * 0.25;
-      leg.rotation.z = -Math.sin(a) * 0.25;
+      const ang = (i * Math.PI * 2) / 3;
+      const leg = this.cyl(`${name}_leg${i}`, 0.04, 0.62, Math.sin(ang) * 0.2, 0.3, Math.cos(ang) * 0.2, M.iron, { tess: 6 });
+      leg.rotation.x = Math.cos(ang) * 0.25;
+      leg.rotation.z = -Math.sin(ang) * 0.25;
       parts.push(leg);
     }
     this.merge(root, `${name}_mesh`, parts);
     this.collider(root, 0, 0.4, 0, 0.32, 0.4, 0.32);
   }
 
-  private table(name: string, o: { small?: boolean; records?: boolean; dice?: boolean }) {
-    const { root, an } = this.rootAt(name);
-    const M = this.mats;
+  private table(name: string, a: KeepAnchor, o: { small?: boolean; records?: boolean; dice?: boolean }) {
+    const { root } = this.rootAt(name);
     const W = o.small ? 1.7 : 1.9, D = o.small ? 0.85 : 0.95, H = 0.78;
-    if (this.model(root, an.def.prop)) {
-      this.collider(root, 0, H / 2, 0, W / 2, H / 2, D / 2);
+    const sp = this.model(root, a.prop);
+    if (sp) {
+      if (/Table_Large/.test(a.prop ?? "")) this.bboxCollider(root, "Table_Large", [W / 2, H / 2, D / 2]);
+      else this.boundsCollider(root, sp);
       return;
     }
+    const M = this.mats;
     const parts: Mesh[] = [this.box(`${name}_top`, W, 0.06, D, 0, H - 0.03, 0, M.wood)];
     for (const [x, z] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) parts.push(this.box(`${name}_leg${x}${z}`, 0.08, H - 0.06, 0.08, x * (W / 2 - 0.08), (H - 0.06) / 2, z * (D / 2 - 0.08), M.wood));
     parts.push(this.box(`${name}_stretch`, W - 0.2, 0.05, 0.05, 0, 0.2, 0, M.wood));
     if (o.records) {
-      parts.push(this.box(`${name}_book`, 0.28, 0.06, 0.2, -0.4, H + 0.03, 0.05, M.leather), this.box(`${name}_paper1`, 0.22, 0.005, 0.3, 0.1, H + 0.003, -0.1, M.paper), this.box(`${name}_paper2`, 0.21, 0.005, 0.29, 0.15, H + 0.008, -0.05, M.paper));
-      const scroll = this.cyl(`${name}_scroll`, 0.05, 0.32, 0.55, H + 0.025, 0.1, M.paper, { tess: 8 });
-      scroll.rotation.z = Math.PI / 2;
-      parts.push(scroll);
+      parts.push(this.box(`${name}_book`, 0.28, 0.06, 0.2, -0.4, H + 0.03, 0.05, M.leather), this.box(`${name}_paper1`, 0.22, 0.005, 0.3, 0.1, H + 0.003, -0.1, M.paper));
+      parts.push(this.cyl(`${name}_scroll`, 0.05, 0.32, 0.55, H + 0.025, 0.1, M.paper, { tess: 8, rz: Math.PI / 2 }));
     }
-    if (o.dice) parts.push(this.box(`${name}_die1`, 0.025, 0.025, 0.025, 0.1, H + 0.0125, 0.05, M.paper), this.box(`${name}_die2`, 0.025, 0.025, 0.025, 0.16, H + 0.0125, 0.02, M.paper), this.cyl(`${name}_cup`, 0.08, 0.1, -0.2, H + 0.05, 0.0, M.leather, { tess: 10 }), this.cyl(`${name}_candle`, 0.04, 0.12, 0.3, H + 0.06, -0.2, M.paper, { tess: 8 }));
+    if (o.dice) parts.push(this.box(`${name}_die1`, 0.025, 0.025, 0.025, 0.1, H + 0.0125, 0.05, M.paper), this.box(`${name}_die2`, 0.025, 0.025, 0.025, 0.16, H + 0.0125, 0.02, M.paper), this.cyl(`${name}_cup`, 0.08, 0.1, -0.2, H + 0.05, 0.0, M.leather, { tess: 10 }));
     this.merge(root, `${name}_mesh`, parts);
     this.collider(root, 0, H / 2, 0, W / 2, H / 2, D / 2);
   }
 
-  private bed(name: string) {
-    const { root, an } = this.rootAt(name);
-    const M = this.mats;
+  /** An axis-aligned box collider around a spawned model's meshes (a Poly Haven model has no bounds in the meta). */
+  private boundsCollider(root: TransformNode, sp: Spawned) {
+    root.computeWorldMatrix(true);
+    if (!sp.meshes.length) return null;
+    let min = new Vector3(Infinity, Infinity, Infinity), max = new Vector3(-Infinity, -Infinity, -Infinity);
+    for (const m of sp.meshes) {
+      m.computeWorldMatrix(true);
+      const b = m.getBoundingInfo().boundingBox;
+      min = Vector3.Minimize(min, b.minimumWorld);
+      max = Vector3.Maximize(max, b.maximumWorld);
+    }
+    const id = this.host.physics.addBox(min.add(max).scale(0.5), max.subtract(min).scale(0.5), undefined, { tag: "prop" });
+    this.bodies.push(id);
+    return id;
+  }
+
+  private bed(name: string, a: KeepAnchor) {
+    const { root } = this.rootAt(name);
     const W = 0.95, L = 2.0, H = 0.42;
-    if (this.model(root, an.def.prop)) {
-      this.collider(root, 0, H / 2 + 0.05, 0, W / 2, H / 2 + 0.05, L / 2);
+    if (this.model(root, a.prop)) {
+      this.bboxCollider(root, "Bed_Twin1", [W / 2, H / 2, L / 2]);
       return;
     }
-    // the head is against the wall behind it (+Z local): the frame runs from there toward the front
-    const parts = [this.box(`${name}_frame`, W, 0.2, L, 0, 0.25, 0, M.wood), this.box(`${name}_mattress`, W - 0.08, 0.14, L - 0.1, 0, 0.42, 0, M.cloth), this.box(`${name}_head`, W, 0.8, 0.07, 0, 0.4, L / 2 - 0.035, M.wood), this.box(`${name}_foot`, W, 0.5, 0.06, 0, 0.25, -L / 2 + 0.03, M.wood), this.box(`${name}_pillow`, W - 0.3, 0.08, 0.3, 0, 0.52, L / 2 - 0.3, M.cloth)];
-    this.merge(root, `${name}_mesh`, parts);
+    const M = this.mats;
+    this.merge(root, `${name}_mesh`, [this.box(`${name}_frame`, W, 0.2, L, 0, 0.25, 0, M.wood), this.box(`${name}_mattress`, W - 0.08, 0.14, L - 0.1, 0, 0.42, 0, M.cloth), this.box(`${name}_head`, W, 0.8, 0.07, 0, 0.4, L / 2 - 0.035, M.wood), this.box(`${name}_foot`, W, 0.5, 0.06, 0, 0.25, -L / 2 + 0.03, M.wood)]);
     this.collider(root, 0, H / 2 + 0.05, 0, W / 2, H / 2 + 0.05, L / 2);
   }
 
-  private stool(name: string) {
-    const { root, an } = this.rootAt(name);
+  private stool(name: string, a: KeepAnchor) {
+    const { root } = this.rootAt(name);
+    if (this.model(root, a.prop)) return;
     const M = this.mats;
-    if (this.model(root, an.def.prop)) return;
     const parts: Mesh[] = [this.cyl(`${name}_seat`, 0.36, 0.05, 0, 0.45, 0, M.wood, { tess: 12 })];
     for (let i = 0; i < 3; i++) {
-      const a = (i * Math.PI * 2) / 3;
-      parts.push(this.cyl(`${name}_leg${i}`, 0.04, 0.44, Math.sin(a) * 0.12, 0.22, Math.cos(a) * 0.12, M.wood, { tess: 6 }));
+      const ang = (i * Math.PI * 2) / 3;
+      parts.push(this.cyl(`${name}_leg${i}`, 0.04, 0.44, Math.sin(ang) * 0.12, 0.22, Math.cos(ang) * 0.12, M.wood, { tess: 6 }));
     }
     this.merge(root, `${name}_mesh`, parts);
   }
 
   private strapChair(name: string) {
-    const { root } = this.rootAt(name);
+    const place = this.pl.strap_chair;
+    const { root } = this.rootAt(name, { at: place ? this.kp(place) : undefined, yaw: place?.yaw });
+    const sp = spawn(this.pa, "procprops/keep#strap_chair", root, this.host.world.scene);
+    if (sp) {
+      this.colliders(sp, root);
+      return;
+    }
     const M = this.mats;
-    const parts = [this.box(`${name}_seat`, 0.6, 0.08, 0.6, 0, 0.48, 0, M.wood), this.box(`${name}_back`, 0.6, 0.9, 0.08, 0, 0.95, 0.28, M.wood), this.box(`${name}_strap1`, 0.62, 0.05, 0.62, 0, 0.56, 0, M.leather), this.box(`${name}_strap2`, 0.62, 0.05, 0.1, 0, 1.15, 0.25, M.leather)];
+    const parts = [this.box(`${name}_seat`, 0.6, 0.08, 0.6, 0, 0.48, 0, M.wood), this.box(`${name}_back`, 0.6, 0.9, 0.08, 0, 0.95, 0.28, M.wood), this.box(`${name}_strap1`, 0.62, 0.05, 0.62, 0, 0.56, 0, M.leather)];
     for (const [x, z] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) parts.push(this.box(`${name}_leg${x}${z}`, 0.07, 0.46, 0.07, x * 0.26, 0.23, z * 0.26, M.wood));
-    for (const x of [-1, 1]) parts.push(this.box(`${name}_arm${x}`, 0.08, 0.06, 0.55, x * 0.3, 0.75, 0, M.wood), this.box(`${name}_cuff${x}`, 0.1, 0.07, 0.08, x * 0.3, 0.79, -0.15, M.iron));
     this.merge(root, `${name}_mesh`, parts);
     this.collider(root, 0, 0.6, 0, 0.32, 0.6, 0.32);
   }
 
   private shackles(name: string) {
-    const { root } = this.rootAt(name);
+    const place = this.pl.shackles;
+    const { root } = this.rootAt(name, { at: place ? this.kp(place) : undefined, yaw: place?.yaw });
+    if (spawn(this.pa, "procprops/keep#shackles", root, this.host.world.scene)) return;
     this.toWall(root, 0.1);
     const M = this.mats;
     const s = this.host.world.scene;
     const parts: Mesh[] = [];
     for (const x of [-0.5, 0.5]) {
       parts.push(this.box(`${name}_plate${x}`, 0.12, 0.12, 0.03, x, 1.7, 0.05, M.iron));
-      for (let i = 0; i < 5; i++) {
-        const l = CreateTorusAt(s, `${name}_link${x}_${i}`, 0.05, 0.012, x * (1 - i * 0.08), 1.62 - i * 0.07, 0.04, M.iron);
-        l.rotation.y = i % 2 ? Math.PI / 2 : 0;
-        l.rotation.x = Math.PI / 2;
-        parts.push(l);
-      }
-      parts.push(CreateTorusAt(s, `${name}_cuff${x}`, 0.1, 0.02, x * 0.62, 1.25, 0.04, M.iron));
+      parts.push(torusAt(s, `${name}_cuff${x}`, 0.1, 0.02, x * 0.62, 1.25, 0.04, M.iron));
     }
-    // chains on the floor and a heap of rags where the corpse lies
     parts.push(this.box(`${name}_rags`, 0.7, 0.12, 0.45, 0, 0.06, -0.25, M.cloth));
     this.merge(root, `${name}_mesh`, parts);
   }
 
-  /** A pipeline model as dressing (barrels, crates): the shipped asset, or a box of its size. */
-  private shipped(name: string, prop: string) {
+  /** A Poly Haven model as dressing (barrels, crates): the shipped asset, or a box of its size. */
+  private phDressing(name: string, prop: string) {
     const { root } = this.rootAt(name);
-    const src = shippedSource(prop);
+    const sp = this.model(root, prop);
+    if (sp) {
+      this.boundsCollider(root, sp);
+      return;
+    }
     const crate = /crate/.test(prop);
     const size = crate ? [0.8, 0.8, 0.8] : [1.3, 1.0, 0.9];
     this.collider(root, 0, size[1] / 2, 0, size[0] / 2, size[1] / 2, size[2] / 2);
-    if (!src) {
-      const M = this.mats;
-      this.merge(root, `${name}_mesh`, crate ? [this.box(`${name}_crate`, 0.8, 0.8, 0.8, 0, 0.4, 0, M.planks)] : [this.cyl(`${name}_b1`, 0.6, 0.9, -0.33, 0.45, 0, M.wood), this.cyl(`${name}_b2`, 0.6, 0.9, 0.33, 0.45, 0, M.wood)]);
-      return;
-    }
-    void this.model(root, prop);
+    const M = this.mats;
+    this.merge(root, `${name}_mesh`, crate ? [this.box(`${name}_crate`, 0.8, 0.8, 0.8, 0, 0.4, 0, M.planks)] : [this.cyl(`${name}_b1`, 0.6, 0.9, -0.33, 0.45, 0, M.wood), this.cyl(`${name}_b2`, 0.6, 0.9, 0.33, 0.45, 0, M.wood)]);
   }
 
   private firePit(at: Vector3) {
@@ -932,29 +1137,33 @@ export class KeepProps {
     const M = this.mats;
     const parts: Mesh[] = [];
     for (let i = 0; i < 9; i++) {
-      const a = (i * Math.PI * 2) / 9;
-      const b = this.box(`pit_stone${i}`, 0.24, 0.16, 0.18, Math.sin(a) * 0.55, 0.07, Math.cos(a) * 0.55, M.stone);
-      b.rotation.y = a;
+      const ang = (i * Math.PI * 2) / 9;
+      const b = this.box(`pit_stone${i}`, 0.24, 0.16, 0.18, Math.sin(ang) * 0.55, 0.07, Math.cos(ang) * 0.55, M.stone);
+      b.rotation.y = ang;
       parts.push(b);
     }
-    for (let i = 0; i < 3; i++) {
-      const l = this.cyl(`pit_log${i}`, 0.08, 0.7, 0, 0.12, 0, M.wood, { tess: 7 });
-      l.rotation.set(Math.PI / 2 - 0.3, (i * Math.PI * 2) / 3, 0);
-      parts.push(l);
-    }
     parts.push(this.cyl("pit_coals", 0.6, 0.04, 0, 0.03, 0, M.coals, { tess: 12 }));
-    this.merge(root, "camp_fire_pit", parts, { cast: false });
+    this.merge(root, "camp_fire_pit", parts);
   }
 
-  /** A wooden beam across the postern on its inside, in iron brackets. */
+  /** A wooden beam across the postern on its inside, in iron brackets (its blocker reaches over it: underground.ts BLOCKER_REACH). */
   private postBeam() {
     const an = this.host.anchor("blocker_postern");
-    const s = this.host.world.scene;
-    const root = new TransformNode("postern_beam", s);
+    const root = new TransformNode("postern_beam", this.host.world.scene);
     // across the opening (along z), just inside the inner wall face
     root.position.set(an.pos.x + 0.78, an.pos.y - 0.15, an.pos.z);
     const M = this.mats;
     this.merge(root, "postern_beam_mesh", [this.box("beam", 0.22, 0.24, 2.3, 0, 0, 0, M.wood), this.box("beam_br1", 0.26, 0.34, 0.08, -0.02, 0, -1.0, M.iron), this.box("beam_br2", 0.26, 0.34, 0.08, -0.02, 0, 1.0, M.iron)]);
+    return this.toggle(root, "gf");
+  }
+
+  /** A bar across both leaves of the main gate on the hall side (its blocker reaches over it: underground.ts BLOCKER_REACH). */
+  private gateBeam() {
+    const an = this.host.anchor("blocker_gate");
+    const root = new TransformNode("gate_bar", this.host.world.scene);
+    root.position.set(an.pos.x, an.pos.y - 1.2, an.pos.z - 0.45);
+    const M = this.mats;
+    this.merge(root, "gate_bar_mesh", [this.box("bar", 4.6, 0.26, 0.24, 0, 0, 0, M.wood), this.box("bar_br1", 0.1, 0.4, 0.3, -2.05, 0, 0.02, M.iron), this.box("bar_br2", 0.1, 0.4, 0.3, 2.05, 0, 0.02, M.iron)]);
     return this.toggle(root, "gf");
   }
 
@@ -977,95 +1186,21 @@ export class KeepProps {
     return t;
   }
 
-  /** A bar across both leaves of the main gate on the hall side. */
-  private gateBeam() {
-    const an = this.host.anchor("blocker_gate");
-    const s = this.host.world.scene;
-    const root = new TransformNode("gate_bar", s);
-    root.position.set(an.pos.x, an.pos.y - 1.2, an.pos.z - 0.45);
-    const M = this.mats;
-    this.merge(root, "gate_bar_mesh", [this.box("bar", 4.6, 0.26, 0.24, 0, 0, 0, M.wood), this.box("bar_br1", 0.1, 0.4, 0.3, -2.05, 0, 0.02, M.iron), this.box("bar_br2", 0.1, 0.4, 0.3, 2.05, 0, 0.02, M.iron)]);
-    return this.toggle(root, "gf");
-  }
-
-  // ---------------------------------------------------------------- shipped models
-
-  /**
-   * The anchor's own model when the build ships it, loaded under `root` with its front (+Z, glTF)
-   * turned to the root's front (−Z): resolves with its animation groups. Null when the build has
-   * none (the caller builds the stand-in).
-   */
-  private model(root: TransformNode, suggested: string | undefined): Promise<AnimationGroup[]> | null {
-    const src = suggested ? shippedSource(suggested) : null;
-    if (!src) return null;
-    return this.instantiate(src).then((inst) => {
-      if (!inst) return [];
-      if (this.disposed) {
-        inst.root.dispose();
-        return [];
-      }
-      inst.root.parent = root;
-      inst.root.rotation.y = Math.PI;
-      const ms = inst.root.getChildMeshes(false);
-      for (const m of ms) {
-        m.isPickable = false;
-        m.receiveShadows = true;
-      }
-      this.host.world.addShadowCasters(ms);
-      return inst.groups;
-    });
-  }
-
-  /** A fresh copy of a model: a whole asset, or one node (and what is under it) of a kit; its animations kept. */
-  private async instantiate(source: string): Promise<{ root: TransformNode; groups: AnimationGroup[] } | null> {
-    const [id, nodeName] = source.split("#");
-    let p = this.containers.get(id);
-    if (!p) {
-      p = loadGLB(id, this.host.world.scene).catch((e) => {
-        console.warn(`keep prop ${id}`, e);
-        return null;
-      });
-      this.containers.set(id, p);
-    }
-    const c = await p;
-    if (!c || this.disposed) return null;
-    const root = new TransformNode(`model_${nodeName ?? id}`, this.host.world.scene);
-    let keep: Set<Node> | null = null;
-    if (nodeName) {
-      const target = [...c.transformNodes, ...c.meshes].find((n) => n.name === nodeName);
-      if (!target) {
-        root.dispose();
-        return null;
-      }
-      keep = new Set<Node>([target, ...target.getDescendants(false)]);
-      for (let q = target.parent; q; q = q.parent) keep.add(q);
-    }
-    const inst = c.instantiateModelsToScene((n) => n, false, { doNotInstantiate: true, predicate: keep ? (e: unknown) => keep.has(e as Node) : undefined });
-    for (const r of inst.rootNodes) r.parent = root;
-    return { root, groups: inst.animationGroups };
-  }
-
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
     for (const d of this.doors) d.dispose();
     for (const id of this.bodies) this.host.physics.removeBody(id);
     for (const n of this.nodes) n.dispose();
-    for (const p of this.containers.values()) void p.then((c) => c?.dispose());
+    for (const c of this.pa.containers.values()) c.dispose();
     this.chests.clear();
     this.racks.clear();
     this.pickups.clear();
   }
 }
 
-/** A node shown while wanted and while its set is shown. */
-interface Toggle {
-  want(on: boolean): void;
-  setEnabled(on: boolean): void;
-}
-
-/** A torus at a point (for chain links, rings and key bows). */
-function CreateTorusAt(scene: Scene, name: string, diameter: number, thickness: number, x: number, y: number, z: number, mat: Material) {
+/** A torus at a point (for rings and key bows). */
+function torusAt(scene: Scene, name: string, diameter: number, thickness: number, x: number, y: number, z: number, mat: Material) {
   const t = CreateTorus(name, { diameter, thickness, tessellation: 10 }, scene);
   t.position.set(x, y, z);
   t.material = mat;
@@ -1080,5 +1215,3 @@ function rotationFromUp(dir: Vector3) {
   if (s < 1e-6) return dir.y >= 0 ? Quaternion.Identity() : Quaternion.RotationAxis(Vector3.Right(), Math.PI);
   return Quaternion.RotationAxis(axis.scale(1 / s), Math.atan2(s, Vector3.Dot(up, dir)));
 }
-
-export type { AbstractMesh };

@@ -16,14 +16,14 @@ import { readHDR, downsample, writeHDR } from "./lib/hdr.mjs";
 import { buildRoute, makeTerrain, fbm } from "./gen/world.mjs";
 import { buildTerrainChunks } from "./gen/terrain.mjs";
 import { TERRAIN_HOLES, activeHoles } from "./gen/terrainHoles.mjs";
-import { buildKeepInterior, AIR as KEEP_AIR, ORIGIN as KEEP_ORIGIN } from "./gen/keepinterior.mjs";
-import { checkDrainJoin } from "./lib/joins.mjs";
+import { buildKeepInterior, AIR as KEEP_AIR, ORIGIN as KEEP_ORIGIN, MATERIALS as KEEP_MATERIALS } from "./gen/keepinterior.mjs";
+import { checkDrainJoin, checkPropsJoin } from "./lib/joins.mjs";
 import { buildFirTextures, buildFirMesh, buildImpostor } from "./gen/fir.mjs";
 import { buildCart, SEATS, CART } from "./gen/cart.mjs";
 import { buildHouse, HOUSE_VARIANTS } from "./gen/houses.mjs";
 import { buildTower, buildInn, buildKeep, buildPlatform } from "./gen/townbuildings.mjs";
 import { scatter, packScatter } from "./gen/scatter.mjs";
-import { buildAudio } from "./gen/audio.mjs";
+import { buildAudio, AUDIO_STREAMED, audioCredits } from "./gen/audio.mjs";
 import { buildCharacters } from "./gen/characters.mjs";
 import { EXTRA_CREDITS } from "./credits-extra.mjs";
 import { buildDragon } from "./gen/dragon.mjs";
@@ -33,8 +33,21 @@ const SRC = path.join(ROOT, "assets-src");
 const OUT = path.join(ROOT, "public/data");
 const only = process.argv.find((a) => a.startsWith("--only="))?.slice(7);
 const onlyList = only ? only.split(",").filter(Boolean) : [];
-/** Whether --only selects the step `prefix` (a step matches a selected prefix in either direction). */
-const selected = (prefix) => onlyList.some((o) => prefix.startsWith(o) || o.startsWith(prefix));
+/** --only entries that selected a step (the rest are reported: they rebuilt nothing). */
+const onlyUsed = new Set();
+/**
+ * Whether --only selects the step `prefix` or one of its `aliases` (the id prefixes a step emits under
+ * other names); a step matches a selected prefix in either direction.
+ */
+const selected = (prefix, aliases = []) => {
+  let hit = false;
+  for (const o of onlyList)
+    if ([prefix, ...aliases].some((p) => p.startsWith(o) || o.startsWith(p))) {
+      onlyUsed.add(o);
+      hit = true;
+    }
+  return hit;
+};
 
 const manifest = { version: "", generated: new Date().toISOString(), assets: [] };
 // --only reuses every other entry from the last manifest, and the sweep at the end deletes whatever
@@ -69,9 +82,12 @@ async function emit(id, { segment, priority = 50, type, ext, data, pos, variants
   return e;
 }
 
-/** Skip a step when --only is set and doesn't match; reuse the previous manifest entries instead. */
-async function step(prefix, fn) {
-  if (only && !selected(prefix)) {
+/**
+ * Skip a step when --only is set and doesn't match; reuse the previous manifest entries instead.
+ * `aliases`: other id prefixes the step emits (so --only=<alias> rebuilds it).
+ */
+async function step(prefix, fn, { aliases = [] } = {}) {
+  if (only && !selected(prefix, aliases)) {
     const prev = previous.assets.filter((a) => (a._step ? a._step === prefix : a.id.startsWith(prefix)));
     if (!prev.length) throw new Error(`--only: the previous manifest has nothing for ${prefix}; run a full build instead`);
     for (const a of prev)
@@ -389,11 +405,18 @@ const readManifestJSON = async (id) => {
   const a = manifest.assets.find((x) => x.id === id);
   return a ? JSON.parse(await fs.readFile(path.join(ROOT, "public", a.url), "utf8")) : null;
 };
-await step("props/", async () => {
-  const anchors = { cave: await readManifestJSON("cave/anchors"), keep: await readManifestJSON("keep/anchors") };
-  if (!anchors.cave || !anchors.keep) throw new Error("props/: needs cave/anchors and keep/anchors in the manifest (build cave/ and keep/interior first)");
-  await (await import("./gen/props.mjs")).buildProps({ emit, SRC, anchors });
-});
+await step(
+  "props/",
+  async () => {
+    const { buildProps, PROPS_INPUTS } = await import("./gen/props.mjs");
+    const entry = (id) => manifest.assets.find((x) => x.id === id);
+    for (const id of PROPS_INPUTS) if (!entry(id)) throw new Error(`props/: needs ${id} in the manifest (build cave/ and keep/interior first)`);
+    const anchors = { cave: await readManifestJSON("cave/anchors"), keep: await readManifestJSON("keep/anchors") };
+    const caveMeshA = await fs.readFile(path.join(ROOT, "public", entry("cave/mesh_a").url));
+    await buildProps({ emit, SRC, anchors, caveMeshA, inputs: Object.fromEntries(PROPS_INPUTS.map((id) => [id, entry(id).hash])) });
+  },
+  { aliases: ["kit/", "procprops/"] },
+);
 
 // ------------------------------------------------------------------ dragon + effects
 await step("dragon/dragon", () => buildDragon({ emit, SRC }));
@@ -416,7 +439,13 @@ await step("fx/", async () => {
 await step("chars/", () => buildCharacters({ emit, SRC }));
 await step("audio/", () => buildAudio({ emit, SRC }));
 
+// ------------------------------------------------------------------ creatures (segment exit)
+// creatures/spider (Quaternius Easy Enemy Pack, CC0; the FBX converted with assimpjs), creatures/wolf (the
+// 0 A.D. wolf, CC BY-SA 3.0, clips merged), creatures/wolf_fur_brown (ktx2). Imported lazily (assimpjs).
+await step("creatures/", async () => (await import("./gen/creatures.mjs")).buildCreatures({ emit, SRC }));
+
 await shutdownKtx();
+for (const o of onlyList) if (!onlyUsed.has(o)) console.warn(`warning: --only entry "${o}" selected no build step, so it rebuilt nothing (step prefixes: menu/, cart/…, town/buildings, keep/interior, cave/, ph/<id>, props/ (kit/, procprops/), dragon/dragon, fx/, chars/, audio/, creatures/)`);
 
 // ------------------------------------------------------------------ manifest
 // Assets not needed to *enter* their segment: they stream in while the segment plays (scenery
@@ -425,6 +454,10 @@ const STREAMED = new Set([
   "ph/mountainside", "ph/rock_face_01", "ph/boulder_01", "ph/rock_moss_set_02", "ph/tree_stump_01",
   "ph/dead_tree_trunk", "audio/music_menu", "audio/music_cart", "audio/amb_forest",
   "ph/wooden_lantern_01", "ph/kite_shield", "ph/rock_face_02",
+  "creatures/wolf_fur_brown", // an optional fur swap for creatures/wolf
+  // keep/exit music that first plays well into its segment (tools/gen/audio.mjs `streamed`: music_explore,
+  // music_spider, music_beast; design §10.6 "plus streamed music")
+  ...AUDIO_STREAMED,
 ]);
 for (const a of manifest.assets) {
   if (STREAMED.has(a.id)) a.optional = true;
@@ -475,15 +508,15 @@ manifest.assets = manifest.assets.filter((a) => !a.id.endsWith("#aac"));
     if (!r.ok) throw new Error(r.message);
     console.log(r.message);
   }
-  // The props join: props/ placed the gallery set piece (drawbridge, lever, winch, slab) and the drain
-  // grate from the cave and keep anchors as they were when it ran; --only can rebuild either side.
+  // The props join: props/ placed every prop from the cave and keep anchors and rooms and fitted the
+  // gallery set piece to the cave's rock field, as shipped when it ran (props/meta joins.inputs pins
+  // their sha256); --only can rebuild either side.
   const propsMeta = await readJSON("props/meta");
-  if (propsMeta && caveAnchors && keepAnchors) {
-    const { propJoins } = await import("./gen/props.mjs");
-    const now = propJoins({ cave: caveAnchors, keep: keepAnchors });
-    if (JSON.stringify(now) !== JSON.stringify(propsMeta.joins))
-      throw new Error(`props join: props/meta was built against other cave/keep anchors (${JSON.stringify(propsMeta.joins)} vs now ${JSON.stringify(now)}); rebuild with --only=props/`);
-    console.log("props join ok: the gallery set piece and the drain grate match the shipped cave and keep anchors");
+  if (propsMeta) {
+    const { PROPS_INPUTS } = await import("./gen/props.mjs");
+    const r = checkPropsJoin(propsMeta, manifest.assets, PROPS_INPUTS);
+    if (!r.ok) throw new Error(r.message);
+    console.log(r.message);
   }
 }
 manifest.assets.sort((a, b) => a.id.localeCompare(b.id));
@@ -496,20 +529,117 @@ for (const a of manifest.assets) {
   summary[a.segment].br += a._br ?? a.size;
   if (!a.optional) summary[a.segment].start += a._br ?? a.size;
 }
+// Segments: every asset's segment must be one the runtime knows (SEGMENTS in src/core/assets/manifest.ts, in
+// play order: the downloader ranks by that order), and the build's own order must agree with it.
+const PIPELINE_SEGMENTS = ["menu", "cart", "muster", "execution", "dragon", "keep", "exit"];
+{
+  const ts = await fs.readFile(path.join(ROOT, "src/core/assets/manifest.ts"), "utf8").catch(() => "");
+  const list = /export const SEGMENTS = \[([^\]]*)\]/.exec(ts)?.[1];
+  const runtime = list ? [...list.matchAll(/"([^"]+)"/g)].map((m) => m[1]) : null;
+  if (!runtime) console.warn("warning: no SEGMENTS list found in src/core/assets/manifest.ts; segment order not checked");
+  else if (runtime.join() !== PIPELINE_SEGMENTS.join()) console.warn(`warning: src/core/assets/manifest.ts SEGMENTS is [${runtime}], the build expects [${PIPELINE_SEGMENTS}]`);
+  const known = new Set(runtime ?? PIPELINE_SEGMENTS);
+  const stray = manifest.assets.filter((a) => !known.has(a.segment));
+  if (stray.length) throw new Error(`segments: ${stray.map((a) => `${a.id} (${a.segment})`).join(", ")} not in SEGMENTS [${[...known]}]`);
+}
+// Start-pack budgets (brotli bytes of the non-optional assets, as the summary prints them), design
+// keep-exit-chapters.md §10.6. keep: estimated 8.4 MB, limit 15 MB. exit: estimated 2.4 MB plus streamed music;
+// the design gives no limit, so 6 MB (2.5x the estimate) catches a regression. Over the limit fails the build
+// before the manifest is written; the summary prints each against its estimate and limit.
+const START_BUDGETS = { keep: { estimate: 8.4e6, limit: 15e6 }, exit: { estimate: 2.4e6, limit: 6e6 } };
+{
+  const over = [];
+  for (const [s, b] of Object.entries(START_BUDGETS)) {
+    const start = summary[s]?.start ?? 0;
+    if (start > b.limit) over.push(`${s} ${(start / 1e6).toFixed(2)} MB > ${(b.limit / 1e6).toFixed(1)} MB`);
+  }
+  if (over.length) throw new Error(`start pack over budget (design §10.6): ${over.join("; ")}; mark scenery or music that is not needed to enter the segment as STREAMED, or shrink it`);
+}
+// Credits: the entries each shipped asset needs, in tools/credits-extra.mjs (`extra`) and in
+// assets-src/credits-polyhaven.json (`ph`). Every shipped id must match a rule (a procedural asset lists the
+// third-party sources it reads, or none), and every credit a rule names must exist. A CC BY or CC BY-SA entry must
+// say what was modified, a CC BY-SA one also that the modified version keeps the licence (share-alike), and a
+// Kevin MacLeod track must carry incompetech's exact credit line. The credits page lists exactly the Poly Haven
+// entries the shipped assets need (creditsPH). Checked before anything is written.
+const creditsPH = new Set();
+{
+  const { CAVE_TEX } = await import("./gen/cave.mjs");
+  const audioById = new Map();
+  for (const c of audioCredits()) audioById.set(c.asset, [...(audioById.get(c.asset) ?? []), c.credit]);
+  const RULES = [
+    [/^menu\/smoke$/, {}],
+    [/^cart\/(route|heightfield|scatter|terrain)$/, {}],
+    [/^cart\/tex\/terrain_(\w+)_[dn]$/, (m) => ({ ph: [TERRAIN_LAYERS[m[1]]] })],
+    [/^cart\/sky(_env)?$/, { ph: ["kloofendal_overcast_puresky"] }],
+    [/^cart\/fir$/, { ph: ["fir_tree_01", "pine_bark"] }],
+    [/^cart\/wagon$/, { ph: ["weathered_brown_planks", "rusty_metal_02"] }],
+    [/^cart\/houses$/, { ph: ["plastered_stone_wall", "medieval_wood", "thatch_roof_angled", "weathered_brown_planks"] }],
+    [/^town\/buildings$/, { ph: ["rough_block_wall", "castle_wall_slates", "old_planks_02", "medieval_wood", "thatch_roof_angled", "plastered_stone_wall", "rough_wood", "weathered_brown_planks", "dark_wooden_planks", "rusty_metal_02"] }],
+    [/^keep\/interior$/, { ph: Object.values(KEEP_MATERIALS).flatMap((m) => (m.src ? [m.src] : [])) }],
+    // json, and geometry whose materials bind cave/tex/* at runtime
+    [/^(keep|cave)\/anchors$|^props\/meta$|^cave\/(mesh|mesh_a|outcrop)$|^fx\/water_n$/, {}],
+    [/^cave\/tex\/(\w+)_(d|n|arm)$/, (m) => ({ ph: [CAVE_TEX[m[1]]?.src] })],
+    [/^ph\/(.+)$/, (m) => ({ ph: [m[1]] })],
+    [/^kit\/fpm$/, { extra: ["quaternius-fpm"] }],
+    // tools/gen/procprops.mjs MATS (its rock binds cave/tex/rock_*)
+    [/^procprops\/(keep|exit)$/, { ph: ["rusty_metal_02", "dark_wooden_planks", "weathered_planks"] }],
+    [/^chars\/(male|female)$/, { extra: ["quaternius-ubc", "quaternius-outfits"] }],
+    [/^chars\/anim_\w+$/, { extra: ["quaternius-ual"] }],
+    [/^chars\/horse$/, { extra: ["0ad-horse"] }],
+    [/^creatures\/spider$/, { extra: ["quaternius-easy-enemies"] }],
+    [/^creatures\/wolf(_fur_brown)?$/, { extra: ["0ad-wolf"] }],
+    [/^dragon\/dragon$/, { extra: ["dragon"] }],
+    [/^fx\/(fire|smoke)_sheet$/, { extra: ["bab-sprites"] }],
+    [/^fx\/(flame|smoke|spark|scorch)$/, { extra: ["kenney-particles"] }],
+    [/^audio\//, (m, id) => ({ extra: audioById.get(id) })],
+  ];
+  const extra = new Map(EXTRA_CREDITS.map((c) => [c.id, c]));
+  const phAll = new Set(JSON.parse(await fs.readFile(path.join(SRC, "credits-polyhaven.json"), "utf8")).map((c) => c.id));
+  const errors = [], used = new Set();
+  for (const a of manifest.assets) {
+    const rule = RULES.find(([re]) => re.test(a.id));
+    if (!rule) {
+      errors.push(`${a.id} matches no credits rule (add one to RULES in tools/build-assets.mjs)`);
+      continue;
+    }
+    const need = typeof rule[1] === "function" ? rule[1](rule[0].exec(a.id), a.id) : rule[1];
+    if (a.id.startsWith("audio/") && !need.extra?.length) errors.push(`${a.id}: no audio credit (tools/gen/audio.mjs audioCredits)`);
+    for (const id of need.extra ?? []) {
+      if (!extra.has(id)) errors.push(`${a.id} needs "${id}" in tools/credits-extra.mjs`);
+      used.add(id);
+    }
+    for (const id of need.ph ?? []) {
+      if (!id || !phAll.has(id)) errors.push(`${a.id} needs Poly Haven "${id}" in assets-src/credits-polyhaven.json`);
+      creditsPH.add(id);
+    }
+  }
+  for (const id of used) {
+    const c = extra.get(id);
+    if (!c) continue;
+    if (/^CC BY/.test(c.license) && !c.note?.includes("修改")) errors.push(`credit "${id}" (${c.license}): its note must say what was modified`);
+    if (/^CC BY-SA/.test(c.license) && !c.note?.includes(c.license)) errors.push(`credit "${id}" (${c.license}): its note must say the modified version is under ${c.license} too (share-alike)`);
+    if (c.authors.some((n) => n.startsWith("Kevin MacLeod")) && !c.note?.includes(`"${c.name}" Kevin MacLeod (incompetech.com) Licensed under Creative Commons: By Attribution 4.0 https://creativecommons.org/licenses/by/4.0/`))
+      errors.push(`credit "${id}": a Kevin MacLeod track needs incompetech's exact credit line in its note`);
+  }
+  if (errors.length) throw new Error(`credits: ${errors.join("; ")}`);
+}
 const clean = { ...manifest, assets: manifest.assets.map(({ _br, ...a }) => ({ ...a, _br })) };
 await fs.writeFile(path.join(ROOT, "public/manifest.json"), JSON.stringify(clean));
 // remove files no longer referenced
 const live = new Set(manifest.assets.flatMap((a) => [a.url, a.variants?.aac?.url, a.variants?.opus?.url]).filter(Boolean).map((u) => path.basename(u)));
 for (const f of await fs.readdir(OUT)) if (!live.has(f)) await fs.rm(path.join(OUT, f));
 console.log("\nsegment summary:");
-for (const [s, v] of Object.entries(summary))
-  console.log(`  ${s.padEnd(10)} ${String(v.files).padStart(4)} files  ${(v.bytes / 1e6).toFixed(2).padStart(7)} MB  (brotli ${(v.br / 1e6).toFixed(2)} MB, start pack ${(v.start / 1e6).toFixed(2)} MB)`);
+const total = { files: 0, bytes: 0, br: 0, start: 0 };
+const order = [...PIPELINE_SEGMENTS.filter((s) => summary[s]), ...Object.keys(summary).filter((s) => !PIPELINE_SEGMENTS.includes(s))];
+for (const [s, v] of [...order.map((s) => [s, summary[s]]), ["total", total]]) {
+  if (s !== "total") for (const k of Object.keys(total)) total[k] += v[k];
+  const b = START_BUDGETS[s];
+  const budget = b ? `  [budget: estimate ${(b.estimate / 1e6).toFixed(1)}, limit ${(b.limit / 1e6).toFixed(1)} MB${v.start > b.estimate ? "; over the estimate" : ""}]` : "";
+  console.log(`  ${s.padEnd(10)} ${String(v.files).padStart(4)} files  ${(v.bytes / 1e6).toFixed(2).padStart(7)} MB  (brotli ${(v.br / 1e6).toFixed(2)} MB, start pack ${(v.start / 1e6).toFixed(2)} MB)${budget}`);
+}
 console.log("manifest version", manifest.version);
 
-// credits page data (only assets that actually ship)
-const phIds = new Set(Object.keys(PH));
-for (const k of Object.keys(TERRAIN_LAYERS)) phIds.add(TERRAIN_LAYERS[k]);
-["pine_bark", "weathered_brown_planks", "rusty_metal_02", "plastered_stone_wall", "medieval_wood", "thatch_roof_angled", "fir_tree_01", "kloofendal_overcast_puresky", "rough_block_wall", "castle_wall_slates", "old_planks_02", "rough_wood", "stone_brick_wall_001", "rock_tile_floor", "dark_wooden_planks", "rock_face_03", "rocks_ground_08", "ganges_river_pebbles", "mossy_rock", "weathered_planks"].forEach((x) => phIds.add(x));
-const ph = JSON.parse(await fs.readFile(path.join(SRC, "credits-polyhaven.json"), "utf8")).filter((c) => phIds.has(c.id));
+// credits page data (only assets that actually ship: the Poly Haven entries the credits gate found them to need)
+const ph = JSON.parse(await fs.readFile(path.join(SRC, "credits-polyhaven.json"), "utf8")).filter((c) => creditsPH.has(c.id));
 await fs.mkdir(path.join(ROOT, "src/generated"), { recursive: true });
 await fs.writeFile(path.join(ROOT, "src/generated/credits.json"), JSON.stringify({ polyhaven: ph, extra: EXTRA_CREDITS }, null, 1));

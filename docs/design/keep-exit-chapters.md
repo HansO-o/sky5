@@ -18,7 +18,7 @@ This is the build spec for two new chapters, `keep` and `exit`, plus the fixes t
 | 4 | Continuity of the unchosen NPC | Rebel route: the scribe runs off east and later comes back through the keep with soldiers. Imperial route: Brun goes in through the postern and his men follow; they are the E1 enemies. He later leads the pursuers. | Fixes the gameplay design's K0.E3/K4.E2 contradiction. |
 | 5 | Names | Scribe: **伊沃·塔兰**, 雾门守备队书记官. His speaker label is 书记官 until he introduces himself (imperial K1-I6) and 伊沃 after. 卢西安 and 马雷克 are rejected. General: **维罗** (卡西乌斯·维罗) everywhere. Brun's surname 灰鬃 → **铁桦** (likely the official Chinese name of Skyrim's Gray-Mane family). Interrogator: **奥斯维克**. Scout: **卡雅**. New places: 柳溪村 (in 溪谷) and 石桥堡. | judges |
 | 6 | Torture room | Rebel route: a fight (interrogator plus an assistant who surrenders). The tech design's mercenary interrogator supplies the dying lines. Imperial route: the **blank-warrant bluff**, which becomes a fight if the player attacks. The interrogator leaves toward the drain and his **body is found at the rebel camp**. The cocoon now holds a courier, which fixes the drawbridge continuity hole. | cinematic + tech + judges |
-| 7 | Beast | 0 A.D. **wolf** ×1.5, which has a native lying segment. The bear is cut. | tech |
+| 7 | Beast | 0 A.D. **wolf** ×1.5, which has a native lying segment. The bear is cut. *Pipeline note, awaiting the design owner's confirmation: the build reads ×1.5 as 1.5 × a real-world large grey wolf (0.3 m per 0 A.D. unit: 1.15 m to the ear tips, 1.7 m nose to tail tip), so the shipped wolf is 0.45 m per unit, 1.72 m to the ears and 2.56 m long. This is **not** the horse's convention: `HORSE_SCALE` 0.4 m per unit as life size (`src/prologue/wagon.ts`). On that baseline ×1.5 would be 0.6 m per unit, 33 % larger (2.29 m to the ears, 3.41 m long). For that size, set `CreatureProfile.scale` 1.333 or `WOLF.metresPerUnit` 0.4 in `tools/gen/creatures.mjs`. See Appendix "Pipeline outputs", Creatures.* | tech |
 | 8 | Cave layout | Tech's measured layout, with the gallery enlarged so a camp fits, the spider chamber and den raised, and a new switchback climb to the cinematic **balcony**. Re-validated in v4 (§4.3). | tech + cinematic |
 | 9 | Exit | The tunnel physically emerges inside a **rock outcrop set piece** that sits on the terrain. The terrain crossing is a covered hole (`EXIT_HOLE`, same code as `KEEP_HOLE`). A white-out teleport from a dead-end stub is the **cut-list fallback** only. | judges |
 | 10 | Controls | Attack = `Mouse0`. Block = `Mouse2` (`Mouse1` is the middle button: input.ts records `Mouse${e.button}`). Heal = `KeyQ`. Sneak = **`KeyC`** with a toggle option (Ctrl+W closes the tab and nothing calls `keyboard.lock`). **No dodge** (Alt+Left is browser Back). `input.down()` must also read mouse buttons. | verified in input.ts and settings.ts |
@@ -912,7 +912,7 @@ Spider barks:
 | 弓手 (either faction) | E4 | 45 | 15 | Arrow 10 at 35 m/s. Draw 1.2 s with a glint at 0.6 s. The shield negates it within a 70° cone; a weapon block takes ×0.5. | Knife 6 (`Punch_Jab`) within 4 m | – | 3.0–4.0 |
 | 小洞蛛 ×2 (scale 0.55) | E5 | 30 | 20 | Bite 8 (`Spider_Attack` at 0.7×, hit 0.40 → 0.57 s tell, reach 1.4) | Lunge 10 (`Spider_Jump`, hit 0.52, 3–5 m, cooldown 5) | – | 1.6–2.2 · 3.2 m/s |
 | 洞穴巨蛛 (scale 1.0, about 2.6 m span) | E5 | 150 | 100 (only heavies and parries stagger it) | Bite 16 + venom 2/s × 4 s (reach 2.2) | Lunge 20 (4.5 m, cooldown 6) | – | 2.0–2.6 · 2.6 m/s |
-| 巨狼 (0 A.D. ×1.5) | E6 | 140 | 80 | Bite 18 (`Attack1` at 1.25×: hit ≈ 0.76 s; reach 2.4, ±50°) | Pounce 24 (Run ≤ 1.2 s → `Attack2` hit ≈ 0.80 s; knockdown unless shield-blocked; cooldown 6; run 7 m/s) | – | 2.2–2.8 |
+| 巨狼 (0 A.D. ×1.5 of a real-world wolf, 0.45 m per unit; baseline per §0 #7's note) | E6 | 140 | 80 | Bite 18 (`Attack1` at 1.25×: hit ≈ 0.76 s; reach 2.4, ±50°) | Pounce 24 (Run ≤ 1.2 s → `Attack2` hit ≈ 0.80 s; knockdown unless shield-blocked; cooldown 6; run 7 m/s) | – | 2.2–2.8 |
 
 **Companions** (essential; down at 0 HP, kneel 6 s, rise at 50 %):
 - 布伦: HP 200, axe 11 per hit, 70 % hit chance, interval 1.8–2.4 s, block 25 %.
@@ -1019,6 +1019,11 @@ Every new id goes into `tools/fetch-extra.mjs` and `tools/credits-extra.mjs`. Ne
   - Texture `animal_wolf_grey.png` from `0ad/0ad/master/binaries/data/mods/public/art/textures/skins/skeletal/`.
   - Re-base clip times. `idle_01` lie loop is 2.0–6.0 s, stand-up 7.0–8.0 s.
   - The credit **and a share-alike notice** are required. If the mirror disappears, fall back to the upstream `.dae` files.
+- *As built* (`tools/gen/creatures.mjs`; see Appendix "Pipeline outputs", Creatures):
+  - Assets `creatures/spider`, `creatures/wolf` and the optional `creatures/wolf_fur_brown`.
+  - Every wolf clip is rotation-only. The lying and dying clips and the bite (`Attack1`) are fitted to the ground.
+  - `wolf_idle_01` ships as `LieDown` / `Sleep` / `StandUp`.
+  - The spider walks at 1.305 m/s at rate 1, not 2.6.
 
 ### 10.4 Audio
 All Freesound sounds are CC0 and were checked live: page licence, uid, and HQ preview HTTP 200. Previews are already downloaded in `/tmp/claude-0/research/fs/` as `fs_{id}_{uid}-hq.ogg`. The `FS` array and credit lines are ready in `/tmp/claude-0/-home-user/723fb141-388f-585a-9830-e42e4105f74b/scratchpad/snippet.txt`. **Loudnorm flattens everything, so per-cue runtime gain is required** (footsteps 0.25, drips 0.3, torch 0.4, ambience beds 0.35).
@@ -1060,6 +1065,16 @@ All Freesound sounds are CC0 and were checked live: page licence, uid, and HQ pr
 
 **Rejected**: craigsmith uploads 483228/483224; 336888 (mixes CC-BY sources); lendrick 77632–77637; 760636; 414167; 517126; 634775; 497193.
 
+*As built* (`tools/gen/audio.mjs`; see Appendix "Pipeline outputs", Audio):
+- Every cue above ships.
+- The gaps are filled: `sfx_heartbeat` (146765) and `sfx_potion` (534336), both CC0, checked live.
+- Additions: `wolf_death` (734841), `spider_chatter` (202108 as the nest bed), and `_2`/`_3` variants where a cue lists two sources or takes.
+- Keep/exit one-shots are peak-normalised (−2 dBTP). Loops get one constant gain toward −18 LUFS, with an equal-power cross-fade and wrap padding.
+- Each audio entry carries a manifest `gain`. One-shots keep the table gain above; loops' gains are corrected by measurement. The runtime multiplies it into its volume, instead of hard-coding one.
+- The 11 keep/exit loops carry `loopStart`/`loopEnd`, which the runtime must apply.
+- `music_spider` loops 39 bars (66.857 s): its last bar cross-fades into the first, which keeps the beat grid.
+- Every audio source is pinned by sha256 (`tools/sources-audio.sha256`).
+
 ### 10.5 Audio by beat
 | Beat | Music state | Beds | Key one-shots |
 |---|---|---|---|
@@ -1082,6 +1097,10 @@ All Freesound sounds are CC0 and were checked live: page licence, uid, and HQ pr
 - `keep` (prefetched during `dragon` at tier 2; `pos` hint [60, −662]): interior, cave A, anim_combat, FPM kit, interior textures, keep audio. Estimated start pack **≈ 8.4 MB** (limit 15).
 - `exit` (prefetched during `keep`; `pos` hint [−10, −730]): cave B–E, spider, wolf, webs, `mossy_rock`, exit audio. **≈ 2.4 MB**, plus streamed music.
 - **Keep step 0 needs no new assets.**
+- *As built* (full build, 2026-10-06; brotli): keep start pack 8.63 MB, exit 1.29 MB.
+  - `tools/build-assets.mjs` fails the build if keep's start pack is over 15 MB or exit's over 6 MB, or if an asset's segment is not in `SEGMENTS`.
+  - It also fails if a shipped asset has no credits rule or lacks a credit it needs (§14 build gates).
+  - See Appendix "Pipeline outputs", Audio.
 - Frame budgets (GTX 1060 at 60 fps / Iris Xe at 30 fps on low):
 
   | Item | Budget |
@@ -1821,21 +1840,23 @@ The webs material `cave_web` has its atlas embedded: alpha blend, double-sided, 
 
 ### Props (`kit/fpm`, `procprops/*`, `props/meta`, Poly Haven additions)
 
-Built by one build step, `props/`: `tools/gen/props.mjs` runs `tools/gen/propkit.mjs` (the Quaternius kit) and `tools/gen/procprops.mjs` (the procedural props), then writes `props/meta`. Two helpers sit beside them: `tools/lib/handheld.mjs` (attach recipes and a forward-kinematics check of them against the UAL source clips) and `tools/lib/zipget.mjs` (ranged zip extraction plus the itch.io handshake, used by `tools/fetch-extra.mjs`). `shapes.mjs` gains `torus()` and `tube()`. Rebuild with `node tools/build-assets.mjs --only=props/`, which takes about 6 s with a warm KTX cache. The step reads the shipped `cave/anchors` and `keep/anchors`, so it runs after `cave/` and `keep/interior` (built or reused). The new Poly Haven models are ordinary `ph/<id>` steps.
+Built by one build step, `props/`: `tools/gen/props.mjs` runs `tools/gen/propkit.mjs` (the Quaternius kit) and `tools/gen/procprops.mjs` (the procedural props), then writes `props/meta`. Two helpers sit beside them: `tools/lib/handheld.mjs` (attach recipes and a forward-kinematics check of them against the UAL source clips) and `tools/lib/zipget.mjs` (ranged zip extraction plus the itch.io handshake, used by `tools/fetch-extra.mjs`). `shapes.mjs` gains `torus()` and `tube()`. Rebuild with `node tools/build-assets.mjs --only=props/`, which takes about 9 s with a warm KTX cache. `--only=kit/` and `--only=procprops/` select the same step: the step declares the prefixes it emits as aliases. An `--only` entry that selects no step now prints a warning, because it rebuilds nothing. The step reads the shipped `cave/anchors`, `cave/mesh_a` and `keep/anchors`, so it runs after `cave/` and `keep/interior` (built or reused). It also loads `tools/gen/cave.mjs` for the rock field, and the build fails if that module does not load. The new Poly Haven models are ordinary `ph/<id>` steps.
 
-Sources: `FPM_KIT` in `tools/sources.mjs` lists the 34 kit models, the trim textures and the licence. `tools/fetch-extra.mjs` pulls only those files (about 39 MB) out of the 150 MB zip into `assets-src/props/fpm/` using ranged requests (itch upload 13887750). `PH_MODELS` adds `wooden_table_02`, `stone_fire_pit` and `rock_face_02`, and `PH_TEXTURES` adds `weathered_planks` (the deck). Credits: `quaternius-fpm` is in `tools/credits-extra.mjs`. The Poly Haven ids are credited automatically through the `PH` table and the `phIds` list (`weathered_planks` was added to it).
+Sources: `FPM_KIT` in `tools/sources.mjs` lists the 34 kit models, the trim textures and the licence. `tools/fetch-extra.mjs` pulls only those files (about 39 MB) out of the 150 MB zip into `assets-src/props/fpm/` using ranged requests (itch upload 13887750). `zipExtract` checks every entry's inflated size and CRC-32 against the zip's directory. The fetch then checks all 82 files against `tools/sources-fpm.sha256`, which is in `sha256sum` format; the files on disk were verified against the zip's CRC-32s when it was pinned. The licence (`License_Standard.txt` → `LICENSE.txt`) is one of the 82 files. If the zip lacks it, the fetch fails instead of skipping it quietly. `PH_MODELS` adds `wooden_table_02`, `stone_fire_pit` and `rock_face_02`, and `PH_TEXTURES` adds `weathered_planks` (the deck). Credits: `quaternius-fpm` is in `tools/credits-extra.mjs`. The Poly Haven ids are credited automatically through the `PH` table and the `phIds` list (`weathered_planks` was added to it).
 
 | Manifest id | Type | Segment | Priority, `pos` | Raw / brotli | Content |
 |---|---|---|---|---|---|
-| `kit/fpm` | glb | **keep** | 92, [60, −662] | 1.81 MB / 1.42 MB | 34 Fantasy Props MegaKit models, 46.4k triangles, 5 materials. Trim sets at 1024² (colour and normal) plus 512² ORM, the cloth set at 512², the page texture at 256². Four chest clips. |
-| `procprops/keep` | glb | **keep** | 91, [52, −700] | 1.03 MB / 0.64 MB | 20 procedural props, 39.6k triangles (the gallery set piece is 26.5k, mostly chain links), 11 colliders. |
-| `procprops/exit` | glb | **exit** | 90, [−22, −718] | 43 KB / 28 KB | The den's three bone piles, 3.8k triangles, vertex colour only. |
-| `props/meta` | json | keep | 93, [60, −662] | 28 KB / 7 KB | Resolution table, per-prop data, attach recipes, world placements and joins (below). Load it with `loadJSON("props/meta")`. |
+| `kit/fpm` | glb | **keep** | 92, [60, −662] | 1.85 MB / 1.46 MB | 34 Fantasy Props MegaKit models, 46.4k triangles, 5 materials. Trim sets at 1024² (colour and normal) plus 512² ORM, the cloth set at 512², the page texture at 256² (see Deviations). Four chest clips. |
+| `procprops/keep` | glb | **keep** | 91, [52, −700] | 1.03 MB / 0.65 MB | 21 procedural props, 39.9k triangles (the gallery set piece is 26.5k, mostly chain links), 11 colliders. |
+| `procprops/exit` | glb | **exit** | 90, [−22, −718] | 44 KB / 29 KB | The den's three bone piles, 3.8k triangles, vertex colour only. |
+| `props/meta` | json | keep | 93, [60, −662] | 32 KB / 8 KB | Resolution table, per-prop data, attach recipes, world placements and joins (below). Load it with `loadJSON("props/meta")`. |
 | `ph/wooden_table_02` | glb | keep | 90, [60, −662] | 142 KB / 138 KB | 196 triangles, 512² textures. The hall's cover tables. |
 | `ph/stone_fire_pit` | glb | keep | 88, [53.5, −724] | 224 KB / 218 KB | Simplified to 2.9k triangles, 512² textures. The cave camp. |
 | `ph/rock_face_02` | glb | **muster, streamed** | 60, [−19, −675] | 718 KB / 710 KB | Simplified to 4.4k triangles, 1024² textures. The outcrop brow. |
 
-Start packs (brotli) after this build (`--only=props/`, manifest `453014cd35b7`): keep **6.27 MB** (3.79 MB before; limit 15), exit **0.39 MB** (0.37 before). Muster stays at 12.57 MB, because the brow streams. The other segments are unchanged. All 94 earlier ids still exist with unchanged hashes. Seven ids are new.
+Start packs (brotli) after the first build (`--only=props/`, manifest `453014cd35b7`): keep **6.27 MB** (3.79 MB before; limit 15), exit **0.39 MB** (0.37 before). Muster stays at 12.57 MB, because the brow streams. The other segments are unchanged. All 94 earlier ids still exist with unchanged hashes. Seven ids are new.
+
+After the review fixes (`--only=props/`, manifest `68300d7447b0`), the start packs are unchanged at keep 6.27 MB and exit 0.39 MB. All 101 ids still exist. Only `kit/fpm` (the stand's `leanRest`), `procprops/keep` and `props/meta` changed.
 
 **Conventions** (both GLBs; repeated in `props/meta.conventions`):
 - **One top-level node per prop.**
@@ -1843,7 +1864,7 @@ Start packs (brotli) after this build (`--only=props/`, manifest `453014cd35b7`)
   - Geometry is on `<node>_mesh` leaf children, so mesh quantisation only moves those.
   - Colliders are `*_col` nodes: POSITION only, no material. Hide them and build static bodies from their world geometry. Their glTF extras carry `tag` (and `state` on the bridge decks).
   - Anchors are empty nodes.
-  - Moving parts are pivot nodes whose identity is the rest pose: door closed, lever up, deck lowered.
+  - Moving parts are pivot nodes whose identity is the rest pose: door closed, lever at rest (leaning about 55° toward the puller, not upright), deck lowered.
 - **No mesh is shared between nodes.** A glTF mesh used twice becomes a Babylon InstancedMesh tied to the other node, which breaks per-node instantiation. The build fails if a mesh is shared.
 - **Facing.** Placeable props face **−Z**, the anchors' facing convention: `rotation.y = yaw` turns local −Z to the facing. The kit models face +Z in the source and are turned 180°. Held items keep their source axes, which the runtime recipes assume (`Sword_Bronze`: handle +Y, edge +X). Wall props (`Torch_Metal`, `Lantern_Wall`, `Peg_Rack`, `Shelf_Small_Bottles`, `sconce`) have their back on the plane z = 0.
 - **glTF extras.** Each top-level node's extras (Babylon: `node.metadata.gltf.extras`) carry the same data as `props/meta`.
@@ -1878,7 +1899,7 @@ Start packs (brotli) after this build (`--only=props/`, manifest `453014cd35b7`)
   | `Table_Large` | `_top` (y 0.815) |
   | `Chair_1`, `Bench`, `Stool` | `_sit` (seat height) |
   | `Bed_Twin1` | `_lie` |
-  | `WeaponStand` | `_slot_0`…`_slot_4`: the five notches of the top bar (y 0.84). Turned 90° about Y so a blade's flat faces along the bar. An upright weapon stands with its lowest point on the slot. Also `_lean`, where a shield leans against the front. |
+  | `WeaponStand` | `_slot_0`…`_slot_4` at x −0.35, −0.17, 0, 0.17, 0.35 **on the floor (y 0)**, under the five notches of the top bar (y 0.84) that hold the weapons upright. The slots are turned 90° about Y so a blade's flat faces along the bar. An upright weapon stands with its lowest point on its slot (`placements.weapon_stands` lifts it already). Also `_lean` (0, 0, −0.55), on the floor in front of the stand, where a shield's tip goes. Meta `leanRest` gives the front of the top bar, where the shield rests (z −0.137, y 0.81…0.86). |
   | `Shelf_Small_Bottles` | `_top_0`, `_top_1` (on the top board, for the two `Potion_2`) |
 
 **Attach recipes** (`props/meta.held`, keyed `asset#node`; also in each node's extras `held`).
@@ -1893,10 +1914,12 @@ Start packs (brotli) after this build (`--only=props/`, manifest `453014cd35b7`)
 | `procprops/keep#torch` | `hand_l` | (0.7071, 0, 0, 0.7071) | (0.03, 0.095, −0.14) | (0, 0.14, 0); the flame anchor `torch_flame` is at (0, 0.62, 0) | flame up in `Idle_Torch_Loop`: 18° |
 | `procprops/keep#bow` | `hand_l` | (0.7071, 0, 0, 0.7071) | (0.03, 0.095, 0) | (0, 0, 0) | back faces forward (12°) and upper limb up (1°) in `Bow_Aim_Neutral` |
 | `procprops/keep#paper_warrant` | `hand_l` | (0.5, −0.5, 0.5, 0.5) | (0.06, 0.155, 0) | (0, 0.03, 0.06): the sheet is held in front of the hand | written side faces forward in `Interact` @0.8: 21° |
+| `ph/kite_shield` | `hand_l` | (0.5, −0.5, −0.5, 0.5), as §3.3 | (−0.001, 0.095, −0.05) | (0, 0.05, −0.031): the model has no handle, so the fist sits 3.5 cm behind the back at its centre; the face is +Z | faces forward in `Idle_Shield_Loop` (7°) and `Shield_OneShot` (5°). The entry carries `tune: true`: tune the position by eye. |
+| `ph/wooden_axe_03` | `hand_r` | (0, 0.7071, 0.7071, 0), as §3.3 | (−0.03, 0.095, 0.15) | | not re-measured; **`scale` 1.25**, also on its stand |
 | `kit/fpm#Potion_2`, `kit/fpm#Key_Metal`, `procprops/keep#key_ring` | see the meta | | | | upright; no clip pins their roll, so tune by eye |
 | `procprops/keep#cuffs_rope` | `cuffs_rope_l` on `hand_l`, `cuffs_rope_r` on `hand_r` | identity | (0, 0.008, 0) | | The coil clears both base bodies' wrists, checked on the skins' bind pose: it is filled to 0.99 (male) and 0.88 (female) of its inner section. `BoneSocket` ignores bone scale, so a forearm the appearance sliders thicken may touch it. |
 
-**Runtime note on the sword:** `gear.ts` estimates the sword's grip from its bounds at pommel + 0.09, which is y −0.118. That is 14 cm below the measured grip (0.026) and puts the hand on the pommel. Use `props/meta.held["kit/fpm#Sword_Bronze"]`. The `ph/wooden_axe_03` and `ph/kite_shield` entries copy the §3.3 recipes and were not re-measured.
+**Runtime note on the sword:** `gear.ts` estimates the sword's grip from its bounds at pommel + 0.09, which is y −0.118. That is 14 cm below the measured grip (0.026) and puts the hand on the pommel. Use `props/meta.held["kit/fpm#Sword_Bronze"]`. The `ph/wooden_axe_03` entry copies the §3.3 recipe, which was not re-measured. The `ph/kite_shield` entry keeps the §3.3 rotation and has a measured, numeric position; every `held` recipe now has a numeric `position`. Some recipes also have a `scale`, which the runtime must apply.
 
 **`procprops/keep`** (top-level nodes):
 
@@ -1912,7 +1935,8 @@ Start packs (brotli) after this build (`--only=props/`, manifest `453014cd35b7`)
 | `bow` | Recurve bow: limbs ±Y, string on +Z, back −Z. Children: `bow_limbs`, `bow_string` (a separate mesh), `bow_nock` (string centre, brace 0.198 m), `bow_string_top` / `bow_string_bottom` (where the string leaves the limbs), `bow_rest`. | While drawing, hide `bow_string` and draw `bow_string_top` → hand → `bow_string_bottom`. |
 | `arrow` | Along **+Z**, tip at +0.42, nock at −0.39: the same convention as `src/prologue/fx/arrow.ts`. | Can replace the built-in arrow template. |
 | `torch` | Hand torch: shaft +Y, `torch_flame` at (0, 0.62, 0). | Companion's torch (K9–X3) |
-| `sconce` | Wall bracket plus torch. Origin on the light anchor's **`wall`** point, wall plane z = 0, facing −Z. `sconce_flame` (0, 0, −0.22) lands exactly on the light anchor. `sconce_torch` is the torch, baked in place. | Placed on all 20 sconce lights (`placements.sconces`). In K9, hide `sconce_torch` and hang a `torch` on the companion. |
+| `sconce` | Wall bracket plus torch, baked into **one vertex-coloured primitive** (`sconce_mesh`, material `pp_vcol`, 792 triangles), so each sconce costs one draw call. Origin on the light anchor's **`wall`** point, wall plane z = 0, facing −Z. `sconce_flame` (0, 0, −0.22) lands exactly on the light anchor. | Placed on all 20 sconce lights (`placements.sconces`): 20 draw calls, against the 60 the textured version needed. All sconces share `pp_vcol`, so the runtime can merge or thin-instance them per zone if draw calls run short. |
+| `sconce_empty` | The same bracket without its torch (`sconce_empty_mesh`, `sconce_empty_flame`). | K9: replace the sconce whose torch the companion takes with `sconce_empty` (same transform), and hang a `torch` on the companion. |
 | `straw_bed` | Straw mound and loose strands, 1.8 × 0.9 m, long along X; double-sided straw material; no collider. | `placements.straw_beds`: one along the back wall of each of the 10 cells |
 | `drain_grate` | The bent and broken grate in the drain mouth. Origin at the opening's bottom centre on the B5 wall face; the bars are 8 cm inside. The middle is forced open (x ±0.62, full height). `drain_grate_col` holds the two side clusters (tag `drain_grate`), leaving 1.40 m between them. | `placements.drain_grate` (54.1, 32.13, −688.0), yaw 0 |
 | `paper_warrant`, `paper_letter` | Sealed sheet 0.21 × 0.30 m: written front (−Z), blank back, procedural parchment. Sealed letter packet. | K6 bluff (Ivo, `hand_l`); footlocker and cocoon letter |
@@ -1931,7 +1955,9 @@ Start packs (brotli) after this build (`--only=props/`, manifest `453014cd35b7`)
   - To break the deck: hide the six planks, spawn `Debris` boxes at their world transforms, then swing the hinge to `broken`.
 - **Colliders**, one per state, all static: `bridge_deck_raised_col`, `bridge_deck_lowered_col` and `bridge_deck_broken_col` (tags `bridge_deck_{raised,lowered,broken}`, per §3.1). Enable one at a time. Always on: `bridge_frame_col` (the hinge blocks beside the deck), `winch_col` and `lever_col`.
 - **Chains.**
-  - The tip chains run to two pulleys on the dome above mid-span, at x ∓1.4 and y 35.0. The slab (2.4 m wide) falls between them.
+  - The tip chains run to two pulleys on the dome above mid-span, at x ∓1.4, 0.5 m north of the raised deck's tip eyes (z −730.9).
+    - Their height comes from the rock field: the build finds the ceiling above each bracket's footprint and puts the plate's top 4 cm into the rock at the footprint's highest point. Now that is y 34.955 (west) and 35.087 (east), with the ceilings at 35.435 and 35.567. `extras.pulleys` records both.
+    - The slab (2.4 m wide, measured half-width 1.221) falls between them; the build checks it clears the pulleys' inner cheeks (1.3).
   - From the pulleys, `bridge_haul_chains` run down to the winch drum. They are always shown and pass 2.4 m or more above the north ledge.
   - Per-state static chains: `bridge_chain_raised`, `bridge_chain_lowered`, and `bridge_chain_broken` (hanging 3.1 m from the sheaves).
   - While the deck moves, hide them and draw each chain from `bridge_sheave_w/e` to `bridge_tip_w/e`. Use `n = max(1, round(L))` `chain_strip` instances, each scaled by L/n along Y.
@@ -1940,10 +1966,15 @@ Start packs (brotli) after this build (`--only=props/`, manifest `453014cd35b7`)
   - `winch_drum` (pivot at the drum axis, 0.78 m up) carries the drum, coiled chain, ratchet and crank; spin it while the deck moves.
   - The stone foundation is sunk into the sloping ledge; the build checks that the floor lies between its bottom and top across its footprint.
 - **Lever.**
-  - The `lever` node sits on the cave anchor `lever` (world axes). Pivot `lever_pivot` is at lever-local (0.1, 1.0, −0.4), axis +X. **Identity is up** (rest); pulled = **+0.6457** rad.
-  - `lever_grip` is the handle end, radius 1.22.
+  - The `lever` node sits on the cave anchor `lever` (world axes). Pivot `lever_pivot` is at lever-local (0.1, 1.0, −0.4), axis +X.
+  - **Identity is the rest pose.** In it the handle leans about **55° from vertical toward the puller** (`extras.lever.restAngle` 0.9527 rad from +Y toward +Z): `lever_grip` is at (0, 0.707, 0.994) from the pivot. Pulling adds up to **+0.6457** rad, which turns the handle further down toward the puller, ending about 2° below horizontal.
+  - The shaft now ends 5 cm past the grip, at radius 1.27 (it was 1.34). With the full overhang, the end came within 0.13 m of the puller's right thigh and spine bones at full pull. The build now checks the handle's outer part (radius 0.9 to the end) against the pelvis, spine, thigh, calf and upper-arm bones over the whole pull, and requires at least 0.17 m. The current clearances are 0.20 m (`thigh_r`) and 0.22 m (pelvis, spine); see `extras.lever.bodyClear`.
+  - `lever_grip` is the grip point, at radius 1.22, 5 cm short of the handle's end.
   - The pivot was fitted to `Farm_PickingTree`'s right-hand grip path with the puller on `lever_stance` facing −Z. The hand grabs at **1.06 s** and pulls until **1.68 s**.
-  - `extras.lever.clip.curve` gives the handle angle per clip second. Drive the pivot by it and the grip stays within **0.18 m** of the hand throughout.
+  - `extras.lever.clip.curve` gives the handle angle per clip second. Driven by it, `lever_grip` stays within **0.18 m** of the hand (`handGap` 0.179). **Expect that gap to show.**
+    - Most of the gap is sideways: the hand drifts from x −0.09 to +0.17 m across the lever's plane during the pull (`extras.lever.lateral`). The radial error is small.
+    - A planar lever cannot follow that drift. A best-fit lever turned 11° about Y gets only to 0.15 m, so the fit is kept.
+    - **Runtime:** pull `hand_r` onto `lever_grip` with a small two-bone IK over `extras.lever.ik.window` (1.06…1.68 s), blending in and out over about 0.1 s. Alternatively, shift the stance by up to −0.04 m in x to centre the drift on the plane, and accept the rest of the gap.
 - **Slab.** `slab` (2.4 × 1.0 × 1.8 m rock chunk) at the cave anchor `slab_drop`, with extras `debris.half` (1.2, 0.5, 0.9). It sits 0.2 m under the dome and **overlaps the raised deck**, so keep it hidden until K12 2.8 s, then drop it as a Debris box.
 - **Material `pp_rock`.** The slab, the hinge blocks, the winch foundation and the lever block use `pp_rock`. It is untextured in the GLB and its extras name `cave/tex/rock_{d,n,arm}`, tile 2.0. Bind it with the cave's code (§ "Cave and balcony outcrop").
 - **Checked against the cave's rock field** (`tools/gen/cave.mjs` `_debug.S`); the build fails on a miss. Clearance to the rock:
@@ -1951,12 +1982,17 @@ Start packs (brotli) after this build (`--only=props/`, manifest `453014cd35b7`)
   | Part | Clearance |
   |---|---|
   | Deck raised / lowered / broken (bar the hinge end and the tip resting on the ledge) | 0.50 / 0.20 / 0.12 m |
-  | Chains raised / lowered | 0.51 / 0.17 m |
+  | Chains raised / lowered | 0.53 / 0.17 m |
   | Lever sweep | 0.93 m |
   | Winch frame | 0.70 m |
   | Slab body | 0.50 m |
 
-  Also checked: the pulley sheaves are in the air with their brackets in the rock, and the winch and lever bases rest on the floor.
+  Also checked: the pulley sheaves are in the air with the brackets' plates in the rock over their whole footprint, the slab clears the pulleys, and the winch and lever bases rest on the floor.
+- **The field must be the shipped one.** `tools/gen/procprops.mjs` `checkCaveField` compares `tools/gen/cave.mjs`'s live field with the shipped cave in two ways, and fails with "rebuild both with `--only=cave/,props/`" when either differs:
+  - the shipped `cave/mesh_a` collider vertices around the gallery (890 of them) must lie on the field: median 0.8 mm, 0.9 % beyond 5 cm; the limits are 1 cm and 3 %;
+  - every cave anchor's floor and clear height (51 anchors) must reproduce.
+
+  This catches a `cave.mjs` edited after the last `cave/` build, which would otherwise fit the props to rock that does not ship.
 
 **`procprops/exit`:** `bones_a` (with a skull), `bones_b` and `bones_c`. Extras give `noiseRadius` 0.6 (§4.3). `placements.bones` puts them on `bones_1…3`.
 
@@ -1990,13 +2026,16 @@ Start packs (brotli) after this build (`--only=props/`, manifest `453014cd35b7`)
   | `dice` | on the J table top |
   | `records` | `Scroll_1` and `Book` on the B3 table |
   | `store_shelf` | the shelf and its two potions (see below) |
-  | `weapon_stands` | per stand: items in their slots, already lifted, plus the shield's lean point |
+  | `weapon_stands` | Per stand: the items in their slots, already lifted. The rebel stand's `ph/wooden_axe_03` has **`scale` 1.25**, the size it has in the hand, and is lifted for it. On the imperial stand, the kite shield is placed with **`rotation`** (a Babylon quaternion, also given as the node Euler `euler`). Its face is turned to the stand's facing and it is tilted back 25.25°, so its tip is on the floor at the stand's `_lean` point and its back rests on the top bar. This was checked against the source vertices: no vertex is more than 1 cm into the bar. Use `rotation`, not `yaw`. `shield` is `null` on the rebel stand. |
   | `camp_fire` | `ph/stone_fire_pit` at `camp_fire` + 0.15 m (the scan's origin is mid-height) |
   | `outcrop_brow` | `ph/rock_face_02` at the cave's suggestion (−19, 60.5, −674.6) |
 
   The `use_store_potions` anchor stands 0.6 m off the G4 east wall, so `store_shelf` puts the shelf's back on that wall at x 71.78.
-- `joins`: the cave anchors (`bridge_hinge`, `slab_drop`, `lever`, `lever_stance`, `winch`) and the keep's `rooms.drain` the props were built against. **A gate in `build-assets.mjs` fails** when the shipped `cave/anchors` or `keep/anchors` no longer match: "rebuild with `--only=props/`".
-- `stats`: the gallery clearances.
+- `joins.inputs`: the sha256 of every shipped file `props/` reads (`PROPS_INPUTS` in `tools/gen/props.mjs`): `cave/anchors`, `cave/mesh_a` and `keep/anchors`.
+  - They are the full inputs, not a few picked values: all of `placements` comes from them (the sconces' wall points, the cells, the B3 props, the table, records, storeroom, weapon stands, bones, camp fire and brow), and so do the gallery's rock checks and pulley heights.
+  - **A gate in `build-assets.mjs`** (`tools/lib/joins.mjs` `checkPropsJoin`) fails before the manifest is written if any of these ids now ships another hash, is gone, or is not recorded. For example, `--only=cave/` or `--only=keep/interior` alone fails until `props/` is rebuilt with it.
+  - `joins.field` records the live-field check above.
+- `stats`: the gallery clearances and the lever's hand gap, lateral drift and body clearances.
 
 **Build validation** (fails the build):
 - Every kit model is configured, and the encoded kit still names every model at the identity transform.
@@ -2006,25 +2045,39 @@ Start packs (brotli) after this build (`--only=props/`, manifest `453014cd35b7`)
 - The held-item clip checks.
 - The lever's hand gap is ≤ 0.25 m.
 - The rope cuffs clear both bodies' wrists.
-- The gallery rock checks.
+- The gallery rock checks. `tools/gen/cave.mjs` must load and its field must match the shipped cave (`checkCaveField`).
+- The pulleys hang from the field's ceiling and their plates reach the rock; the slab clears them.
+- The lever's handle stays at least 0.17 m from the puller's body bones throughout the pull.
 - The B3 cage, chair and shackles footprints lie inside their rooms.
-- The props join.
+- The props join: every input in `joins.inputs` is still the shipped file.
+- The rope cuffs fail the build when a base body is missing; they are no longer skipped with a note.
+- The kite shield's face-forward checks, and its lean resting on the stand's bar within 40°.
 
 **Runtime integration checklist (props):**
-1. Load `props/meta`, then `kit/fpm` and `procprops/keep` with the keep chapter and `procprops/exit` with the exit chapter. Resolve each anchor's `prop` suggestion through `meta.resolve`, instantiate that node, and place it by the anchor (or by `meta.placements`) and its yaw.
+1. Load `props/meta`, then `kit/fpm` and `procprops/keep` with the keep chapter and `procprops/exit` with the exit chapter.
+   - **Resolve each anchor's `prop` suggestion through `meta.resolve`**, for example `procprops/cage` → `{asset: "procprops/keep", node: "cage"}`. There are no manifest ids per prop. As of this build, `src/prologue/keep/props.ts` `propSources()` guesses `procprops/cage`, `procprops#cage` and `props/procprops#cage`, which match nothing, so every procedural prop falls back to its stand-in.
+   - Instantiate the resolved node and place it by the anchor (or by `meta.placements`) and its yaw. Where a placement has `rotation`, use it instead of the yaw. Apply `scale` where a placement has one.
 2. Hide every `*_col` and build static bodies from them, using the tags in their extras. For the drawbridge, enable one deck collider per state.
 3. **Gallery:**
    - lowering over 4.5 s: deck angle −1.0472 → 0, spin `winch_drum`, live chains;
    - the lever: the `curve` against `Farm_PickingTree`;
    - K12: `slab` shown and dropped, planks to Debris, hinge to +0.6109, `bridge_chain_broken`, `bridge_deck_broken_col`.
 4. **Held items:** switch `gear.ts` from the bounds estimate to `meta.held` (the sword's grip above). The torch, bow and warrant recipes are ready.
-5. **Chest:** play `Chest_Wood_Open`, or drive `Chest_Wood_lid`.
-6. **Sconces:** place them from `placements.sconces`. The flame sprites and pool lights stay on the light anchors.
-7. **Outcrop brow:** load the streamed `ph/rock_face_02` with the town (outdoor set) and place it at `placements.outcrop_brow`.
-8. **Materials:** bind `pp_rock`'s `extras.textures` with the cave's code.
+5. **Chest:** play **`Chest_Wood_Open`**, or drive `Chest_Wood_lid`. As of this build, `props.ts` documents a `Chest_Open` clip. It finds the clip with `/open/i`, which picks `Chest_Wood_Open` only because that clip comes before `Chest_Wood_Opened` (the static open pose) in the file. Match the name exactly.
+6. **Sconces:** place them from `placements.sconces`, one draw call each. The flame sprites and pool lights stay on the light anchors. In K9, swap the sconce for `sconce_empty`.
+7. **Lever:** drive `lever_pivot` by `extras.lever.clip.curve` and close the remaining hand gap with the IK in `extras.lever.ik` (above).
+8. **Outcrop brow:** load the streamed `ph/rock_face_02` with the town (outdoor set) and place it at `placements.outcrop_brow`.
+9. **Materials:** bind `pp_rock`'s `extras.textures` with the cave's code.
 
 **Deviations:**
 - **`Chest_Wood` is rigid, with renamed clips.** §10.2 asks for the skinned chest with its animated `Chest_Open`. Rigid nodes give the same motion without a skeleton, they instantiate per node, and they open like the doors. `Chest_Open` remains the name of the UAL body clip.
+- **Kit texture sizes.** §10.2 asks for "the 4 trim sets at 1024 KTX2". As built, the furniture, metal and props trims are 1024² for colour and normal but **512² for ORM**, and the **cloth set is 512²** for all three maps. The page noise is 256².
+  - The ORM maps are low-frequency (occlusion, roughness and metalness of a trim sheet).
+  - Cloth covers only the bag, pouch, bed and dummy.
+  - The smaller maps reduce GPU memory and download size. The keep start pack is 6.27 MB of its 15 MB limit, so there is room to restore them.
+  - To restore the full size, change `MATERIALS` and `compressTextures(doc, 1024, 1024, 512)` in `tools/gen/propkit.mjs`.
+- **Kite shield recipe measured.** §3.3 left the position as "tune". The build now derives it from the model's back (it has no handle) and checks it in two clips. It is still flagged `tune: true`.
+- **Sconces baked.** The sconce is one vertex-coloured primitive instead of a textured bracket and torch. For K9, `sconce_empty` replaces "hide `sconce_torch`", because the bake has no separate torch node.
 - **Kit selection.**
   - `Book` is `Book_7`, renamed, because the anchors ask for `kit/Book`.
   - Added: `Crate_Metal`, `Potion_1/4`, `Bottle_1`, `SmallBottle(s)`, `Mug` and `Candle_1`.
@@ -2033,5 +2086,394 @@ Start packs (brotli) after this build (`--only=props/`, manifest `453014cd35b7`)
 - **Lever timing and grip.** The handle moves during **1.06–1.68 s** of `Farm_PickingTree`, not 0.56–1.68 s: the hand reaches the top only at about 1.0 s. The grab point is 1.78 m high and 0.29 m in front of the puller, against the anchor note's 1.6 m and 0.32 m.
 - **Brow segment.** `ph/rock_face_02` ships in **muster, streamed**, not with the chapters. It decorates the outcrop, which is shown with the town from muster on, so loading it in exit would make it pop in.
 - **Cell bars.** They stay in `keep/interior`. `bars_panel` is a spare panel.
-- **Extra procedural props:** `bars_panel`, `strap_chair`, `brazier_irons`, `dice`, `key_ring`, `paper_letter`, `arrow`, `sconce`, `chain_strip` and `chain_hang`. The keep anchors and the beats ask for them, but §10.1 does not list them.
+- **Extra procedural props:** `bars_panel`, `strap_chair`, `brazier_irons`, `dice`, `key_ring`, `paper_letter`, `arrow`, `sconce`, `sconce_empty`, `chain_strip` and `chain_hang`. The keep anchors and the beats ask for them, but §10.1 does not list them.
 - **Weapon stand.** The imperial stand's anchor (65.55, −656.75), turned to face −X, puts the stand's back feet 4 cm into the east partition. This was left as anchored.
+
+### Creatures (`creatures/*`)
+
+Built by `tools/gen/creatures.mjs`. The module is self-contained: the source tables `SPIDER` and `WOLF`, the conversion and the checks. Its only dependencies are `@gltf-transform`, `sharp`, `assimpjs` and the shared `lib/gltf` and `lib/ktx` helpers. Rebuild with `node tools/build-assets.mjs --only=creatures/`, which takes about 5 s. The build is deterministic.
+
+**Sources.** `node tools/fetch-extra.mjs` puts them in `assets-src/creatures/`, and every file is pinned by sha256.
+- **Spider:** only `FBX/Spider.fbx` is pulled out of the Easy Enemy Pack zip. It uses the itch upload-id flow (upload 1254673, `itchSignedUrl` + ranged `zipExtract`). The fetch also writes the CC0 `LICENSE.txt` note, because the zip has none.
+- **Wolf:** `wolf_{walk,run,attack_01,attack_02,idle_01,idle_02,death_01}.glb` come from the pinned ZeroAD-Godot commit. `animal_wolf_grey.png`, `animal_wolf.png` and `LICENSE-0ad-art.txt` come from the pinned 0ad commit. These are the horse's mirrors.
+  - **Mirror risk.** ZeroAD-Godot is a third-party repository. If it disappears, the fallback is the upstream Collada at the pinned 0ad commit: `art/meshes/skeletal/wolf.dae` and `art/animation/quadraped/wolf_*.dae` for the wolf, and `horse.dae` and `horse_{walk,trot}.dae` for the horse. All of them returned 200 on 2026-10-06, and `tools/fetch-extra.mjs` names them at each block. Converted files are new files, so their pins and the merge checks must be redone.
+  - **Open:** archive the 7 pinned wolf glbs and the 3 horse glbs (for example as a release asset of this repository) so the build no longer depends on someone else's repository. That needs the repository owner; the pipeline did not do it.
+- **Tools:** the FBX is converted in Node by `assimpjs`, a new devDependency (MIT, WASM). No Blender is needed.
+
+**Credits.** Two entries in `tools/credits-extra.mjs`:
+- `quaternius-easy-enemies`: CC0.
+- `0ad-wolf`: CC BY-SA 3.0. Its note marks the wolf as a modified work, licensed share-alike under CC BY-SA 3.0.
+- The 0 A.D. art licence (`LICENSE-0ad-art.txt`) requires the attribution to name "Wildfire Games" and to link both http://creativecommons.org/licenses/by-sa/3.0/ and **http://www.wildfiregames.com/**. The credits panel links the entry's name to `source` and the licence name to `licenseUrl`. So `0ad-wolf` and `0ad-horse` (the same licence file) use `source: "http://www.wildfiregames.com/"`, and their note names 0 A.D. and https://play0ad.com.
+
+| Manifest id | Type | Segment | Priority, `pos` | Raw / brotli | Content |
+|---|---|---|---|---|---|
+| `creatures/spider` | glb | exit | 92, [18, −750] | 164 KB / 85 KB | 2,712 tris, 39 joints, 5 clips, 2 materials, no textures |
+| `creatures/wolf` | glb | exit | 90, [−22, −718] | 232 KB / 133 KB | 696 tris, 32 joints, 9 clips, grey fur (256² KTX2) |
+| `creatures/wolf_fur_brown` | ktx2 | exit, **streamed** (optional) | 40, [−22, −718] | 29 KB / 29 KB | The 0 A.D. "fur-brown" skin on the same UVs (alpha dropped) |
+
+The creatures add 0.22 MB brotli to the exit start pack, which comes to 0.62 MB with `cave/mesh` and `procprops/exit`.
+
+**GLB layout** (the same for both; every point is checked by the build):
+- **Scene root.** One node, `spider` or `wolf`. It is the identity transform, in metres, +Y up, facing glTF +Z (head forward), with its origin on the ground under the body.
+- **Children.** Under the scene root are the skinned mesh and the skeleton root joint, which carries the baked uniform scale.
+  - Skinned mesh: `spider_mesh` (Babylon splits it into `spider_mesh_primitive0` body and `_primitive1` eyes) or `wolf_mesh`.
+  - Skeleton root joint: `Root` at scale 0.4379, or `Bone` at scale 0.45.
+  - No other node sits above the joints. Mesh vertices are in model space.
+- **Scale 1 is the full-size creature.** Set `CreatureProfile.scale` to 1 for the giant spider and the wolf, and 0.55 for the small spiders.
+- **Clips.** The AnimationGroup name is the clip name. Every clip starts at 0. Within one asset, every clip animates the same channel set:
+  - spider: 30 rotations, plus translation on `Body` and the 8 leg-tip joints;
+  - wolf: rotation on all 32 joints, plus translation on `Bone`.
+
+  So a cross-fade never leaves a joint at another clip's value. Quaternion keys are sign-continuous.
+- **Metadata.** The scene root's glTF extras (Babylon: `metadata.gltf.extras` on the container's `spider` or `wolf` transform node) repeat the tables below as data:
+  - units, bounds, bones, feet, materials;
+  - `variants` (spider);
+  - per clip: `duration`, `loop`, `lowest`, `groundSpeed`, `snap`, `strike`, `reach`, `apex`, `height`, `land`, `rear`, `pawsUp`, `pawsDown`, `source`, and `designHit` (§8's hit time, next to the measured one);
+  - per loop clip: `closeGap` (m, the largest joint distance from the last pose to the first, measured before closing), `frameStep` (m, the clip's largest per-key joint step), `closeDt` (s, the frame appended to close it, 0 if it was already seamless) and `seam` (m, after closing: 0);
+  - `joins` (wolf).
+- **Checked statically.**
+  - The Khronos glTF validator reports 0 errors. Its warnings are harmless: the KTX2 mime type, and "skinned mesh not root" (its parent is the identity top node).
+  - Decoded copies of the shipped files (meshopt and quantisation undone, textures removed) load in Babylon (NullEngine) through `LoadAssetContainerAsync` and `instantiateModelsToScene`, as `Creature.fromContainer` does. Their CPU-skinned bounds per clip match the build's forward kinematics to the millimetre.
+
+**Spider** (`creatures/spider`, Quaternius Easy Enemy Pack, CC0):
+- **Joints.** `Root` > `Body` > `Thorax` > `Head`, plus `Abdomen` and the legs.
+  - Legs: `{Front,MidFront,MidBack,Back}Leg{,2,3}.{L,R}`.
+  - Leg-tip joints (weighted, children of `Root`): `FrontFoot.L`, `MidFrontFoot.L`, `MidBackFoot.L`, `BackFoot.L`, `FrontFoot2.R` (sic), `MidFrontFoot.R`, `MidBackFoot.R`, `BackFoot.R`.
+  - `PoleTarget.L/R` are unused.
+  - Logical bones: body `Body`, head `Head`, thorax `Thorax`, abdomen `Abdomen`.
+- **Materials.** Both are opaque. In linear RGB:
+  - `spider_body`: base [0.03, 0.027, 0.026], roughness 0.45. This is the giant.
+  - `spider_eyes`: base [0.25, 0.012, 0.01], emissive [0.55, 0.035, 0.02].
+- **Variants** (`extras.variants`): giant at scale 1 with body [0.03, 0.027, 0.026]; small at scale 0.55 with body [0.15, 0.075, 0.03].
+  - The runtime's `tint` sets `albedoColor` on every material. The eyes keep their emissive glow under any tint. To keep their red base as well, tint only `spider_body`.
+- **Size at scale 1.**
+  - Bind-pose leg span: 2.6 m.
+  - `Spider_Idle` frame 0: x ±1.30, y 0…0.845, z −1.016…1.183 m.
+  - At scale 0.55: span 1.43 m, height 0.46 m.
+
+| Clip | s | Loop | Measured (scale 1) |
+|---|---|---|---|
+| `Spider_Idle` | 4.167 | yes | Seamless as authored (`closeGap` 0) |
+| `Spider_Walk` | 0.833 | yes | **Ground speed 1.305 m/s** at rate 1, so rate = v / (1.305 × scale). Seamless as authored (`closeGap` 0; largest frame step 0.183 m) |
+| `Spider_Attack` | 0.75 | no | The head thrusts 0.26 m forward: fastest at 0.413 s, furthest at 0.417 s. Matches the design's hit at 0.40. |
+| `Spider_Death` | 1.042 | no | Hops, flips and lands on its back with legs up. Ends within ±1 m and 1.53 m tall. |
+| `Spider_Jump` | 0.708 | no | A **hop in place**. The body peaks at 0.458 s (+1.07 m) and is down at 0.583 s. There is no forward travel: the runtime moves the body for a lunge. |
+
+**Wolf** (`creatures/wolf`, 0 A.D., CC BY-SA 3.0):
+- **Joints** (the 32 0 A.D. names):
+  - `Bone` (pelvis): the only translated joint.
+  - Spine: `Bone` > `Bone.005` (spine) > `Bone.001` (chest) > `Neck1..3` > `Head` and `Jaw1` > `Jaw2`.
+  - Front legs: `FrontShoulder_{L,R}` > `FrontLeg1..3_{L,R}` > `FrontToe_{L,R}`.
+  - Also `Bone.012`, `BackLeg1..3_{L,R}` > `BackToe_{L,R}`, and `Tail1..4`.
+  - Logical bones: pelvis `Bone`, spine `Bone.005` (use it for the ±2° breathing), chest `Bone.001`, neck `Neck2`, head `Head`, jaw `Jaw1`, tail `Tail1`.
+- **Material.** `wolf_fur`: the grey skin, 256² KTX2, roughness 0.85, opaque. For the brown wolf, set its `albedoTexture` to `loadKTX2("creatures/wolf_fur_brown")`.
+- **Size.** 0.45 m per 0 A.D. unit: 0.3 m per unit is a big grey wolf (about 1.14 m to the ear tips), times 1.5.
+  - `Idle` frame 0: x ±0.30, y 0…1.72 (ear tips), z −1.18…1.38 m, so 2.56 m from nose to tail tip.
+  - Lying in `Sleep`: 0.93 m high.
+
+| Clip | s | Loop | Source | Measured |
+|---|---|---|---|---|
+| `Idle` | 6.0 | yes | `wolf_idle_02` | Head-up stand: the "stir" pose. Loop closed: gap 0.003 m (largest frame step 0.118 m). |
+| `Walk` | 2.0 | yes | `wolf_walk` | Ground speed **1.03 m/s** at rate 1. Loop closed: gap 0.029 m (largest frame step 0.129 m). |
+| `Run` | 0.833 | yes | `wolf_run` | Ground speed **5.54 m/s** at rate 1. The AI's 3.5 and 7 m/s are Run at 0.63 and 1.26. Loop closed: gap 0.173 m (largest frame step 0.316 m). |
+| `Attack1` | 2.167 | no | `wolf_attack_01` | Bite. Rears (front paws +0.57 m at 0.92 s, back down at 1.24 s). The head snaps forward fastest at **1.05 s** and is furthest at 1.42 s, 1.11 m ahead of the origin. Fitted to the ground (see the deviations). |
+| `Attack2` | 2.167 | no | `wolf_attack_02` | Pounce. Crouches, rears at 1.13 s (+0.49 m), then slams down: front paws down at **1.48 s**, head lowest and furthest at **1.67 s**. |
+| `Death` | 0.917 | no | `wolf_death_01` | Falls onto its side and lies on the ground. The body ends up to 1.7 m to one side of the origin. |
+| `LieDown` | 1.5 | no | `wolf_idle_01` 0–1.5 s | Ends in `Sleep`'s pose (0 m apart). Use it to go back to sleep after the leash. |
+| `Sleep` | 4.0 | yes | `wolf_idle_01` 2–6 s | A still, belly-down, head-up pose. Add the breathing. |
+| `StandUp` | 1.55 | no | `wolf_idle_01` 6.7–8.25 s | From `Sleep` (1.3 cm apart) to standing. Cross-fade into `Idle` over ≥ 0.3 s, because the joints are up to 0.34 m apart. |
+
+Suggested wiring (sleeping clips as in `SleepClips`): `{ asset: "creatures/wolf", clips: { idle: "Idle", walk: "Walk", run: "Run", death: "Death" }, sleep: { sleep: "Sleep", stir: "Idle" (blended at 0.3, §6.3), wake: "StandUp" } }`, with `LieDown` before `Sleep` when it beds down again.
+
+**Runtime constants that disagree with these assets** (in `src/**`, for the integrator):
+- **Spider walk speed.** `SPIDER.walkSpeed = 2.6` (`src/prologue/creatures.ts`, after §6.3's "speedRatio = v/2.6") was an assumption. The clip's measured ground speed is 1.305 m/s at scale 1, and 0.72 m/s at 0.55. At the archetype speeds, the giant at 2.6 m/s needs rate 2.0 and a small spider at 3.2 m/s needs rate 4.5.
+- **Spider capsule.** `SPIDER.capsule` height is 1.7 m at scale 1, but the body is 0.85 m tall (span 2.6 m, length 2.2 m).
+- **Wolf swing lengths.** `ARCHETYPES.wolf` uses lengths of 1.2 and 1.4, but both attack clips are 2.167 s long.
+  - The bite's active window [0.76, 0.86] at 1.25× is clip time 0.95–1.075 s, which matches the measured snap (1.05 s).
+  - The pounce's [0.80, 0.92] at 1× falls inside the rear-up. Its slam lands at 1.48–1.67 s.
+- **Arena spider tint.** `ArenaStage` tints its small spider [0.35, 0.22, 0.12], a light tan. The pipeline's small variant is [0.15, 0.075, 0.03].
+
+**Build contracts.** The build fails if any of these is broken:
+- **Spider source:** it has exactly the 5 expected clips, each within 0.02 s of the expected length. The FBX armature above `Root` is one uniform scale, and its channels are static. The bind leg span is 2.6 m ± 1 cm.
+- **Wolf source:** every wolf clip glb has the base's joints, inverse bind matrices and rest pose. The skeleton root is `Bone`.
+- **Clip shape:** all clips animate the same channels.
+- **Loops** (`closeLoop`, before the clip is closed): for every clip flagged `loop`, the gap is the largest joint distance from its last pose to its first. A gap ≤ 0.5 mm is seamless and left alone. Any other gap must be one frame's worth of motion, or the build fails:
+  - ≤ 1.5 × the clip's largest per-key joint step (`loopClose.factor`);
+  - ≤ an absolute cap (`loopClose.cap`): 5 cm for the spider, whose loops are seamless as authored, and 25 cm for the wolf, whose `Run` gap is 17.3 cm.
+
+  A passing clip is closed by appending its first pose one frame after its end. The frame is the clip's most common key interval over all samplers, because assimp's spider samplers skip unchanged keys. After closing, the first and last pose must agree within 1 mm. Checked against bad configurations, each of which fails: `Run` cut to 0–0.4 s (gap 1.09 m), `Walk` taken from `wolf_attack_01` (0.63 m), and `Spider_Death` flagged loop (2.48 m; this one only the cap catches, because the death's largest frame step is 1.68 m).
+- **Floor:** every clip's lowest skinned vertex, sampled at 24 fps, is ≥ −5 cm (`minLowest`). A clip may carry its own measured tolerance (`lowest`); none does today. Measured lows: spider ≥ −1.7 cm; wolf `Walk` −3.5, `Run` −4, `Attack2` −3.3, `Idle` −1 cm, and 0 for the fitted clips. With `WOLF.rotationOnly = false` the build fails on `Walk` (−0.384 m), and without its ground fit on `Attack1` (−0.089 m).
+- **Wolf joins:** `LieDown` → `Sleep` and `Sleep` → `StandUp` join within 2 cm.
+- **Pose:** the creature faces +Z, and its feet are within 3 cm of y = 0 in idle.
+- **Shipped file:** after `finalize`, the top node is a single identity node, the shipped clip set is the configured one, and the shipped idle bounds equal the source's within 1 cm.
+
+**Deviations from §0 #7, §6.3, §8 and §10.3:**
+- **Wolf clips are all rotation-only.** The brief said only the death clip should be rotation-only (that was the bear research's fix). In fact all nine 0 A.D. clips share one skeleton, with identical inverse bind matrices (checked), so nothing needs fixing per clip. But every converted clip also keys a translation on every bone, which stretches the legs by up to 60 %:
+  - `Walk` drove the front paws 0.38 m through the floor and `Run` 0.34 m.
+  - Rotations plus `Bone`'s translation give a clean gait on the ground: lowest vertex −3.5 cm in `Walk`, −4 cm in `Run`, −3.3 cm in `Attack2` and −1 cm in `Idle`.
+  - **`Attack1` sank 8.9 cm.** Rotation-only, its hind feet sank into the floor during the rear-up (lowest vertex −8.9 cm at 0.88 s, while the front paws were 0.5–0.6 m up), and all four feet floated up to 6.7 cm before and after it. The source has no hop: with its bone translations the feet are at or below the floor throughout, down to −0.32 m. So `Attack1` is fitted to the ground like the lying clips (root shift −6.7…+8.9 cm). Its strike timings are unchanged. Its rear now reads +0.57 m (it was +0.48 m measured from the floating start), with the front paws back down at 1.24 s.
+  - `Attack2` is not fitted. Fitting would pull it down 14.4 cm at its leap, which is the pounce itself, and its lowest vertex (−3.3 cm) passes the floor gate.
+  - Renders of both versions were compared, and the rotation-only one was kept.
+- **Lying, dying and biting clips fitted to the ground.** `LieDown`, `Sleep`, `StandUp`, `Death` and `Attack1` are fitted key by key, by moving `Bone` vertically. Rotation-only, the lying pose hovered 16 cm, the corpse sank 21 cm, and the bite sank 8.9 cm and floated 6.7 cm.
+- **`wolf_idle_01` cut into clips.** It ships as `LieDown`, `Sleep` and `StandUp` rather than one clip played in segments. The cuts resample the boundary keys, so no channel is lost.
+  - The 2.0–6.0 s "lie loop" has no motion at all. Breathing has to be procedural, as §6.3 already says.
+  - The stand-up starts at 6.7 s, not 7.0, and ends standing at 8.25 s, not 8.0.
+- **Loops closed.** The 0 A.D. clips have no closing frame: their last key is one frame short of the first pose (`Run`: 17.3 cm, against its largest frame step of 31.6 cm). The build checks that the gap is one frame's motion (see "Build contracts") and then appends the first pose one frame (1/24 s) after the last key. `Idle`, `Walk` and `Run` are therefore 6.0, 2.0 and 0.833 s, not 5.958, 1.958 and 0.792 s.
+- **Wolf size (awaiting the design owner's confirmation; noted at §0 #7).** "×1.5" is read as 1.5 × a real-world large grey wolf, at 0.3 m per 0 A.D. unit. The result is horse-sized: 1.72 m to the ears and 2.56 m long. The repo's other 0 A.D. asset uses a different baseline: the horse treats 0.4 m per unit as life size (`HORSE_SCALE`, `src/prologue/wagon.ts`). On that baseline ×1.5 is 0.6 m per unit, 33 % larger: 2.29 m to the ears and 3.41 m long. To ship that size, set `CreatureProfile.scale` 1.333 or `WOLF.metresPerUnit` 0.4. The shipped size fits the den: `wolf_bed` has 4.8 m of clearance, and `den_path` passes 5.17 m from the wolf.
+- **Fur.** The design specifies the grey skin, and it is the asset's default. The brief also asked for the brown skin, so it ships alongside as the optional `creatures/wolf_fur_brown`.
+- **Spider recolouring.** The variants are not separate GLBs. One asset (the giant's colours) plus `extras.variants` matches the runtime's `tint`, and the emissive eyes survive a tint.
+- **Spider walk speed.** The clip's speed is 1.305 m/s at scale 1, not the 2.6 m/s that §6.3's `speedRatio = v/2.6` assumes. `Spider_Jump` is a hop in place; the design's "hit 0.52" falls on its way down. `Attack2` (the pounce) lands at 1.48–1.67 s, not ≈ 0.80 s.
+
+### Audio (`audio/*`)
+
+Built by `tools/gen/audio.mjs`. The module is self-contained: the cue table `AUDIO`, both encode paths, the seam check, `AUDIO_STREAMED` and `audioCredits()`. It needs only Node and an `ffmpeg` with libopus and the native AAC encoder. Rebuild with `node tools/build-assets.mjs --only=audio/`: about 3 min cold (all 105 cues; the result is byte-identical to a warm build), about 15 s when everything in `.cache/audio` hits. Each build also writes `.cache/audio/report.json` (levels, loop bounds and seams per keep/exit cue; not shipped). The cues of the earlier chapters (menu to dragon) are byte-identical: their cache keys and filter chains did not change.
+
+**Sources.** `node tools/fetch-extra.mjs` downloads every source into `assets-src/audio/`:
+- **72 Freesound HQ previews** (`fs_{id}_{uid}-hq.ogg`, appended to `FS`). All are CC0, and each page was checked live for its licence link, uploader id and HQ preview (HTTP 200):
+  - every Freesound sound §10.4 lists (69). 66 come from the 2026-10-03 research; the wolf's 122183, 434049 and 380156 were checked 2026-10-06. 517126 is skipped, as §10.4 says. 508546 and 712918 were already fetched for the dragon chapter;
+  - 734841 (wolf death, from the bear research);
+  - the two §10.4 gaps, filled and checked 2026-10-06: 146765 (thenudo "Heart Beat", a stethoscope recording) and 534336 (Defaultv "Drink_Gulp").
+- **Music:** `oga_medieval_battle.mp3` (OGA `battle_8.mp3`), `Exploration.mp3` (OGA `Exploration_0.mp3`; it was in the tree but neither fetched nor credited), `oga_descent.mp3` (OGA `descent.mp3`) and `km_Strength_of_the_Titans.mp3` (incompetech).
+- **Pinned.** Every audio file the script downloads (all 99, including the earlier chapters') must match its sha256 in `tools/sources-audio.sha256`. A file already on disk must match too. A re-encoded Freesound preview or a re-uploaded OGA or incompetech file fails the fetch. Otherwise it would silently change shipped hashes, trim and loop points, and loudness-derived gains.
+- `assets-src/audio/fs_437078_2524442-hq.ogg` is a stale download: nothing fetches or uses it.
+- The bear set from the research is not fetched (the bear is cut, §0 #15).
+
+**Credits.** `tools/credits-extra.mjs` has one entry per shipped source: `fs-<id>` for each Freesound sound, plus `music-medieval-battle`, `music-medieval-exploration`, `music-descent` and `music-strength-titans`. Kevin MacLeod's tracks (`music-strength-titans` and the existing `music-gathering`) carry incompetech's exact credit line in their `note`. `fs-199282` records "CC0 since 2026-07-30" and its CC0 source (miguelstar2).
+
+**Credits gate** (`tools/build-assets.mjs`; general, not audio only). It runs before the manifest is written and fails the build when:
+- a shipped manifest id matches no rule in `RULES`. Each rule maps id patterns to the credits they need: `extra` ids in `tools/credits-extra.mjs` and `ph` ids in `assets-src/credits-polyhaven.json`. Examples:
+  - `creatures/spider` → `quaternius-easy-enemies`;
+  - `creatures/wolf` and `creatures/wolf_fur_brown` → `0ad-wolf`;
+  - `kit/fpm` → `quaternius-fpm`;
+  - `chars/male`/`female` → `quaternius-ubc` + `quaternius-outfits`, `chars/anim_*` → `quaternius-ual`, `chars/horse` → `0ad-horse`;
+  - `dragon/dragon`, and the `fx/*` sprites → `bab-sprites`/`kenney-particles`;
+  - `ph/<id>` → that Poly Haven id;
+  - the Poly Haven textures each procedural asset reads: `keep/interior` from `keepinterior.mjs` `MATERIALS`, `cave/tex/*` from `cave.mjs` `CAVE_TEX`, `procprops/*`, `town/buildings`, `cart/*`;
+  - `audio/*` → `audioCredits()` (a new non-Freesound source needs its credit id in `CREDIT_OF`);
+  - procedural or JSON ids list none;
+- a rule names a credit that is missing;
+- a CC BY or CC BY-SA entry's `note` does not say what was modified;
+- a CC BY-SA entry's `note` does not say that the modified version is under the same licence (the 0 A.D. horse's and wolf's share-alike notice);
+- a Kevin MacLeod entry lacks incompetech's exact line.
+
+The credits page's Poly Haven list is now derived from the same rules instead of a hard-coded id list (`src/generated/credits.json` is unchanged by that). Checked by removing `0ad-wolf` and the horse's share-alike sentence: the build fails and names `creatures/wolf`, `creatures/wolf_fur_brown` and `0ad-horse`.
+
+**Levels and encoding.** The entry's `norm` picks one of two paths.
+- **`"loudnorm"`** (or absent): one ffmpeg graph ending in dynamic loudnorm (I −18 LUFS, TP −2 dBTP), encoded straight from it.
+  - Used by the earlier chapters' cues, and by `music_fight`, `music_explore` and `music_beast`. These music tracks do not loop, and `Exploration.mp3` cannot reach −18 LUFS under −2 dBTP with one gain (it would peak at +0.5 dBTP).
+  - Bytes unchanged.
+- **`"peak"` / `"lufs"`**: every other keep/exit cue. `chapterCues()` defaults loops to `"lufs"` and one-shots to `"peak"`. The steps, in order:
+  1. resample to 48 kHz, then high-pass at 25 Hz (24 dB/octave);
+  2. trim, pitch (`rate`), layers (`amix`);
+  3. for a loop: the tail cross-fades into the head;
+  4. fades, then an extra `filter` (not allowed on a `"lufs"` loop);
+  5. render to float PCM and measure (EBU R128 integrated loudness and true peak);
+  6. apply **one constant gain**: `"peak"` puts the true peak at −2 dBTP; `"lufs"` aims at −18 LUFS, capped so the true peak stays at or under −2 dBTP;
+  7. for a loop: wrap padding (below);
+  8. encode Opus (the entry's `url`) and AAC (`variants.aac`) from the same PCM.
+
+  There is no dynamic gain, so a loop's head and tail keep one level. The sources' dynamics are kept.
+- **Why the high-pass.** `amb_dungeon`'s source has 88 % of its energy under 20 Hz (27 % under 5 Hz). Opus does not keep that band. Its error on that bed was 0.044 RMS, larger than any sample step in it, with 98 % of the error under 20 Hz, at 48, 64 and 96 kbps alike. So the two ends of the loop decoded differently, and that showed as a step at the wrap. After the high-pass, Opus's error on the bed is about 0.004 RMS. Below 25 Hz is inaudible; removing it also frees true-peak headroom.
+- **Where the cues landed** (pre-codec):
+  - **One-shots:** all 68 sit at exactly −2 dBTP. Decoded, their sample peaks are −3.8 to −0.9 dBFS (Opus, median −2.2): the codecs move a transient's sample peak a little. AAC smears the sharpest click, `steps_stone_6`, to −9 dBFS at the same energy.
+  - Variants of one cue now match: `spider_hiss`, `_2`, `_3` at −2.9, −3.4 and −3.5 dBFS decoded; `wolf_growl`, `_2` at −2.0 and −2.4.
+  - Quiet takes get large boosts (up to +28.5 dB, `spider_hiss_2`; the stone footsteps +21 to +27 dB).
+  - **Loops at −18 LUFS:** `amb_dungeon`, `amb_stream`, `amb_cave_wind` and `music_spider` reach it, with true peaks of −4.4 to −6.2 dBTP.
+  - **Peak-capped loops:** the spiky ones land lower. `sfx_heartbeat` −21.0 LUFS, `wolf_breath` −22.8, `amb_cave` −24.2, `amb_drips` −24.5, `spider_chatter` −31.2, `amb_torch` −32.5, `spider_skitter` −33.0.
+
+**Loops** (the 11 keep/exit loops; the earlier chapters' loops are unchanged).
+- **Cross-fade.** `loop: d` cross-fades the last d seconds into the head, so the period is the length minus d. The new loops use `xfade: "qsin"`, an equal-power fade (ffmpeg `c1=qsin:c2=qsin`).
+  - The linear fade (`tri`, still the default) dips about 3 dB mid-fade on uncorrelated material. It was the quietest window of `amb_dungeon`, `amb_drips`, `amb_stream` and `amb_cave_wind`.
+  - Now the fade window sits within −1.8…+1.0 dB of each loop's median window, at the 14th to 75th percentile.
+  - `sfx_heartbeat`'s −6.5 dB is the quiet before a beat, where its 0.15 s fade is meant to sit.
+- **`amb_drips` trim moved** from [2–42] to [5–45]. The recording fades in over its first ~4 s, and its floor at 2–4 s is 3.4 dB under the rest. With the old trim, that stretch fell in the cross-fade, which then still measured −2.1 dB (p3).
+- **Wrap padding.** The loop's last 0.1 s is put before its head, and its first 0.1 s after its tail (`LOOP_PAD`). The codecs' edge effects then fall in the padding instead of on the wrap: Opus pre-skip, AAC priming, and the cold first and last frames. That edge effect was the click the old files had at the wrap.
+  - The padded file is periodic throughout. So the build chooses each codec's loop start within the middle 0.1 s of the padding: the point where that codec's two decoded copies agree best. The lossy error is then about equal on both sides of the wrap.
+  - A browser decoder that is off by a constant offset under ~0.05 s (an AAC decoder that ignores the edit list: 1024 or 2112 samples) still loops exactly the same content. It just loses that optimisation.
+- **Seam gate.** For every padded loop, the build decodes both codecs and fails if, on any channel, the sample step across the wrap (last sample to first) is larger than every other step inside the loop. A click is a step larger than all the others; this measures it per channel and per sample. Below: wrap step / largest other step, per channel (`;` separates the channels), in sample amplitude (full scale 1). `PCM` is before the codec.
+
+| Loop | Period (s) | PCM wrap / max step | Opus wrap / max step | AAC wrap / max step | Fade window vs median |
+|---|---|---|---|---|---|
+| `audio/sfx_heartbeat` | 8.400 | 0.0000 / 0.0111 | 0.0001 / 0.0120 | 0.0001 / 0.0114 | −6.5 dB (p20) |
+| `audio/amb_torch` | 18.496 | 0.0006 / 1.0412 | 0.0002 / 1.1845 | 0.0050 / 0.9942 | −1.1 dB (p39) |
+| `audio/amb_dungeon` | 57.000 | 0.0073 / 0.0202; 0.0016 / 0.0201 | 0.0016 / 0.0204; 0.0069 / 0.0203 | 0.0021 / 0.0194; 0.0059 / 0.0207 | −0.5 dB (p14) |
+| `audio/amb_drips` | 38.000 | 0.0092 / 0.7109; 0.0080 / 1.0194 | 0.0132 / 0.5789; 0.0084 / 0.6542 | 0.0169 / 0.5464; 0.0009 / 0.5581 | +0.4 dB (p71) |
+| `audio/amb_cave` | 55.000 | 0.0069 / 0.3650; 0.0059 / 0.3625 | 0.0043 / 0.4563; 0.0014 / 0.4543 | 0.0049 / 0.5416; 0.0095 / 0.4645 | +1 dB (p75) |
+| `audio/amb_stream` | 20.833 | 0.0068 / 0.1497; 0.0068 / 0.1497 | 0.0016 / 0.1229; 0.0016 / 0.1229 | 0.0031 / 0.1528; 0.0033 / 0.1528 | 0 dB (p45) |
+| `audio/spider_skitter` | 7.099 | 0.0003 / 0.8819 | 0.0074 / 0.7241 | 0.0001 / 0.7672 | −0.6 dB (p29) |
+| `audio/spider_chatter` | 10.598 | 0.0003 / 0.9611; 0.0001 / 1.1414 | 0.0006 / 0.8929; 0.0009 / 1.1760 | 0.0006 / 0.6779; 0.0049 / 0.8831 | −0.6 dB (p50) |
+| `audio/wolf_breath` | 3.888 | 0.0001 / 0.1099 | 0.0008 / 0.0931 | 0.0015 / 0.1098 | −1.8 dB (p50) |
+| `audio/amb_cave_wind` | 57.000 | 0.0095 / 0.0735; 0.0226 / 0.0907 | 0.0018 / 0.0827; 0.0190 / 0.0884 | 0.0090 / 0.0817; 0.0013 / 0.0868 | −1.1 dB (p21) |
+| `audio/music_spider` | 66.857 | 0.0029 / 0.0553; 0.0073 / 0.0538 | 0.0128 / 0.0539; 0.0054 / 0.0545 | 0.0051 / 0.0530; 0.0210 / 0.0520 | 0 dB (p52) |
+
+Every wrap step is below the loop's largest other step in both codecs, and most sit at the codec's own noise level. Before this change, `amb_dungeon`'s Opus wrap step was 0.12, about 13× the 99th percentile of its steps.
+
+- **`music_spider` keeps its bar grid.**
+  - "Descent" decodes to exactly 3,024,000 samples at 44.1 kHz: 480/7 s, 160 beats or 40 bars at 140 bpm. It is not a gapless file. Its first ~1,100 samples are the MP3 encoder delay (zeros), its first half-second is quiet (about −60 to −45 dB RMS), and the last bar ends on a hard cut at about −30 dB RMS. Looped as-is, it would drop out for 25 ms and step at every wrap.
+  - Its last bar cross-fades into the first instead: `loop: 12/7`, one 4/4 bar at 140 bpm, equal power. The two bars overlap beat on beat (their offset, the period, is a whole number of bars).
+  - The loop is 39 bars: 156 beats, 66.857 s.
+  - The old 1 s cross-fade gave a 67.571 s period, 157.67 beats, so every repeat jumped 2⅓ beats.
+
+**Manifest fields of audio entries.**
+- **`loop: true`.** The file loops. Earlier chapters' loops loop over the whole file. The 11 keep/exit loops, which are the beds, `sfx_heartbeat`, `spider_skitter`, `spider_chatter`, `wolf_breath` and `music_spider`, also carry loop bounds.
+- **`loopStart`, `loopEnd` (new).** Seconds into the file, as whole 48 kHz samples. The top-level pair belongs to the Opus file. `variants.opus` repeats it, and `variants.aac` carries the AAC file's own pair. `resolveManifest` already spreads `variants.aac` over the entry for the AAC path, so it picks the right pair.
+  - The runtime types need `loopStart?: number; loopEnd?: number` on `ManifestEntry` and `AssetVariant`.
+  - Wherever a buffer loops (`startBed`, `loopAt`, `playMusic`): `src.loop = true; if (e.loopEnd !== undefined) { src.loopStart = e.loopStart; src.loopEnd = e.loopEnd; }`.
+  - Start inside the loop. Beds and `loopAt`: `src.start(0, e.loopStart + Math.random() * (e.loopEnd - e.loopStart))` instead of `Math.random() * buf.duration`. Music: `src.start(0, e.loopStart)`.
+  - **Required.** Without the bounds, these files loop over their full length. Each cycle then repeats 0.2 s of the loop and steps at the file's edges.
+- **`gain` (keep and exit cues; absent means 1).** The cue's runtime gain: multiply it into the volume passed to `playOneShot`, `startBed` or `loopAt`. The runtime type `ManifestEntry` needs `gain?: number`.
+  - The table's value is the level wanted relative to the cue's reference. A one-shot's reference is a −2 dBTP peak; a bed's or loop's is −18 LUFS. Footsteps 0.25, beds 0.3–0.4, §10.4.
+  - **One-shots** keep the table gain, whatever their length. They all sit at the same −2 dBTP peak.
+  - **Loops** are corrected for where their constant gain landed against −18 LUFS: at most ×2, and the result at most 1, so their peaks stay under full scale. `amb_torch`, `spider_skitter` and `spider_chatter` are 13–15 dB short, so ×2 leaves them quieter in LUFS than the table says. Their peaks still reach the table gain × 2. Tune by ear.
+  - **Do not apply a cue's level twice.** `src/prologue/keep/underground.ts` starts every bed at a fixed 0.35, and `combatHud.ts` starts the heartbeat at 0.6. Replace those constants with `entry.gain`, or keep them and ignore `gain`.
+- **`pos`.** A prefetch hint (see the table): the keep [60, −662], the gallery [50, −715], `spider_c` [18, −750], `wolf_bed` [−22, −718], `climb_mid` [−46, −681].
+- **`optional: true`.** Set on `music_explore`, `music_spider` and `music_beast`: `streamed: true` in the table → `AUDIO_STREAMED` → `STREAMED` in `build-assets.mjs`.
+
+**Variants.** Numbered ids are variants to pick from at random. Where §10.4 gives one cue two sources or takes, the base id is the first and `_2`/`_3` are the others: `sfx_shield_hit_2`, `sfx_door_wood_2`, `spider_hiss_2`/`_3`, `spider_attack_2`, `wolf_growl_2`. The runtime's single-id lists, such as `combat.ts` `shield: ["audio/sfx_shield_hit"]`, keep working; add the `_2` ids to use the variants.
+
+Level: `peak −2 dBTP`, `−18 LUFS`, `… LUFS (peak-capped)` (a loop held under −18 LUFS by the −2 dBTP cap), or `loudnorm` (dynamic). Duration: the file's, or the loop's period.
+
+| Manifest id | Segment | Source (Freesound id/uid or file) [trim s]; processing | Level | Duration (s) | Opus KB | Gain: table → manifest | Priority, `pos` | Flags |
+|---|---|---|---|---|---|---|---|---|
+| `audio/sfx_swing_1` | keep | 840716/18136826 | peak −2 dBTP | 0.76 | 5 | 0.5 → 0.5 | 86, [60, −662] |  |
+| `audio/sfx_swing_2` | keep | 840717/18136826 | peak −2 dBTP | 0.76 | 5 | 0.5 → 0.5 | 86, [60, −662] |  |
+| `audio/sfx_swing_3` | keep | 840715/18136826 | peak −2 dBTP | 0.76 | 5 | 0.5 → 0.5 | 86, [60, −662] |  |
+| `audio/sfx_swing_heavy` | keep | 367182/5065048 | peak −2 dBTP | 0.70 | 3 | 0.55 → 0.55 | 86, [60, −662] |  |
+| `audio/sfx_hit_flesh_1` | keep | 547042/7614679 | peak −2 dBTP | 1.30 | 9 | 0.8 → 0.8 | 86, [60, −662] |  |
+| `audio/sfx_hit_flesh_2` | keep | 547036/7614679 | peak −2 dBTP | 1.21 | 8 | 0.8 → 0.8 | 86, [60, −662] |  |
+| `audio/sfx_hit_flesh_3` | keep | 547035/7614679 | peak −2 dBTP | 1.30 | 9 | 0.8 → 0.8 | 86, [60, −662] |  |
+| `audio/sfx_hit_axe` | keep | 522091/11537497 + 452554/612689 (−3 dB) | peak −2 dBTP | 0.62 | 6 | 0.85 → 0.85 | 86, [60, −662] |  |
+| `audio/sfx_block_1` | keep | 616493/702542 | peak −2 dBTP | 0.60 | 4 | 0.75 → 0.75 | 86, [60, −662] |  |
+| `audio/sfx_block_2` | keep | 616495/702542 | peak −2 dBTP | 0.93 | 6 | 0.75 → 0.75 | 86, [60, −662] |  |
+| `audio/sfx_block_3` | keep | 616494/702542 | peak −2 dBTP | 0.82 | 6 | 0.75 → 0.75 | 86, [60, −662] |  |
+| `audio/sfx_parry` | keep | 326867/4077311 | peak −2 dBTP | 1.51 | 12 | 0.8 → 0.8 | 86, [60, −662] |  |
+| `audio/sfx_shield_hit` | keep | 636102/11705708 | peak −2 dBTP | 1.10 | 8 | 0.8 → 0.8 | 86, [60, −662] |  |
+| `audio/sfx_shield_hit_2` | keep | 372877/6944346 | peak −2 dBTP | 1.66 | 11 | 0.75 → 0.75 | 86, [60, −662] |  |
+| `audio/sfx_draw` | keep | 577619/13023338 | peak −2 dBTP | 2.00 | 15 | 0.5 → 0.5 | 88, [60, −662] |  |
+| `audio/sfx_rope_cut` | keep | 577619/13023338 [0.05–0.65]; fade out 0.15 | peak −2 dBTP | 0.60 | 5 | 0.5 → 0.5 | 88, [60, −662] |  |
+| `audio/vo_pain_1` | keep | 547203/129727 | peak −2 dBTP | 0.29 | 2 | 0.6 → 0.6 | 85, [60, −662] |  |
+| `audio/vo_pain_2` | keep | 547202/129727 | peak −2 dBTP | 0.25 | 2 | 0.6 → 0.6 | 85, [60, −662] |  |
+| `audio/vo_pain_3` | keep | 547201/129727 | peak −2 dBTP | 0.30 | 2 | 0.6 → 0.6 | 85, [60, −662] |  |
+| `audio/vo_pain_4` | keep | 547200/129727 | peak −2 dBTP | 0.33 | 2 | 0.6 → 0.6 | 85, [60, −662] |  |
+| `audio/vo_death_1` | keep | 547182/129727 | peak −2 dBTP | 1.35 | 10 | 0.7 → 0.7 | 85, [60, −662] |  |
+| `audio/vo_death_2` | keep | 547181/129727 | peak −2 dBTP | 1.08 | 7 | 0.7 → 0.7 | 85, [60, −662] |  |
+| `audio/vo_death_3` | keep | 547189/129727 | peak −2 dBTP | 1.14 | 7 | 0.7 → 0.7 | 85, [60, −662] |  |
+| `audio/vo_attack_1` | keep | 474651/9250976 [0–0.87]; fade in 0.01, fade out 0.1 | peak −2 dBTP | 0.87 | 5 | 0.55 → 0.55 | 85, [60, −662] |  |
+| `audio/vo_attack_2` | keep | 474651/9250976 [1.17–1.98]; fade in 0.01, fade out 0.1 | peak −2 dBTP | 0.81 | 4 | 0.55 → 0.55 | 85, [60, −662] |  |
+| `audio/vo_attack_3` | keep | 474651/9250976 [2.29–2.99]; fade in 0.01, fade out 0.1 | peak −2 dBTP | 0.70 | 4 | 0.55 → 0.55 | 85, [60, −662] |  |
+| `audio/vo_attack_4` | keep | 474651/9250976 [3.38–4.42]; fade in 0.01, fade out 0.1 | peak −2 dBTP | 1.04 | 6 | 0.55 → 0.55 | 85, [60, −662] |  |
+| `audio/vo_attack_5` | keep | 474651/9250976 [4.54–5.41]; fade in 0.01, fade out 0.1 | peak −2 dBTP | 0.87 | 5 | 0.55 → 0.55 | 85, [60, −662] |  |
+| `audio/sfx_bodyfall` | keep | 504626/4437257 | peak −2 dBTP | 1.63 | 13 | 0.7 → 0.7 | 85, [60, −662] |  |
+| `audio/sfx_heartbeat` | keep | 146765/1417288 [10.34–18.89] | −21.0 LUFS (peak-capped) | 8.40 | 38 | 0.6 → 0.847 | 84, [60, −662] | loop (0.15 s equal-power cross-fade) |
+| `audio/sfx_potion` | keep | 534336/11867884 [0.3–0.95]; fade in 0.01, fade out 0.1 | peak −2 dBTP | 0.65 | 4 | 0.6 → 0.6 | 84, [60, −662] |  |
+| `audio/steps_stone_1` | keep | 517122/5026978 | peak −2 dBTP | 0.54 | 3 | 0.25 → 0.25 | 87, [60, −662] |  |
+| `audio/steps_stone_2` | keep | 517121/5026978 | peak −2 dBTP | 0.52 | 3 | 0.25 → 0.25 | 87, [60, −662] |  |
+| `audio/steps_stone_3` | keep | 517125/5026978 | peak −2 dBTP | 0.48 | 3 | 0.25 → 0.25 | 87, [60, −662] |  |
+| `audio/steps_stone_4` | keep | 517137/5026978 | peak −2 dBTP | 0.57 | 3 | 0.25 → 0.25 | 87, [60, −662] |  |
+| `audio/steps_stone_5` | keep | 517136/5026978 | peak −2 dBTP | 0.54 | 3 | 0.25 → 0.25 | 87, [60, −662] |  |
+| `audio/steps_stone_6` | keep | 517135/5026978 | peak −2 dBTP | 0.48 | 2 | 0.25 → 0.25 | 87, [60, −662] |  |
+| `audio/steps_stone_7` | keep | 517134/5026978 | peak −2 dBTP | 0.52 | 3 | 0.25 → 0.25 | 87, [60, −662] |  |
+| `audio/steps_stone_8` | keep | 517117/5026978 | peak −2 dBTP | 0.52 | 3 | 0.25 → 0.25 | 87, [60, −662] |  |
+| `audio/steps_stone_9` | keep | 517124/5026978 | peak −2 dBTP | 0.44 | 2 | 0.25 → 0.25 | 87, [60, −662] |  |
+| `audio/steps_stone_10` | keep | 517123/5026978 | peak −2 dBTP | 0.72 | 4 | 0.25 → 0.25 | 87, [60, −662] |  |
+| `audio/steps_mail_1` | keep | 384881/984733 | peak −2 dBTP | 0.50 | 2 | 0.25 → 0.25 | 87, [60, −662] |  |
+| `audio/steps_mail_2` | keep | 384882/984733 | peak −2 dBTP | 0.50 | 3 | 0.25 → 0.25 | 87, [60, −662] |  |
+| `audio/steps_mail_3` | keep | 384887/984733 | peak −2 dBTP | 0.50 | 3 | 0.25 → 0.25 | 87, [60, −662] |  |
+| `audio/sfx_door_wood` | keep | 452608/612689 [0.38–1.33]; fade in 0.01, fade out 0.1 | peak −2 dBTP | 0.94 | 7 | 0.7 → 0.7 | 88, [60, −662] |  |
+| `audio/sfx_door_wood_2` | keep | 452608/612689 [11–12.08]; fade in 0.01, fade out 0.1 | peak −2 dBTP | 1.07 | 8 | 0.7 → 0.7 | 88, [60, −662] |  |
+| `audio/sfx_lock` | keep | 734641/13973196 [0.2–1.65] | peak −2 dBTP | 1.45 | 11 | 0.6 → 0.6 | 84, [60, −662] |  |
+| `audio/sfx_gate_slam` | keep | 159552/71257 | peak −2 dBTP | 2.78 | 17 | 0.8 → 0.8 | 84, [60, −662] |  |
+| `audio/sfx_iron_gate` | keep | 207137/2568776 [0.32–1.9]; fade in 0.01, fade out 0.2 | peak −2 dBTP | 1.58 | 11 | 0.7 → 0.7 | 84, [60, −662] |  |
+| `audio/sfx_chest` | keep | 771164/789424 | peak −2 dBTP | 1.34 | 11 | 0.6 → 0.6 | 88, [60, −662] |  |
+| `audio/sfx_pickup` | keep | 347174/6324381 | peak −2 dBTP | 0.51 | 6 | 0.4 → 0.4 | 88, [60, −662] |  |
+| `audio/sfx_beam_crash` | keep | 584891/13194852 [0.3–1.5]; fade out 0.25 | peak −2 dBTP | 1.20 | 10 | 0.9 → 0.9 | 88, [60, −662] |  |
+| `audio/sfx_rumble` | keep | 712918/15139380; fade out 0.5, low-pass 420 Hz ×2 | peak −2 dBTP | 3.00 | 21 | 0.8 → 0.8 | 82, [60, −662] |  |
+| `audio/sfx_rockfall` | keep | 381645/5486695 [0.25–4.1] + 567249/7108319 (−6 dB, +0.15 s); fade out 0.4 | peak −2 dBTP | 4.35 | 40 | 0.9 → 0.9 | 82, [50, −715] |  |
+| `audio/sfx_lever` | keep | 506146/1282624 | peak −2 dBTP | 1.78 | 14 | 0.7 → 0.7 | 78, [50, −715] |  |
+| `audio/sfx_chain_mech` | keep | 784229/9813501 [5–13] + 199282/71257 [10–18] (−35 dB); fade in 0.3, fade out 1 | peak −2 dBTP | 8.00 | 78 | 0.7 → 0.7 | 78, [50, −715] |  |
+| `audio/sfx_bridge_crash` | keep | 508546/5026978 [0.45–7.65]; fade out 0.4 | peak −2 dBTP | 7.20 | 68 | 1 → 1 | 78, [50, −715] |  |
+| `audio/amb_torch` | keep | 637523/612689 [2–22] | −32.5 LUFS (peak-capped) | 18.50 | 83 | 0.4 → 0.8 | 90, [60, −662] | loop (1.5 s equal-power cross-fade) |
+| `audio/amb_dungeon` | keep | 530161/2683450 [45–105] | −18 LUFS | 57.00 | 311 | 0.35 → 0.35 | 80, [60, −662] | loop (3 s equal-power cross-fade) |
+| `audio/amb_drips` | keep | 609161/938246 [5–45] | −24.5 LUFS (peak-capped) | 38.00 | 195 | 0.3 → 0.6 | 80, [60, −662] | loop (2 s equal-power cross-fade) |
+| `audio/amb_cave` | keep | 553080/9250976 | −24.2 LUFS (peak-capped) | 55.00 | 320 | 0.35 → 0.7 | 76, [50, −715] | loop (2 s equal-power cross-fade) |
+| `audio/amb_stream` | keep | 552485/9847211 | −18 LUFS | 20.83 | 113 | 0.35 → 0.35 | 76, [50, −715] | loop (2 s equal-power cross-fade) |
+| `audio/music_fight` | keep | `oga_medieval_battle.mp3` [0–71.6]; fade out 1 | loudnorm | 71.61 | 720 | – → – | 80, [60, −662] |  |
+| `audio/music_explore` | keep | `Exploration.mp3` [1–234]; fade out 2 | loudnorm | 233.01 | 2707 | – → – | 60, [50, −715] | **streamed** |
+| `audio/spider_hiss` | exit | 459476/6232598 [4.25–5.25]; fade in 0.01, fade out 0.15 | peak −2 dBTP | 1.00 | 6 | 0.7 → 0.7 | 85, [18, −750] |  |
+| `audio/spider_hiss_2` | exit | 459476/6232598 [8.28–9.6]; fade in 0.01, fade out 0.15 | peak −2 dBTP | 1.32 | 8 | 0.7 → 0.7 | 85, [18, −750] |  |
+| `audio/spider_hiss_3` | exit | 758900/15895934 | peak −2 dBTP | 1.70 | 9 | 0.7 → 0.7 | 85, [18, −750] |  |
+| `audio/spider_skitter` | exit | 443723/7262854 [0.3–8.4] | −33.0 LUFS (peak-capped) | 7.10 | 41 | 0.4 → 0.8 | 85, [18, −750] | loop (1 s equal-power cross-fade) |
+| `audio/spider_chatter` | exit | 202108/3756348 [0.5–12.6] | −31.2 LUFS (peak-capped) | 10.60 | 90 | 0.35 → 0.7 | 82, [18, −750] | loop (1.5 s equal-power cross-fade) |
+| `audio/spider_attack` | exit | 672710/14685597 | peak −2 dBTP | 0.50 | 3 | 0.8 → 0.8 | 85, [18, −750] |  |
+| `audio/spider_attack_2` | exit | 672712/14685597 | peak −2 dBTP | 1.06 | 6 | 0.8 → 0.8 | 85, [18, −750] |  |
+| `audio/spider_death` | exit | 559621/8216881 + 515619/6769489 (−2 dB) | peak −2 dBTP | 0.90 | 6 | 0.8 → 0.8 | 84, [18, −750] |  |
+| `audio/sfx_web` | exit | 659428/5287430 | peak −2 dBTP | 2.44 | 14 | 0.5 → 0.5 | 84, [18, −750] |  |
+| `audio/wolf_breath` | exit | 122183/71257 [0.4–4.15]; pitch 0.8 | −22.8 LUFS (peak-capped) | 3.89 | 23 | 0.35 → 0.605 | 82, [−22, −718] | loop (0.8 s equal-power cross-fade) |
+| `audio/wolf_growl` | exit | 434049/181941 [1.7–4.1]; fade in 0.05, fade out 0.3 | peak −2 dBTP | 2.40 | 14 | 0.8 → 0.8 | 82, [−22, −718] |  |
+| `audio/wolf_growl_2` | exit | 434049/181941 [4.2–8.6]; fade in 0.05, fade out 0.3 | peak −2 dBTP | 4.40 | 25 | 0.8 → 0.8 | 82, [−22, −718] |  |
+| `audio/wolf_snarl` | exit | 342204/3908740 | peak −2 dBTP | 3.22 | 18 | 0.85 → 0.85 | 82, [−22, −718] |  |
+| `audio/wolf_howl` | exit | 380156/2940947 [2–7.9]; fade out 0.8 | peak −2 dBTP | 5.90 | 35 | 0.9 → 0.9 | 82, [−22, −718] |  |
+| `audio/wolf_death` | exit | 734841/14713973 | peak −2 dBTP | 4.19 | 24 | 0.85 → 0.85 | 80, [−22, −718] |  |
+| `audio/amb_cave_wind` | exit | 852822/18763192 [20–80] | −18 LUFS | 57.00 | 332 | 0.35 → 0.35 | 75, [−46, −681] | loop (3 s equal-power cross-fade) |
+| `audio/music_spider` | exit | `oga_descent.mp3` | −18 LUFS | 66.86 | 777 | – → – | 60, [18, −750] | loop (12/7 s equal-power cross-fade), **streamed** |
+| `audio/music_beast` | exit | `km_Strength_of_the_Titans.mp3` [0.3–59]; fade out 0.5 | loudnorm | 58.71 | 581 | – → – | 60, [−22, −718] | **streamed** |
+
+**Segments and budgets.**
+- **Segments emitted:** `menu, cart, muster, execution, dragon, keep, exit`. This is exactly `SEGMENTS` in `src/core/assets/manifest.ts`, in the same (play) order. No asset uses `"choice"`.
+- **Segment gate (`build-assets.mjs`).** Every asset's segment must be in the runtime's `SEGMENTS`, which the build parses from the source; otherwise the build fails. It warns if the order differs from its own `PIPELINE_SEGMENTS`.
+- **Start-pack gate.** It measures the brotli bytes of the non-optional assets, as the summary prints them. Over a limit, the build fails before the manifest is written.
+  - keep: limit 15 MB (the design's limit).
+  - exit: limit 6 MB. The design gives no limit; 6 MB is 2.5× its 2.4 MB estimate.
+  - The summary prints segments in play order, each against its estimate and limit, plus a total line.
+- **Full build (2026-10-06)**, start packs, brotli:
+  - menu 0.02 MB, cart 8.54, muster 12.57, execution 2.90, dragon 4.84;
+  - **keep 8.63 MB** (estimate 8.4, limit 15), of 11.40 MB in all;
+  - **exit 1.29 MB** (estimate 2.4, limit 6), of 2.71 MB in all;
+  - total: 38.78 MB of start packs, 52.81 MB brotli (58.98 MB raw) in 186 assets (291 files with the AAC variants), manifest version `fdc0e45219ff`.
+  - Against the previous build, every one of the 186 ids is still there. The only changed files are the 79 keep/exit audio cues on the constant-gain path. A full rebuild reproduces the `--only` builds byte for byte (same manifest version).
+- **Audio's share.** keep audio adds 2.36 MB brotli to the keep start pack, and 2.77 MB more is streamed (`music_explore`). exit audio adds 0.67 MB to its start pack, and 1.39 MB is streamed (`music_spider`, `music_beast`). The keep start pack is slightly over the 8.4 MB estimate and far under its limit.
+
+**Runtime notes.**
+- **Ids the runtime already references,** all shipped now:
+  - `combat.ts` `SFX`: swing, flesh, axe, block, shield, parry, draw, pain, death, grunt (`vo_attack_*`), fall;
+  - `underground.ts` beds: `amb_torch`, `amb_dungeon`, `amb_drips`, `amb_cave`, `amb_stream`;
+  - `keep.ts` `music_explore`, and the encounter specs' `music: "audio/music_fight"`;
+  - `combatHud.ts` `sfx_heartbeat`.
+- **Not referenced yet:**
+  - `steps_*`, `sfx_door_wood*`, `sfx_lock`, `sfx_gate_slam`, `sfx_iron_gate`, `sfx_chest`, `sfx_pickup`, `sfx_potion`, `sfx_rope_cut`, `sfx_beam_crash`;
+  - `sfx_rumble`, `sfx_rockfall`, `sfx_lever`, `sfx_chain_mech`, `sfx_bridge_crash`;
+  - the spider and wolf sets, `amb_cave_wind`, `music_spider`, `music_beast`.
+- **Loop bounds.** `startBed`, `loopAt` and `playMusic` (`src/core/audio.ts`) must apply `loopStart`/`loopEnd` and start inside them, as described under the manifest fields. All 11 keep/exit loops carry them.
+- **K0's rockfall.** Keep step 0 must need no keep assets (§10.6). For the crenellation, use the dragon segment's `audio/rubble` or `audio/collapse_small`. `audio/sfx_rockfall` is a keep cue for K9 and K12.
+- **`sfx_rumble`** is the recording behind dragon's `collapse_small` (712918), low-passed at 420 Hz (24 dB/octave): a tremor heard through rock. **`sfx_bridge_crash`** is `audio/collapse`'s recording with more of its tail.
+- **`sfx_heartbeat`** loops exactly 8 beats at 57 bpm (start it with `startBed`). `setBedRate("heartbeat", 1.3)` gives about 75 bpm; loop bounds work at any playback rate.
+- **`wolf_breath`** is already pitched to 0.8 (a 3.89 s loop).
+- **`spider_skitter`** is a movement loop (for `loopEmitter` on a moving spider). **`spider_chatter`** is the nest bed.
+- **Music.**
+  - `music_fight` is not a loop: it ends naturally at 71.6 s and restarts, like `music_cart`.
+  - `music_spider` loops seamlessly between its bounds: 39 bars at 140 bpm, 66.857 s. It needs `loopStart`/`loopEnd` (start at `loopStart`).
+  - For the keep's music states, set `audio.musicTracks = { calm: "audio/music_explore", combat: "audio/music_fight" }`.
+  - `music_beast` is the X2 wake cue; `music_cart` is the X4 reprise (cart segment, long cached).
+- **Channels.**
+  - Mono: every one-shot, and the loops `amb_torch`, `sfx_heartbeat`, `wolf_breath` and `spider_skitter`.
+  - Stereo: `amb_dungeon`, `amb_drips`, `amb_cave`, `amb_stream`, `amb_cave_wind`, `spider_chatter` and all music.
+
+**Deviations from §10.4–§10.6.**
+- **Gaps filled.** `sfx_heartbeat` (146765) and `sfx_potion` (534336) ship, verified CC0 as above. §10.4 said to ship them silent until sources were picked.
+- **Additions:**
+  - `wolf_death` (734841 "dyingBeast", verified CC0 in the bear research);
+  - `spider_chatter` (202108), its own bed rather than a skitter variant;
+  - the `_2`/`_3` variants listed above.
+- **Trims.** The research's −40 dB bounds are padded, as the research advised:
+  - `sfx_bridge_crash` [0.45–7.65] (§10.4: [0.72–7.25]);
+  - `sfx_door_wood` [0.38–1.33] and `sfx_door_wood_2` [11.0–12.08];
+  - `sfx_iron_gate` [0.32–1.9];
+  - `sfx_beam_crash` [0.3–1.5];
+  - `sfx_rockfall` [0.25–4.1].
+
+  `sfx_chain_mech` is the 8 s at 5–13 s of 784229 (steady running, past the start-up clunk), with 199282 [10–18] 6 dB under it. `amb_drips` is [5–45] (above).
+- **`sfx_rumble` is low-passed,** so it is not the same file as dragon's `collapse_small`.
+- **Streaming.** `music_explore` (2.7 MB) is streamed, because it first plays at K11. `music_fight` is in the keep start pack.
+- **Levels.** Instead of loudnorm on every cue, keep/exit one-shots are peak-normalised and loops get one constant gain toward −18 LUFS (above). The manifest gains are starting points, set by measurement, not by ear.
+- **`music_spider`** is a 39-bar loop, not the source's 40 bars (above).
+- **Sources are high-passed at 25 Hz** (keep/exit cues on the constant-gain path only).

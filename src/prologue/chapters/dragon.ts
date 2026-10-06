@@ -188,8 +188,8 @@ export class DragonChapter implements Chapter {
     w.env.setMood(this.step === 0 ? 0.2 : 1);
     audio.musicTracks = { combat: "audio/music_battle" };
     audio.setMusicState("combat");
+    // (both beds outlast the chapter: the next one decides when they stop)
     void audio.startBed("panic", "audio/panic", 0.45, 3);
-    // (the wind outlasts the chapter: the next one decides when it stops)
     void audio.startBed("wind", "audio/wind", 0.25, 3);
     void this.meteorLoop().catch((e) => !(e instanceof Cancelled) && console.error(e));
     let mood = this.step === 0 ? 0.2 : 1;
@@ -438,8 +438,10 @@ export class DragonChapter implements Chapter {
   }
 
   /**
-   * Ends only what is this chapter's own. The dragon, the town's fires and the wind bed belong to the
-   * stage and carry on into the next chapter (a seamless handover: nothing pops or freezes).
+   * Ends only what is this chapter's own. The dragon, the town's fires and the wind and panic beds
+   * belong to the stage and carry on into the next chapter (a seamless handover: nothing pops,
+   * freezes or starts over); the keep quiets the beds once the player is inside (K1), and the stage
+   * stops every bed when it goes.
    */
   dispose() {
     this.alive = false;
@@ -448,7 +450,6 @@ export class DragonChapter implements Chapter {
     for (const r of this.ragdolls) r.dispose();
     if (this.started) {
       hud.prompt(null);
-      audio.stopBed?.("panic", 3);
       audio.resetMusicState();
     }
   }

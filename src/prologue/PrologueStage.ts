@@ -9,12 +9,12 @@ import { keyLabel, settings, type Quality } from "../core/settings";
 import { hud } from "../ui/hud";
 import { heading } from "../ui/widgets";
 import { objective, updateCompass } from "../ui/compass";
-import { buildTown, GATE, LAYOUT, type Town } from "../world/town";
+import { buildTown, GATE, type Town } from "../world/town";
 import { Physics, type BodyId } from "../engine/physics/Physics";
 import { Debris } from "../engine/physics/Debris";
 import { BodyFollower } from "../engine/physics/BodyFollower";
 import { appendWorldGeometry } from "../engine/physics/meshGeometry";
-import { activeTerrainHoles } from "../world/terrainHoles";
+import { activeTerrainHoles, patchSlabs, TERRAIN_GRID } from "../world/terrainHoles";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import type { AbstractMesh } from "@babylonjs/core/Meshes/abstractMesh";
 import type { TransformNode } from "@babylonjs/core/Meshes/transformNode";
@@ -421,9 +421,12 @@ export class PrologueStage implements Stage {
       try {
         alive();
         // terrain around the town (512 m square, ~2 m spacing), open where the keep's basement and
-        // the cave tunnel go below ground (once the geometry covering the openings ships)
-        const size = 512;
-        ph.addHeightField(LAYOUT.square.x - size / 2, LAYOUT.square.z - size / 2, size, 256, (x, z) => w.heightAt(x, z), activeTerrainHoles((id) => assets.has(id)), { tag: "terrain" });
+        // the cave tunnel go below ground (once the geometry covering the openings ships); where an
+        // opening overshoots its cover, slabs at terrain height close it again
+        const holes = activeTerrainHoles((id) => assets.has(id));
+        const G = TERRAIN_GRID;
+        ph.addHeightField(G.x0, G.z0, G.size, G.samples, (x, z) => w.heightAt(x, z), holes, { tag: "terrain" });
+        for (const p of patchSlabs(holes, (x, z) => w.heightAt(x, z))) ph.addBox(new Vector3(...p.center), new Vector3(...p.half), undefined, { tag: "terrain" });
         // on foot the town is the whole stage: close the gateway at its outer arch (the terrain collider
         // ends ~160 m up the road; the gate piece is 7.4 m wide)
         const gz = GATE.z + 1;

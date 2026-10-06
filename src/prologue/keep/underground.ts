@@ -1,5 +1,10 @@
 import type { AssetContainer } from "@babylonjs/core/assetContainer";
 import { Quaternion, Vector3 } from "@babylonjs/core/Maths/math.vector";
+import { Color3 } from "@babylonjs/core/Maths/math.color";
+import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
+import { CreatePlane } from "@babylonjs/core/Meshes/Builders/planeBuilder";
+import { Mesh } from "@babylonjs/core/Meshes/mesh";
+import { applyLightBudget } from "../../engine/render/lightBudget";
 import type { AbstractMesh } from "@babylonjs/core/Meshes/abstractMesh";
 import type { Material } from "@babylonjs/core/Materials/material";
 import type { TransformNode } from "@babylonjs/core/Meshes/transformNode";
@@ -12,6 +17,9 @@ import { worldGeometry } from "../../engine/physics/meshGeometry";
 import type { BodyId, Physics } from "../../engine/physics/Physics";
 import { precompile } from "../../engine/render/precompile";
 import { HingedDoor } from "../../engine/world/HingedDoor";
+import { BoneSocket } from "../../engine/actors/BoneSocket";
+import { attachToSocket, type AttachRecipe } from "../../engine/actors/attach";
+import type { Character } from "../../world/characters";
 import { Zones, type ZoneDef } from "../../engine/world/zones";
 import type { LightingProfile } from "../../world/environment";
 import type { FireFx, FireHandle } from "../fx/fire";
@@ -19,6 +27,7 @@ import type { World } from "../World";
 import { inBox, keepWorld, type CaveAnchors, type KeepAnchor, type KeepAnchors, type KeepDoorTag, type V3 } from "./anchors";
 import { bindCaveMaterials } from "./caveMaterials";
 import { KeepProps } from "./props";
+import { loadPropAssets, type PropAssets } from "./propAssets";
 
 /**
  * What the underground shows and hides together (design §3.2 visibility sets): the keep's ground
@@ -32,6 +41,16 @@ const SPLIT_LOCAL_Y = -1.0;
 /** keep-local frame origin when there is no town to read it from (design §4) */
 const DEFAULT_ORIGIN = { x: 60, y: 37.73, z: -662 };
 /** Rooms on the ground floor (the rest of the keep's rooms are the basement's). */
+/**
+ * How far a blocker reaches past its anchor box into the room: over the bar or beam that props.ts
+ * draws on the wall's inner face across the opening (the gate bar down to z −654.48, the postern beam
+ * out to x 48.49), so the player stops in front of it instead of walking into it.
+ */
+const BLOCKER_REACH: Record<string, { axis: "x" | "z"; by: number }> = {
+  blocker_gate: { axis: "z", by: -0.5 },
+  blocker_postern: { axis: "x", by: 0.35 },
+};
+
 const GF_ROOMS = new Set(["G1", "G2", "G2n", "G3", "G4", "G5t", "g2_door", "g3_door", "store_door", "stair_door"]);
 /** Ambience beds per level (only those the build ships play; gain 0.35: the beds are loudness-normalised). */
 const BEDS: Record<UndergroundLevel, string[]> = {
@@ -102,12 +121,14 @@ export class Underground {
   private offs: (() => unknown)[] = [];
   private water: { update(dt: number): void } | null = null;
   private rest: { container: AssetContainer; bodies: Record<string, BodyId | null> } | null = null;
+  private cards: Mesh[] = [];
+  private outdoorOverride: boolean | null = null;
   private disposed = false;
 
   /** Build everything from the loaded assets (see {@link loadUnderground}). */
   constructor(
     private host: UndergroundHost,
-    a: { keep: KeepAnchors; interior: AssetContainer; cave: CaveAnchors | null; caveA: AssetContainer | null; water?: { update(dt: number): void } | null },
+    a: { keep: KeepAnchors; interior: AssetContainer; cave: CaveAnchors | null; caveA: AssetContainer | null; water?: { update(dt: number): void } | null; props?: PropAssets },
   ) {
     const w = host.world, ph = host.physics;
     this.keep = a.keep;
@@ -182,7 +203,13 @@ export class Underground {
     for (const [name, an] of Object.entries(a.keep.anchors)) {
       if (an.kind !== "blocker" || !an.half || !an.tag || an.tag === "blocker_drain") continue;
       const p = this.keepPoint(an.local);
-      const id = ph.addBox(p, new Vector3(an.half[0], an.half[1], an.half[2]), undefined, { tag: an.tag });
+      const half = new Vector3(an.half[0], an.half[1], an.half[2]);
+      const reach = BLOCKER_REACH[an.tag];
+      if (reach) {
+        half[reach.axis] += Math.abs(reach.by) / 2;
+        p[reach.axis] += reach.by / 2;
+      }
+      const id = ph.addBox(p, half, undefined, { tag: an.tag });
       ph.setBodyEnabled(id, false);
       this.blockers.set(an.tag, id);
       void name;
@@ -251,14 +278,20 @@ export class Underground {
       }
     }
 
+    // ---- the daylight behind the shut gate and postern: what their leaves' gaps show from inside
+    // while the outdoor world is hidden (a dim card outside each, never seen from outside)
+    this.cards = this.exteriorCards();
+
     // ---- props (chests, racks, shelves, the cage, torches, the dressing), each in its level's set
-    this.props = new KeepProps(this);
+    this.props = new KeepProps(this, a.props);
 
     // ---- zones (4 Hz on the player's feet)
     this.zones = new Zones(
       {
         probe: () => host.probe(),
         profile: (name, seconds) => {
+          // (outdoors already, e.g. the gate's forecourt: the town's look is left as the chapters set it)
+          if (name === "outdoor" && w.env.interior === "outdoor") return;
           // the climb out blends to daylight by the distance to the last bend (design §3.2)
           const bend = name === "climb-out" ? this.cave?.anchors.bend?.pos : null;
           w.env.setInterior(name as LightingProfile, seconds, bend ? { anchor: { x: bend[0], y: bend[1], z: bend[2] }, from: "cave" } : undefined);
@@ -387,6 +420,15 @@ export class Underground {
     return !this.plug;
   }
 
+  /**
+   * The outdoor world shown (true) or hidden (false) whatever the zone says, e.g. from `cp_light` on
+   * the climb (exit X3); null gives it back to the zones.
+   */
+  setOutdoor(on: boolean | null) {
+    this.outdoorOverride = on;
+    this.apply();
+  }
+
   /** Show and hide `item` with a set (props, chapter dressing). */
   addToSet(set: UndergroundSet, item: Showable) {
     this.sets.get(set)!.add(item);
@@ -397,6 +439,35 @@ export class Underground {
   /** Check the zones now (after a teleport: the profile and sets follow at once). */
   check() {
     this.zones.check();
+  }
+
+  /**
+   * A lit torch in `ch`'s left hand (the companion's from K9 on, design §11): the carried torch on a
+   * socket at `hand_l` with the pipeline's recipe, its flame and a pool light following its head.
+   * It goes with the body (removing the NPC disposes it), or with `dispose()`.
+   */
+  giveTorch(ch: Character): { readonly root: TransformNode; dispose(): void } {
+    const t = this.props.carriedTorch();
+    const r: AttachRecipe = this.props.held("procprops/keep#torch")?.recipes.hand_l ?? { bone: "hand_l", rotation: [0.7071, 0, 0, 0.7071], position: [0.03, 0.095, -0.14] };
+    const socket = new BoneSocket(this.host.world.scene, ch.bone(r.bone) ?? null, { name: `${ch.name}_torch_socket` });
+    attachToSocket(t.root, socket.node, r);
+    const foot = new Vector3();
+    const head = () => {
+      t.root.computeWorldMatrix(true);
+      return foot.copyFrom(t.flame.computeWorldMatrix(true).getTranslation());
+    };
+    const flame = this.host.fx?.sconce(head().clone(), { size: 0.3, light: { intensity: 3, range: 8, height: 0.15, reach: 24 }, follow: head }) ?? null;
+    let done = false;
+    const dispose = () => {
+      if (done) return;
+      done = true;
+      flame?.stop();
+      socket.dispose();
+      if (!t.root.isDisposed()) t.dispose();
+    };
+    // (the socket goes with the bone, and the torch with the socket)
+    t.root.onDisposeObservable.addOnce(dispose);
+    return { root: t.root, dispose };
   }
 
   // ---------------------------------------------------------------- zones and visibility
@@ -434,12 +505,13 @@ export class Underground {
     if (this.disposed) return;
     const lvl = this.level;
     const ext = this.host.exteriorOpen();
+    for (const c of this.cards) c.setEnabled(lvl === "gf" && !ext);
     const want = new Set(this.zoneShown) as Set<string>;
     // the hall seen through an open gate or postern from outside
     if (!lvl && ext) want.add("gf");
     for (const s of this.sets.keys()) this.setShown(s, want.has(s));
     // (from the climb's last stretch on, the daylight at the mouth: the outcrop and the valley)
-    const outdoor = !lvl || (lvl === "gf" && ext) || this.zone === "E";
+    const outdoor = this.outdoorOverride ?? (!lvl || (lvl === "gf" && ext) || this.zone === "E");
     this.host.world.setOutdoorVisible(outdoor, { keep: lvl === "gf" });
   }
 
@@ -460,9 +532,39 @@ export class Underground {
     item.setEnabled(on);
   }
 
+  /** Dim cards outside the gate and the postern (see the constructor). */
+  private exteriorCards(): Mesh[] {
+    const scene = this.host.world.scene;
+    const mat = new StandardMaterial("keep_daylight_card", scene);
+    mat.disableLighting = true;
+    mat.emissiveColor = new Color3(0.2, 0.17, 0.14);
+    mat.specularColor = Color3.Black();
+    mat.fogEnabled = false;
+    applyLightBudget([mat]);
+    const out: Mesh[] = [];
+    const card = (name: string, w: number, h: number, c: Vector3, yaw: number) => {
+      const m = CreatePlane(name, { width: w, height: h, sideOrientation: Mesh.DOUBLESIDE }, scene);
+      m.position.copyFrom(c);
+      m.rotation.y = yaw;
+      m.material = mat;
+      m.isPickable = false;
+      m.setEnabled(false);
+      out.push(m);
+    };
+    const o = this.origin;
+    // the gate: 4 × 5 m, a little outside the leaves (they hang at keep-local z 8.35)
+    card("keep_gate_card", 4.6, 5.4, new Vector3(o.x, o.y + 2.7, o.z + 9.6), 0);
+    const pd = this.keep.doors.postern;
+    if (pd) {
+      const mid = this.keepPoint([(pd.opening.min[0] + pd.opening.max[0]) / 2, (pd.opening.min[1] + pd.opening.max[1]) / 2, (pd.opening.min[2] + pd.opening.max[2]) / 2]);
+      card("keep_postern_card", 1.8, 2.8, new Vector3(o.x + pd.opening.min[0] - 0.5, mid.y, mid.z), Math.PI / 2);
+    }
+    return out;
+  }
+
   /** Every render mesh of the underground (to compile before anything shows). */
   meshes(): AbstractMesh[] {
-    const out: AbstractMesh[] = [];
+    const out: AbstractMesh[] = [...this.cards];
     for (const set of this.sets.values())
       for (const n of set) {
         if (!("getChildMeshes" in n)) continue;
@@ -564,15 +666,17 @@ export async function loadUnderground(host: UndergroundHost): Promise<Undergroun
           return null;
         })
       : Promise.resolve(null);
-  const [interior, keep, caveA, cave] = await Promise.all([
+  const [interior, keep, caveA, cave, props] = await Promise.all([
     loadGLB("keep/interior", w.scene),
     loadJSON<KeepAnchors>("keep/anchors"),
     opt("cave/mesh_a", () => loadGLB("cave/mesh_a", w.scene)),
     opt("cave/anchors", () => loadJSON<CaveAnchors>("cave/anchors")),
+    loadPropAssets(w.scene),
   ]);
   if (w.disposed) {
     interior.dispose();
     caveA?.dispose();
+    for (const c of props.containers.values()) c.dispose();
     throw new Error("underground: the world is gone");
   }
   await nextFrame();
@@ -583,7 +687,7 @@ export async function loadUnderground(host: UndergroundHost): Promise<Undergroun
     caveA?.dispose();
     throw new Error("underground: the world is gone");
   }
-  const u = new Underground(host, { keep, interior, cave, caveA: cave ? caveA : null, water });
+  const u = new Underground(host, { keep, interior, cave, caveA: cave ? caveA : null, water, props });
   // compiled hidden, as each mesh will draw (with the sun's shadow pass for those that receive it)
   await precompile(u.meshes(), { shadows: w.env.shadows, timeout: 20 });
   // the rest of the cave (the exit's segment) follows in the background: the gallery's far end

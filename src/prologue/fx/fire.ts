@@ -71,7 +71,7 @@ export class FireFx {
   private ballMat: StandardMaterial;
   /** wall-sconce flames: animated sprites from one manager (created on first use or by the warm-up) */
   private sprites: SpriteManager | null = null;
-  private sconceFlames = new Set<{ sprite: Sprite; cell: number }>();
+  private sconceFlames = new Set<{ sprite: Sprite; cell: number; follow?: () => Vector3; lift: number }>();
   /** sconces not stopped yet (dispose stops them: sprite and light claim) */
   private sconces = new Set<FireHandle>();
   private decalsVisible = true;
@@ -128,7 +128,11 @@ export class FireFx {
       world.onUpdate((dt) => {
         t += dt;
         const f = Math.floor(t * 24);
-        for (const fl of this.sconceFlames) fl.sprite.cellIndex = (fl.cell + f) % 64;
+        for (const fl of this.sconceFlames) {
+          fl.sprite.cellIndex = (fl.cell + f) % 64;
+          // a carried flame (a torch in a hand) goes where its foot is now
+          if (fl.follow) fl.sprite.position.copyFrom(fl.follow()).addInPlaceFromFloats(0, fl.lift, 0);
+        }
       }),
     );
   }
@@ -185,11 +189,14 @@ export class FireFx {
   }
 
   /** A light from the world's pool for a fire at `p` (null without a pool). */
-  private claimLight(p: Vector3, o: FireLight, d: { intensity: number; range: number; height: number; color: readonly [number, number, number]; flicker: number; reach?: number }): LightClaim | null {
+  private claimLight(p: Vector3 | (() => Vector3), o: FireLight, d: { intensity: number; range: number; height: number; color: readonly [number, number, number]; flicker: number; reach?: number }): LightClaim | null {
     const pool = this.world.lights;
     if (!pool || this.disposed) return null;
+    const h = o.height ?? d.height;
+    const at = new Vector3();
     return pool.add({
-      at: p.add(new Vector3(0, o.height ?? d.height, 0)),
+      // (a moving source: read live, its height above the flame's foot kept)
+      at: typeof p === "function" ? () => at.copyFrom(p()).addInPlaceFromFloats(0, h, 0) : p.add(new Vector3(0, h, 0)),
       color: o.color ?? d.color,
       intensity: o.intensity ?? d.intensity,
       range: o.range ?? d.range,
@@ -371,9 +378,10 @@ export class FireFx {
   /**
    * A small steady flame (wall sconce, torch head, candle cluster): one animated sprite from a
    * shared manager instead of particle systems, optionally a light-pool source. Cheap enough for a
-   * dozen per room. The handle's `stop` removes it; `pause`/`resume` hide and show it.
+   * dozen per room. The handle's `stop` removes it; `pause`/`resume` hide and show it. With
+   * `follow` (the flame's foot, read every frame) it is a carried flame: sprite and light go with it.
    */
-  sconce(pos: Vector3, o: { size?: number; light?: boolean | FireLight } = {}): FireHandle {
+  sconce(pos: Vector3, o: { size?: number; light?: boolean | FireLight; follow?: () => Vector3 } = {}): FireHandle {
     const p = pos.clone();
     if (this.disposed) return deadFire(p);
     const size = o.size ?? 0.45;
@@ -384,11 +392,11 @@ export class FireFx {
     sprite.position.copyFrom(p).addInPlaceFromFloats(0, size * 0.4, 0);
     sprite.color = new Color4(1, 0.85, 0.65, 1);
     sprite.isPickable = false;
-    const flame = { sprite, cell: Math.floor(Math.random() * 64) };
+    const flame = { sprite, cell: Math.floor(Math.random() * 64), follow: o.follow, lift: size * 0.4 };
     sprite.cellIndex = flame.cell;
     this.sconceFlames.add(flame);
     const lightOpts = o.light ? (o.light === true ? {} : o.light) : null;
-    const lit = () => (lightOpts ? this.claimLight(p, lightOpts, { intensity: 4, range: 9, height: 0.25, color: SCONCE_COLOR, flicker: 0.35 }) : null);
+    const lit = () => (lightOpts ? this.claimLight(o.follow ?? p, lightOpts, { intensity: 4, range: 9, height: 0.25, color: SCONCE_COLOR, flicker: 0.35 }) : null);
     let light = lit();
     let paused = false, stopped = false;
     const h: FireHandle = {

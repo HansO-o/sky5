@@ -36,3 +36,30 @@ export function checkDrainJoin(caveAnchors, keepAnchors, sourceDrain = null) {
   }
   return { ok: true, message: `drain join: cave/anchors and ${from} agree (${box(keep)}${cave ? "" : "; opening bbox only, cave/anchors predates joins.drain"})` };
 }
+
+/**
+ * The props join: tools/gen/props.mjs places and validates every prop against shipped files (the cave
+ * and keep anchors and rooms, the cave's rock field via cave/mesh_a) and records their sha256 in
+ * props/meta joins.inputs. With --only either side can be rebuilt alone, so every recorded input must
+ * still be the file the manifest ships, and every id in `required` (props.mjs PROPS_INPUTS) must be
+ * recorded. `assets`: the manifest entries. Returns {ok, message}.
+ */
+export function checkPropsJoin(propsMeta, assets, required = []) {
+  const fix = "rebuild it: node tools/build-assets.mjs --only=props/ (with the other steps you are rebuilding)";
+  const inputs = propsMeta?.joins?.inputs;
+  if (!inputs) return { ok: false, message: `props join: props/meta records no joins.inputs (built before its inputs were pinned); ${fix}` };
+  const unpinned = required.filter((id) => !(id in inputs));
+  if (unpinned.length) return { ok: false, message: `props join: props/meta does not pin ${unpinned.join(", ")}, which tools/gen/props.mjs now reads; ${fix}` };
+  const changed = [];
+  for (const [id, hash] of Object.entries(inputs)) {
+    const a = assets.find((x) => x.id === id);
+    if (!a) changed.push(`${id} no longer ships`);
+    else if (a.hash !== hash) changed.push(`${id} changed (props/ read ${hash.slice(0, 12)}, the manifest ships ${a.hash.slice(0, 12)})`);
+  }
+  if (changed.length)
+    return {
+      ok: false,
+      message: `props join: props/meta was built against other inputs: ${changed.join("; ")}. Its placements (sconces, beds, B3 props, weapon stands, bones, the brow …) and the gallery set piece's fit to the rock would be stale; ${fix}`,
+    };
+  return { ok: true, message: `props join: props/meta was built against the shipped ${Object.keys(inputs).join(", ")}` };
+}

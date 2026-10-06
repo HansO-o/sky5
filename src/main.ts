@@ -186,7 +186,7 @@ function getGame() {
         }
       });
     };
-    if (new URLSearchParams(location.search).has("debug")) (window as unknown as { __game: Game }).__game = g;
+    if (new URLSearchParams(location.search).has("debug")) Object.assign(window as unknown as { __game: Game; __audio: typeof audio }, { __game: g, __audio: audio });
     g.loadSave = (s) => startFromSave(s);
     return g;
   })();
