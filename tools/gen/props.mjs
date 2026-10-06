@@ -4,9 +4,10 @@
 //
 // props/meta (version 1):
 //   resolve     "kit/<Model>" / "procprops/<name>" → {asset, node} (the anchors name props that way)
-//   kit         per kit/fpm model: bounds, facing, anchors, hinge, held (from propkit)
-//   procprops   per procedural prop: pivots, colliders and tags, anchors, held (from procprops)
-//   held        every held item's attach recipes by asset#node (BoneSocket recipes, hand-local)
+//   kit         per kit/fpm model: bounds, facing, anchors, hinge, collider ("bbox" | "none"), held (from propkit)
+//   procprops   per procedural prop: pivots, colliders and tags, anchors, held, worn (from procprops)
+//   held        every held item's attach recipes by asset#node (BoneSocket recipes keyed by bone, hand-local, with the grip)
+//   worn        worn items (the rope cuffs) by asset#node: recipes keyed by bone, no grip
 //   placements  world placements derived from the keep and cave anchors (+ a yaw, game convention)
 //   ph          the Poly Haven props this unit added, with placement hints
 //   joins       the shipped inputs the props were built against: `inputs` maps cave/anchors,
@@ -16,7 +17,7 @@
 import path from "node:path";
 import { io } from "../lib/gltf.mjs";
 import { heldRecipe, clipPoses, heldInPose, angleDeg } from "../lib/handheld.mjs";
-import { buildPropKit, PROPKIT } from "./propkit.mjs";
+import { buildPropKit, PROPKIT, KIT_COLLIDER, trianglesOf, columnHits } from "./propkit.mjs";
 import { buildProcProps, PROCPROPS } from "./procprops.mjs";
 
 export const PROPS_META = { id: "props/meta", segment: "keep", priority: 93, pos: [60, -662] };
@@ -83,7 +84,41 @@ function shieldLean(verts, lean, bar) {
   throw new Error("props: the kite shield does not reach the weapon stand's top bar within 40° of lean");
 }
 
-function placements(anchors, kit, ph) {
+/**
+ * An item standing in a weapon stand slot (stand-local, the stand facing −Z). The stand's top "bar" is two
+ * rails (y 0.76…0.86) with a 7 cm gap between them along x, and under the gap runs a base beam (top y 0.14):
+ * a weapon stands on the beam and rises through the gap, which holds it upright. `verts`: the item's
+ * model-space vertices; `yaw`: its turn about Y in the stand's frame; `slot`: the slot point.
+ * The item is lowered onto the highest surface under it below the rails (the beam, else the floor), then
+ * checked against the whole stand: `depth` is how far its deepest vertex is inside it (ray parity against
+ * the stand's triangles), `inGap` whether it reaches up between the rails.
+ */
+function standFit(tris, verts, { yaw, scale = 1, slot }) {
+  const RAILS = 0.5; // stand surfaces above this height are the rails; below it, the base beam and the feet
+  const P = verts.map((v) => add(rotY(v.map((x) => x * scale), yaw), [slot[0], 0, slot[2]]));
+  let lift = -Math.min(...P.map((v) => v[1])), on = "floor";
+  for (const v of P) {
+    const top = columnHits(tris, v[0], v[2]).filter((h) => h < RAILS).pop();
+    if (top !== undefined && top - v[1] > lift) (lift = top - v[1]), (on = "beam");
+  }
+  let depth = 0, inGap = false;
+  for (const v of P) {
+    const y = v[1] + lift, hits = columnHits(tris, v[0], v[2]);
+    if (hits.filter((h) => h > y + 1e-4).length % 2) depth = Math.max(depth, Math.min(...hits.map((h) => Math.abs(h - y))));
+    if (y > 0.8 && !hits.some((h) => h > RAILS)) inGap = true;
+  }
+  const ys = P.map((v) => v[1] + lift);
+  return {
+    at: [slot[0], lift, slot[2]],
+    on,
+    depth,
+    inGap,
+    top: Math.max(...ys),
+    box: { min: [0, 1, 2].map((k) => Math.min(...P.map((v) => v[k] + (k === 1 ? lift : 0)))), max: [0, 1, 2].map((k) => Math.max(...P.map((v) => v[k] + (k === 1 ? lift : 0)))) },
+  };
+}
+
+function placements(anchors, kit, ph, kitGeom) {
   const K = anchors.keep.anchors, rooms = anchors.keep.rooms, C = anchors.cave.anchors;
   const out = {};
   out.gallery_bridge = { asset: PROCPROPS.keep.id, node: "gallery_bridge", at: r3(C.bridge_hinge.pos), yaw: 0, note: "world axes; add at the origin of this transform (no recentring)" };
@@ -135,26 +170,57 @@ function placements(anchors, kit, ph) {
       note: "the anchor stands 0.6 m off the wall; the shelf's back (z = 0) is put on the wall",
     };
   }
-  // weapon stands: items upright in the notches (lifted so their lowest point is on the slot; the
-  // wooden axe at the 1.25 scale it has in the hand, design §3.3) and the imperial kite shield leaning
-  // on the front of the top bar (its tip on the floor at `lean`)
+  // weapon stands: items upright on the base beam at their slots, rising through the gap between the top
+  // rails (standFit, checked against the stand's triangles; the wooden axe at the 1.25 scale it has in the
+  // hand, design §3.3), and the imperial kite shield leaning on the front rail (its tip on the floor at `lean`)
   const stand = kit.models.WeaponStand.anchors;
-  const swordLift = -kit.models.Sword_Bronze.bbox.min[1];
+  const standTris = trianglesOf(kitGeom.WeaponStand);
+  const vertsOf = (parts) => parts.flatMap((p) => Array.from({ length: p.pos.length / 3 }, (_, i) => Array.from(p.pos.subarray(i * 3, i * 3 + 3))));
+  const W = { sword: vertsOf(kitGeom.Sword_Bronze), axe: vertsOf(kitGeom.Axe_Bronze) };
+  // [item, slot, turn about Y in the stand's frame, scale, model vertices]. The sword turns π/2 like the
+  // slots, so its blade's flat faces along the gap. kit/fpm#Axe_Bronze's head runs along model X: the
+  // slots' turn would put it across the rails (its blade 1.8 cm into the back rail), so it turns π, the
+  // head along the gap toward the empty slot_4. ph/wooden_axe_03's head runs along model Z, along the gap
+  // at the slots' turn but with its blade at the sword in slot_2: it turns −π/2, toward the empty slot_0
   const items = {
-    use_weaponstand_imp: [["kit/fpm#Sword_Bronze", "slot_1", swordLift, 1]],
-    use_weaponstand_reb: [["ph/wooden_axe_03", "slot_1", -ph.axe.minY * ph.axe.scale, ph.axe.scale], ["kit/fpm#Sword_Bronze", "slot_2", swordLift, 1], ["kit/fpm#Axe_Bronze", "slot_3", -kit.models.Axe_Bronze.bbox.min[1], 1]],
+    use_weaponstand_imp: [["kit/fpm#Sword_Bronze", "slot_1", Math.PI / 2, 1, W.sword]],
+    use_weaponstand_reb: [
+      ["ph/wooden_axe_03", "slot_1", -Math.PI / 2, ph.axe.scale, ph.axe.verts],
+      ["kit/fpm#Sword_Bronze", "slot_2", Math.PI / 2, 1, W.sword],
+      ["kit/fpm#Axe_Bronze", "slot_3", Math.PI, 1, W.axe],
+    ],
   };
   const lean = shieldLean(ph.shield.verts, stand.lean.at, kit.models.WeaponStand.leanRest);
+  const standProblems = [];
   out.weapon_stands = Object.entries(items)
     .filter(([k]) => K[k])
     .map(([k, list]) => {
       const a = K[k], y = a.yaw ?? 0;
+      const fits = list.map(([item, slot, turn, scale, verts]) => {
+        const f = standFit(standTris, verts, { yaw: turn, scale, slot: stand[slot].at });
+        if (f.depth > 0.005) standProblems.push(`${k} ${item}: ${(f.depth * 100).toFixed(1)} cm inside the stand`);
+        if (!f.inGap) standProblems.push(`${k} ${item}: does not reach up between the rails (top y ${f.top.toFixed(2)}), so nothing holds it upright`);
+        return f;
+      });
+      for (let i = 0; i < fits.length; i++)
+        for (let j = i + 1; j < fits.length; j++) {
+          const p = fits[i].box, q = fits[j].box;
+          if ([0, 1, 2].every((ax) => p.min[ax] < q.max[ax] && q.min[ax] < p.max[ax])) standProblems.push(`${k}: ${list[i][0]} and ${list[j][0]} overlap`);
+        }
       return {
         anchor: k,
         item: "kit/fpm#WeaponStand",
         at: r3(a.world),
         yaw: y,
-        items: list.map(([item, slot, lift, scale]) => ({ item, slot, at: r3(place(a.world, y, add(stand[slot].at, [0, lift, 0]))), rotation: qYaw(y + Math.PI / 2), ...(scale !== 1 ? { scale } : {}), note: `upright, handle +Y${scale !== 1 ? `; scale ${scale}, as in the hand` : ""}` })),
+        items: list.map(([item, slot, turn, scale], i) => ({
+          item,
+          slot,
+          at: r3(place(a.world, y, fits[i].at)),
+          rotation: qYaw(y + turn),
+          ...(scale !== 1 ? { scale } : {}),
+          fit: { on: fits[i].on, lift: +fits[i].at[1].toFixed(3), top: +fits[i].top.toFixed(3), depth: +fits[i].depth.toFixed(3) },
+          note: `upright, handle +Y, standing on the stand's ${fits[i].on} and rising between its rails to y ${fits[i].top.toFixed(2)} (stand-local)${/axe/i.test(item) ? "; its head turned along the gap" : ""}${scale !== 1 ? `; scale ${scale}, as in the hand` : ""}`,
+        })),
         shield: k.endsWith("imp")
           ? {
               item: "ph/kite_shield",
@@ -168,6 +234,7 @@ function placements(anchors, kit, ph) {
           : null,
       };
     });
+  if (standProblems.length) throw new Error(`props: weapon stand items:\n  ${standProblems.join("\n  ")}`);
   // the camp fire in the gallery
   if (C.camp_fire) out.camp_fire = { item: "ph/stone_fire_pit", at: r3(add(C.camp_fire.pos, [0, 0.15, 0])), yaw: 0, note: "the scan's origin is mid-height: 0.15 m up sinks the ring 4 cm into the uneven floor" };
   // the outcrop brow (cave/anchors outcrop.props)
@@ -211,7 +278,7 @@ export async function buildProps({ emit, SRC, anchors, inputs, caveMeshA }) {
   const poses = clipPoses([path.join(SRC, "chars/anim_full/UAL1.glb"), path.join(SRC, "chars/anim_full/UAL2.glb")]);
   const AXE_SCALE = 1.25;
   const axeVerts = await phVerts(SRC, "wooden_axe_03"), shieldVerts = await phVerts(SRC, "kite_shield");
-  const ph = { axe: { minY: Math.min(...axeVerts.map((v) => v[1])), scale: AXE_SCALE }, shield: { verts: shieldVerts } };
+  const ph = { axe: { verts: axeVerts, scale: AXE_SCALE }, shield: { verts: shieldVerts } };
   const resolve = {};
   for (const m of Object.keys(kit.meta.models)) resolve[`kit/${m}`] = { asset: PROPKIT.id, node: m };
   for (const [k, part] of [["keep", pp.keep], ["exit", pp.exit]]) for (const n of Object.keys(part.meta)) resolve[`procprops/${n}`] = { asset: PROCPROPS[k].id, node: n };
@@ -223,7 +290,16 @@ export async function buildProps({ emit, SRC, anchors, inputs, caveMeshA }) {
   const held = {};
   for (const [m, info] of Object.entries(kit.meta.models)) if (info.held) held[`${PROPKIT.id}#${m}`] = info.held;
   for (const [k, part] of [["keep", pp.keep]]) for (const [n, info] of Object.entries(part.meta)) if (info.held) held[`${PROCPROPS[k].id}#${n}`] = info.held;
-  held[`${PROCPROPS.keep.id}#cuffs_rope`] = { recipes: pp.keep.meta.cuffs_rope.recipes, worn: true };
+  // worn items (no grip): each node its own entry, recipes keyed by bone like `held`
+  const worn = {};
+  for (const [k, part] of [["keep", pp.keep]])
+    for (const [n, info] of Object.entries(part.meta))
+      for (const [child, w] of Object.entries(info.worn ?? {}))
+        worn[`${PROCPROPS[k].id}#${child}`] = {
+          ...w,
+          of: `${PROCPROPS[k].id}#${n}`,
+          ...(n === "cuffs_rope" ? { checks: Object.fromEntries(Object.entries(pp.wrists).filter(([key]) => key.endsWith(`.${Object.keys(w.recipes)[0]}`))), note: "checks: how far each base body's wrist fills the coil's inner section (bind pose; the build fails over 1)" } : {}),
+        };
   // the existing Poly Haven items: the axe as design §3.3 has it (not re-measured; scale 1.25, also on
   // its stand), the kite shield measured here
   // (its grip, the model point the recipe puts on the grip centre: R⁻¹(gripCentre − position) / scale)
@@ -232,21 +308,23 @@ export async function buildProps({ emit, SRC, anchors, inputs, caveMeshA }) {
   const meta = {
     version: 1,
     assets: {
-      [PROPKIT.id]: { segment: PROPKIT.segment, tris: kit.meta.tris, animations: kit.meta.animations },
+      [PROPKIT.id]: { segment: PROPKIT.segment, tris: kit.meta.tris, animations: kit.meta.animations, colliders: { bbox: Object.keys(kit.meta.models).filter((m) => kit.meta.models[m].collider === "bbox") } },
       [PROCPROPS.keep.id]: { segment: PROCPROPS.keep.segment, tris: pp.keep.tris, colliders: pp.keep.colliders },
       [PROCPROPS.exit.id]: { segment: PROCPROPS.exit.segment, tris: pp.exit.tris, colliders: pp.exit.colliders },
     },
     conventions: {
-      nodes: "one top-level node per prop at the origin (identity); geometry on `<node>_mesh` leaves; colliders on `*_col` nodes (POSITION only, no material: hide them and build static bodies); anchors are empty nodes",
+      nodes: "one top-level node per prop at the origin (identity); geometry on `<node>_mesh` leaves; anchors are empty nodes",
+      colliders: `procprops/*: on \`*_col\` nodes (POSITION only, no material: hide them and build static bodies, tags in their extras). kit/fpm has no \`*_col\` nodes: each model's \`collider\` says how it collides, "bbox" = ${KIT_COLLIDER.bbox}; "none" = ${KIT_COLLIDER.none}`,
       facing: "props face −Z: turn them by the anchor's yaw (game convention: yaw = atan2(−dx, −dz) of the facing; rotation.y = yaw turns local −Z to the facing)",
-      recipes: "attachToSocket(item, BoneSocket(bone), recipe): position and rotation [x, y, z, w] in the joint's frame; the grip point lands on gripCentre (∓0.03, 0.095, 0)",
+      recipes: "attachToSocket(item, BoneSocket(bone), recipe): position and rotation [x, y, z, w] in the joint's frame; for `held` the grip point lands on gripCentre (∓0.03, 0.095, 0); `worn` items have no grip",
       extras: "each top-level node carries the same data as here in its glTF extras (node.metadata.gltf.extras)",
     },
     resolve,
     kit: kit.meta.models,
     procprops: { keep: pp.keep.meta, exit: pp.exit.meta },
     held,
-    placements: placements(anchors, kit.meta, ph),
+    worn,
+    placements: placements(anchors, kit.meta, ph, kit.geom),
     ph: {
       "ph/wooden_table_02": { use: "hall cover tables (keep anchors prop_hall_table_1/2)", origin: "on the floor" },
       "ph/stone_fire_pit": { use: "the cave camp (cave anchor camp_fire)", origin: "mid-height of the stone ring: lift 0.15 m" },

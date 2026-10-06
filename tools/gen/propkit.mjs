@@ -14,8 +14,10 @@
 //   yaw turns local −Z to the facing). Held items keep the source axes, which the runtime's attach
 //   recipes assume (Sword_Bronze: handle +Y, edge +X).
 // - The top-level node's glTF extras (Babylon: node.metadata.gltf.extras) describe it: source,
-//   triangles, bounds, facing, anchors, and for held items `held` (grip point and a ready attach
-//   recipe per hand, checked against the clips by forward kinematics at build time).
+//   triangles, bounds, facing, anchors, `collider`, and for held items `held` (grip point and a ready
+//   attach recipe per hand, checked against the clips by forward kinematics at build time).
+// - No `*_col` nodes: `collider` "bbox" (the solid models) means one static box of `bbox`, "none" no
+//   body (KIT_COLLIDER).
 //
 // Fixes over the source files (research/props.md "Build gotchas"):
 // - COLOR_0 on materials not named *_Vertex multiplies wood/metal trims toward black: it becomes a mild
@@ -29,7 +31,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
 import { Document } from "@gltf-transform/core";
-import { io, compressTextures, finalize } from "../lib/gltf.mjs";
+import { io, compressTextures, finalize, missingTexcoords } from "../lib/gltf.mjs";
 import { heldRecipe, clipPoses, heldInPose, angleDeg } from "../lib/handheld.mjs";
 import { FPM_KIT } from "../sources.mjs";
 
@@ -56,7 +58,9 @@ const STEEL = {
 /**
  * Per model: `turn` (rotate 180° about Y so the front faces −Z), `retint` ([from, to] colour pairs),
  * `anchors` (name → model-space point after the turn, or a function of the bounds), `wall` (the back
- * sits at z = 0: put that plane on the wall), `seat`, `held` (grip and hand axes, see HELD).
+ * sits at z = 0: put that plane on the wall), `seat`, `held` (grip and hand axes, see HELD), `solid`
+ * (the player and NPCs collide with it: meta `collider` "bbox", one static box of its bounds; the kit
+ * ships no `*_col` nodes, see KIT_COLLIDER).
  */
 const MODELS = {
   Sword_Bronze: { retint: [STEEL.blade, STEEL.fittings, STEEL.grip] },
@@ -65,34 +69,36 @@ const MODELS = {
   Torch_Metal: { turn: true, wall: true, anchors: { flame: "torch_basket" } },
   Lantern_Wall: { turn: true, wall: true, anchors: { flame: "lantern" } },
   Candle_1: { anchors: { flame: (b) => [0, b.max[1] + 0.02, 0] } },
-  Barrel: {},
-  Crate_Wooden: { turn: true },
-  Crate_Metal: { turn: true },
-  Chest_Wood: { turn: true, chest: true, anchors: { loot: [0, 0.32, 0] } },
-  Bag: { turn: true },
+  Barrel: { solid: true },
+  Crate_Wooden: { turn: true, solid: true },
+  Crate_Metal: { turn: true, solid: true },
+  Chest_Wood: { turn: true, chest: true, solid: true, anchors: { loot: [0, 0.32, 0] } },
+  Bag: { turn: true, solid: true },
   Pouch_Large: { turn: true },
-  Table_Large: { turn: true, anchors: { top: (b) => [0, b.max[1], 0] } },
-  Chair_1: { turn: true, seat: 0.5, anchors: { sit: [0, 0.5, -0.02] } },
-  Bench: { turn: true, seat: 0.526, anchors: { sit: [0, 0.526, 0] } },
-  Stool: { seat: 0.582, anchors: { sit: [0, 0.582, 0] } },
-  Bed_Twin1: { turn: true, anchors: { lie: (b) => [0, b.max[1] - 0.12, 0.1] } },
-  // five notches in the top bar (y 0.84) hold upright weapons; the slot nodes are on the floor under
-  // them (y 0): a weapon stands with its lowest point on its slot, handle axis +Y, turned 90° so a
-  // blade's flat faces along the bar. A shield leans at `lean` (floor, in front) against the bar's front
-  // face, which the build measures (meta `leanRest`)
+  Table_Large: { turn: true, solid: true, anchors: { top: (b) => [0, b.max[1], 0] } },
+  Chair_1: { turn: true, solid: true, seat: 0.5, anchors: { sit: [0, 0.5, -0.02] } },
+  Bench: { turn: true, solid: true, seat: 0.526, anchors: { sit: [0, 0.526, 0] } },
+  Stool: { solid: true, seat: 0.582, anchors: { sit: [0, 0.582, 0] } },
+  Bed_Twin1: { turn: true, solid: true, anchors: { lie: (b) => [0, b.max[1] - 0.12, 0.1] } },
+  // the top "bar" is two rails (y 0.76…0.86) with a 7 cm gap between them along x, notched at five
+  // places; under the gap runs a base beam (top y 0.14, measured: part "beam"). The slot nodes are on the
+  // beam under the notches: a weapon stands with its lowest point on its slot and rises through the gap,
+  // handle axis +Y, turned 90° so a blade's flat faces along the gap. A shield leans at `lean` (floor, in
+  // front) against the front rail's face, which the build measures (meta `leanRest`)
   WeaponStand: {
     turn: true,
+    solid: true,
     anchors: Object.fromEntries([
-      ...[-0.35, -0.17, 0, 0.17, 0.35].map((x, i) => [`slot_${i}`, { at: [x, 0, 0], rotY: Math.PI / 2 }]),
+      ...[-0.35, -0.17, 0, 0.17, 0.35].map((x, i) => [`slot_${i}`, { at: (all, b) => [x, b.beam.max[1], 0], rotY: Math.PI / 2 }]),
       ["lean", { at: [0, 0, -0.55] }],
     ]),
   },
   Peg_Rack: { turn: true, wall: true },
-  Shelf_Small_Bottles: { turn: true, wall: true, anchors: { top_0: [-0.24, 0.628, -0.15], top_1: [0.22, 0.628, -0.15] } },
-  Dummy: { turn: true },
+  Shelf_Small_Bottles: { turn: true, wall: true, solid: true, anchors: { top_0: [-0.24, 0.628, -0.15], top_1: [0.22, 0.628, -0.15] } },
+  Dummy: { turn: true, solid: true },
   Chain_Coil: {},
-  Cage_Small: { turn: true },
-  Cauldron: { anchors: { fire: (b) => [0, b.max[1] - 0.08, 0] } },
+  Cage_Small: { turn: true, solid: true },
+  Cauldron: { solid: true, anchors: { fire: (b) => [0, b.max[1] - 0.08, 0] } },
   Key_Metal: {},
   Potion_1: {},
   Potion_2: {},
@@ -138,6 +144,44 @@ const HELD = {
   Potion_2: { grip: (p) => [0, p.all.max[1] * 0.4, 0], hands: { l: { Y: "+Z", X: "+X" }, r: { Y: "+Z", X: "+X" } } },
   Key_Metal: { grip: (p) => [p.all.mid[0], 0, p.all.min[2] + 0.02], hands: { r: { Z: "+Z", Y: "+Y" } } },
 };
+
+/**
+ * How kit models collide (meta `collider`, per model). The kit ships no `*_col` nodes: a `solid` model
+ * collides as one static box of its meta `bbox` (model space, so it turns with the placement), which is
+ * what src/prologue/keep/props.ts builds for the models it places (`bboxCollider`); the rest (held items,
+ * bottles and small dressing, wall fixtures, the pouch and the chain coil) need no body.
+ */
+export const KIT_COLLIDER = {
+  bbox: "one static box of `bbox` (centre (min + max) / 2, half-size (max − min) / 2, in the model's frame: put it under the placed node)",
+  none: "no body (held item, small dressing or a wall fixture out of the way)",
+};
+
+/** Triangles of model-space parts ({pos, idx}[], as `geom` has them), each with its xz bounds for a quick reject. */
+export function trianglesOf(parts) {
+  const out = [];
+  for (const p of parts)
+    for (let t = 0; t < p.idx.length; t += 3) {
+      const v = [0, 1, 2].map((k) => Array.from(p.pos.subarray(p.idx[t + k] * 3, p.idx[t + k] * 3 + 3)));
+      out.push({ v, x0: Math.min(v[0][0], v[1][0], v[2][0]), x1: Math.max(v[0][0], v[1][0], v[2][0]), z0: Math.min(v[0][2], v[1][2], v[2][2]), z1: Math.max(v[0][2], v[1][2], v[2][2]) });
+    }
+  return out;
+}
+
+/** Heights (ascending) where the vertical line through (x, z) crosses `tris`. */
+export function columnHits(tris, x, z) {
+  const out = [];
+  for (const { v: [a, b, c], x0, x1, z0, z1 } of tris) {
+    if (x < x0 || x > x1 || z < z0 || z > z1) continue;
+    const d = (b[2] - c[2]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[2] - c[2]);
+    if (Math.abs(d) < 1e-12) continue;
+    const l1 = ((b[2] - c[2]) * (x - c[0]) + (c[0] - b[0]) * (z - c[2])) / d;
+    const l2 = ((c[2] - a[2]) * (x - c[0]) + (a[0] - c[0]) * (z - c[2])) / d;
+    const l3 = 1 - l1 - l2;
+    if (l1 < 0 || l2 < 0 || l3 < 0) continue;
+    out.push(l1 * a[1] + l2 * b[1] + l3 * c[1]);
+  }
+  return out.sort((p, q) => p - q);
+}
 
 const near = (a, b, e = 0.02) => Math.abs(a[0] - b[0]) < e && Math.abs(a[1] - b[1]) < e && Math.abs(a[2] - b[2]) < e;
 const lum = (c) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
@@ -217,7 +261,13 @@ function partBounds(name, parts) {
   if (name === "Axe_Bronze") b.handle = bounds(parts, (p, i) => !p.col || p.col[i * 3] > 0.99);
   if (name === "Shield_Wooden") b.handle = bounds(parts, (p) => p.srcMaterial === "MI_Trim_Props");
   // the top bar's middle (where a leaning shield rests): the vertices 0.6…0.95 m up within 0.3 m of the centre
-  if (name === "WeaponStand") b.bar = bounds(parts, (p, i) => p.pos[i * 3 + 1] > 0.6 && p.pos[i * 3 + 1] < 0.95 && Math.abs(p.pos[i * 3]) < 0.3);
+  if (name === "WeaponStand") {
+    b.bar = bounds(parts, (p, i) => p.pos[i * 3 + 1] > 0.6 && p.pos[i * 3 + 1] < 0.95 && Math.abs(p.pos[i * 3]) < 0.3);
+    // the base beam's top under the gap, at the centre (a vertical ray: the beam is a long box with no
+    // vertices there); the slots stand on it
+    const top = columnHits(trianglesOf(parts), 0, 0).filter((h) => h < 0.5).pop();
+    b.beam = top === undefined ? { min: [Infinity, Infinity, Infinity] } : { min: [0, top, 0], max: [0, top, 0], mid: [0, top, 0] };
+  }
   if (name === "Torch_Metal") {
     // the basket: vertices in the top 0.12 m
     const top = b.all.max[1];
@@ -233,7 +283,7 @@ function partBounds(name, parts) {
 }
 
 function anchorPoint(spec, b) {
-  if (typeof spec === "function") return spec(b.all);
+  if (typeof spec === "function") return spec(b.all, b);
   if (typeof spec === "string") {
     const p = b[spec];
     // flames: centre of the part, at its top
@@ -288,6 +338,8 @@ export async function buildPropKitDoc(SRC, { poses } = {}) {
   };
 
   const meta = { asset: PROPKIT.id, models: {} };
+  /** model-space geometry per model (turned like the kit), for props.mjs's fit checks: {pos, idx}[] */
+  const geom = {};
   poses ??= clipPoses([path.join(SRC, "chars/anim_full/UAL1.glb"), path.join(SRC, "chars/anim_full/UAL2.glb")]);
   const problems = [];
   const seen = new Set();
@@ -305,6 +357,7 @@ export async function buildPropKitDoc(SRC, { poses } = {}) {
       for (const p of parts) for (let i = 1; i < p.pos.length; i += 3) p.pos[i] -= y0;
     }
     const b = partBounds(src, parts);
+    geom[name] = parts.map((p) => ({ pos: Float32Array.from(p.pos), idx: p.idx }));
     const group = doc.createNode(name);
     scene.addChild(group);
     const tris = parts.reduce((s, p) => s + p.idx.length / 3, 0);
@@ -312,6 +365,7 @@ export async function buildPropKitDoc(SRC, { poses } = {}) {
     if (cfg.wall) info.wall = "back at z = 0: put that plane on the wall, facing out (−Z) into the room";
     if (b.bar) info.leanRest = { z: +b.bar.min[2].toFixed(3), y: [+b.bar.min[1].toFixed(3), +b.bar.max[1].toFixed(3)], note: "the top bar's front face, where a shield leaning from `lean` rests (stand-local)" };
     if (cfg.seat) info.seat = cfg.seat;
+    info.collider = cfg.solid ? "bbox" : "none";
 
     if (cfg.chest) {
       // rigid chest: body (Chest_Bottom) → base mesh + lid hinge (Chest_Top) → lid mesh
@@ -404,12 +458,12 @@ export async function buildPropKitDoc(SRC, { poses } = {}) {
     meta.models[name] = info;
   }
   if (problems.length) throw new Error(`propkit:\n  ${problems.join("\n  ")}`);
-  return { doc, meta };
+  return { doc, meta, geom };
 }
 
 /** Build and emit kit/fpm; returns its metadata (for props/meta). */
 export async function buildPropKit({ emit, SRC }) {
-  const { doc, meta } = await buildPropKitDoc(SRC);
+  const { doc, meta, geom } = await buildPropKitDoc(SRC);
   await compressTextures(doc, 1024, 1024, 512);
   const glb = await finalize(doc, { keepLeaves: true });
   // the decoded kit must still name every model (prune/dedup must not have merged or dropped any)
@@ -418,6 +472,8 @@ export async function buildPropKit({ emit, SRC }) {
     const users = mesh.listParents().filter((x) => x.propertyType === "Node");
     if (users.length > 1) throw new Error(`propkit: mesh ${mesh.getName()} is shared by ${users.map((n) => n.getName()).join(", ")}`);
   }
+  const noUV = missingTexcoords(back);
+  if (noUV.length) throw new Error(`propkit: the encoded kit lacks UVs its materials read:\n  ${noUV.join("\n  ")}`);
   const names = new Set(back.getRoot().listNodes().map((n) => n.getName()));
   for (const n of Object.keys(meta.models)) if (!names.has(n)) throw new Error(`propkit: ${n} is missing from the encoded kit`);
   for (const n of Object.keys(meta.models)) {
@@ -429,5 +485,5 @@ export async function buildPropKit({ emit, SRC }) {
   meta.animations = back.getRoot().listAnimations().map((a) => a.getName());
   const e = await emit(PROPKIT.id, { segment: PROPKIT.segment, priority: PROPKIT.priority, type: "glb", ext: "glb", data: glb, pos: PROPKIT.pos });
   console.log(`  kit/fpm: ${Object.keys(meta.models).length} models, ${meta.tris} triangles, clips ${meta.animations.join(", ")}`);
-  return { meta, entry: e };
+  return { meta, entry: e, geom };
 }

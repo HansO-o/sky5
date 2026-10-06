@@ -74,15 +74,63 @@ export async function simplifyPermissive(doc, ratio, error = 0.02) {
     }
 }
 
-/** Final geometry optimisation + meshopt compression; returns GLB bytes. */
-export async function finalize(doc, { simplifyRatio = 1, simplifyError = 0.002, keepNodes = true, keepLeaves = false } = {}) {
+/**
+ * Final geometry optimisation + meshopt compression; returns GLB bytes.
+ * `keepAttributes`: keep vertex attributes no texture inside the GLB reads. By default prune drops them,
+ * which strips TEXCOORD_0 from a material whose textures the runtime binds by id from its extras
+ * (`extras.textures`, as cave/* and procprops/* do): such a caller passes true and drops the attributes it
+ * does not need itself (`dropUnusedTexcoords`).
+ */
+export async function finalize(doc, { simplifyRatio = 1, simplifyError = 0.002, keepNodes = true, keepLeaves = false, keepAttributes = false } = {}) {
   const transforms = [dedup(), weld()];
   if (simplifyRatio < 1)
     transforms.push(simplify({ simplifier: MeshoptSimplifier, ratio: simplifyRatio, error: simplifyError, lockBorder: false }));
   if (!keepNodes) transforms.push(flatten(), join());
-  transforms.push(resample(), prune({ keepAttributes: false, keepLeaves }), meshopt({ encoder: MeshoptEncoder, level: "medium" }));
+  transforms.push(resample(), prune({ keepAttributes, keepLeaves }), meshopt({ encoder: MeshoptEncoder, level: "medium" }));
   await doc.transform(...transforms);
   return Buffer.from(await io.writeBinary(doc));
+}
+
+const TEXTURE_SLOTS = ["BaseColor", "Normal", "Occlusion", "Emissive", "MetallicRoughness"];
+
+/**
+ * The TEXCOORD_n sets a material reads: those of its own texture slots, plus TEXCOORD_0 when its extras
+ * name textures the runtime binds (`extras.textures`, e.g. pp_rock → cave/tex/rock_*).
+ */
+function texcoordsRead(mat) {
+  const need = new Set();
+  for (const slot of TEXTURE_SLOTS) if (mat[`get${slot}Texture`]()) need.add(mat[`get${slot}TextureInfo`]().getTexCoord());
+  if (mat.getExtras()?.textures) need.add(0);
+  return need;
+}
+
+/**
+ * Remove TEXCOORD_n from every primitive whose material reads no texture (`texcoordsRead`): what prune's
+ * default would drop, for a document finalized with `keepAttributes: true`.
+ */
+export function dropUnusedTexcoords(doc) {
+  for (const mesh of doc.getRoot().listMeshes())
+    for (const prim of mesh.listPrimitives()) {
+      const mat = prim.getMaterial();
+      if (!mat) continue;
+      const need = texcoordsRead(mat);
+      for (const s of prim.listSemantics()) if (/^TEXCOORD_\d+$/.test(s) && !need.has(+s.slice(9))) prim.setAttribute(s, null);
+    }
+}
+
+/**
+ * Primitives missing a TEXCOORD_n their material reads (`texcoordsRead`), one line each; checked on the
+ * decoded GLB, after prune and quantisation.
+ */
+export function missingTexcoords(doc) {
+  const out = [];
+  for (const mesh of doc.getRoot().listMeshes())
+    mesh.listPrimitives().forEach((prim, i) => {
+      const mat = prim.getMaterial();
+      if (!mat) return;
+      for (const n of texcoordsRead(mat)) if (!prim.getAttribute(`TEXCOORD_${n}`)) out.push(`${mesh.getName()} primitive ${i} (${mat.getName()}${mat.getExtras()?.textures ? ", textures bound from its extras" : ""}) has no TEXCOORD_${n}`);
+    });
+  return out;
 }
 
 /** Create a KTX2 texture from an image buffer. */

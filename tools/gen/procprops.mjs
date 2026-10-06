@@ -23,7 +23,7 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import sharp from "sharp";
 import { Document } from "@gltf-transform/core";
-import { MeshBuilder, io, compressTextures, finalize } from "../lib/gltf.mjs";
+import { MeshBuilder, io, compressTextures, finalize, dropUnusedTexcoords, missingTexcoords } from "../lib/gltf.mjs";
 import { box, cylinder, torus, tube } from "./shapes.mjs";
 import { heldRecipe, clipPoses, heldInPose, angleDeg, qrot } from "../lib/handheld.mjs";
 
@@ -747,13 +747,14 @@ function cuffs() {
   // the knot and a loose end
   const kx = CUFF.cx + CUFF.rx;
   tube(rope, [[kx + 0.002, 0.004, -0.02], [kx + 0.014, 0.0, -0.01], [kx + 0.022, -0.012, 0.0], [kx + 0.024, -0.05, 0.012]], CUFF.r, { sides: 6, tile: 0.05 });
+  // worn, not held: no grip; each child is its own item with one recipe keyed by bone, as `held` is
   const recipe = (bone) => ({ bone, position: [0, 0.008, 0], rotation: [0, 0, 0, 1] });
   return N("cuffs_rope", {
     children: [N("cuffs_rope_l", { parts: p }), N("cuffs_rope_r", { parts: copyParts(p, (v) => [-v[0], v[1], v[2]], (n) => [-n[0], n[1], n[2]], true) })],
     extras: {
       kind: "worn",
-      recipes: { cuffs_rope_l: recipe("hand_l"), cuffs_rope_r: recipe("hand_r") },
-      note: "hang each child on its hand's BoneSocket with the recipe: the coil wraps the wrist around the hand joint's +Y (bone) axis, wider across the palm (local Z)",
+      worn: { cuffs_rope_l: { recipes: { hand_l: recipe("hand_l") } }, cuffs_rope_r: { recipes: { hand_r: recipe("hand_r") } } },
+      note: "instantiate each child (`cuffs_rope_l`, `cuffs_rope_r`) and hang it on its hand's BoneSocket with its recipe: the coil wraps the wrist around the hand joint's +Y (bone) axis, wider across the palm (local Z)",
     },
   });
 }
@@ -1386,7 +1387,11 @@ function checkGallery(spec, cave, problems, D) {
   return out;
 }
 
-/** The rope cuffs clear both base bodies' wrists (bind pose, hand-local; the cuff recipe lifts the coil 8 mm). */
+/**
+ * The rope cuffs clear both base bodies' wrists (bind pose, hand-local; the cuff recipe lifts the coil 8 mm).
+ * Fails, rather than passing with nothing measured, when a body lacks a skin with both `hand_<side>` and
+ * `lowerarm_<side>`, or when no skinned vertex of that wrist falls in the coil's height band.
+ */
 async function checkWrists(SRC, problems) {
   const out = {};
   for (const body of ["Superhero_Male_FullBody", "Superhero_Female_FullBody"]) {
@@ -1395,19 +1400,21 @@ async function checkWrists(SRC, problems) {
       throw new Error(`procprops: the rope cuffs are sized on the base bodies, but ${path.relative(path.dirname(SRC), file)} does not load (${e.message}); run node tools/fetch-extra.mjs`);
     });
     const root = doc.getRoot();
-    for (const skin of root.listSkins()) {
-      const joints = skin.listJoints();
-      for (const side of ["l", "r"]) {
+    for (const side of ["l", "r"]) {
+      const key = `${body}.hand_${side}`;
+      let worst = 0, samples = 0, skins = 0;
+      const cx = side === "l" ? CUFF.cx : -CUFF.cx;
+      for (const skin of root.listSkins()) {
+        const joints = skin.listJoints();
         const ji = joints.findIndex((j) => j.getName() === `hand_${side}`), li = joints.findIndex((j) => j.getName() === `lowerarm_${side}`);
-        if (ji < 0) continue;
+        if (ji < 0 || li < 0) continue;
+        skins++;
         const M = skin.getInverseBindMatrices().getElement(ji, []);
-        let worst = 0;
-        const cx = side === "l" ? CUFF.cx : -CUFF.cx;
         for (const n of root.listNodes())
           if (n.getSkin() === skin && n.getMesh())
             for (const prim of n.getMesh().listPrimitives()) {
               const P = prim.getAttribute("POSITION"), J = prim.getAttribute("JOINTS_0"), W = prim.getAttribute("WEIGHTS_0");
-              if (!J) continue;
+              if (!J || !W) continue;
               const v = [], j = [], w = [];
               for (let i = 0; i < P.getCount(); i++) {
                 J.getElement(i, j);
@@ -1419,12 +1426,21 @@ async function checkWrists(SRC, problems) {
                 const h = [0, 1, 2].map((r) => M[r] * v[0] + M[4 + r] * v[1] + M[8 + r] * v[2] + M[12 + r]);
                 // within the coil's height (recipe lift 8 mm)
                 if (h[1] < CUFF.y0 + 0.008 || h[1] > CUFF.y0 + CUFF.rise + 0.008) continue;
+                samples++;
                 worst = Math.max(worst, Math.hypot((h[0] - cx) / (CUFF.rx - CUFF.r), h[2] / (CUFF.rz - CUFF.r)));
               }
             }
-        out[`${body}.hand_${side}`] = +worst.toFixed(2);
-        if (worst > 1) problems.push(`cuffs: ${body}'s ${side} wrist pokes through the rope coil (${worst.toFixed(2)} of its inner radius)`);
       }
+      if (!skins) {
+        problems.push(`cuffs: ${body} has no skin with both hand_${side} and lowerarm_${side}, so its ${side} wrist cannot be checked against the rope coil`);
+        continue;
+      }
+      if (!samples) {
+        problems.push(`cuffs: no vertex of ${body}'s ${side} wrist (weighted ≥ 0.5 to hand_${side}/lowerarm_${side}) lies in the rope coil's height band, so the check measured nothing`);
+        continue;
+      }
+      out[key] = { fill: +worst.toFixed(2), samples };
+      if (worst > 1) problems.push(`cuffs: ${body}'s ${side} wrist pokes through the rope coil (${worst.toFixed(2)} of its inner radius)`);
     }
   }
   return out;
@@ -1561,9 +1577,20 @@ export async function buildProcProps({ emit, SRC, anchors, caveMeshA }) {
   const result = { notes: r.notes, gallery: r.gallery, wrists: r.wrists, field: r.field, lever: { gap: r.lever.gap, lateral: r.lever.lateral, bodyClear: r.lever.bodyClear } };
   for (const [k, part] of [["keep", r.keep], ["exit", r.exit]]) {
     await compressTextures(part.doc, 1024, 512, 256);
-    const glb = await finalize(part.doc, { keepLeaves: true });
+    // pp_rock is untextured in the GLB: the runtime binds cave/tex/rock_* by its extras, through its
+    // box-projected TEXCOORD_0, which prune's default would drop. Keep the attributes, minus the UVs of
+    // materials that read no texture at all (pp_vcol, pp_leather, pp_rope)
+    const boundByExtras = part.doc.getRoot().listMaterials().filter((m) => m.getExtras()?.textures).map((m) => m.getName());
+    dropUnusedTexcoords(part.doc);
+    const glb = await finalize(part.doc, { keepLeaves: true, keepAttributes: true });
     // the encoded file still has every node, top-level ones at the identity
     const back = await io.readBinary(glb);
+    // every primitive still has the UVs its material reads, those bound from extras included (the
+    // extras must survive too, or the check below would pass vacuously)
+    for (const name of boundByExtras)
+      if (!back.getRoot().listMaterials().find((m) => m.getName() === name)?.getExtras()?.textures) throw new Error(`procprops: material ${name} lost its extras.textures in the encoded ${PROCPROPS[k].id}`);
+    const noUV = missingTexcoords(back);
+    if (noUV.length) throw new Error(`procprops: the encoded ${PROCPROPS[k].id} lacks UVs its materials read (the runtime would sample one texel):\n  ${noUV.join("\n  ")}`);
     const names = new Set(back.getRoot().listNodes().map((n) => n.getName()));
     for (const n of part.out.names) if (!names.has(n)) throw new Error(`procprops: ${n} is missing from the encoded ${PROCPROPS[k].id}`);
     for (const mesh of back.getRoot().listMeshes()) {
@@ -1576,7 +1603,8 @@ export async function buildProcProps({ emit, SRC, anchors, caveMeshA }) {
     }
     const P = PROCPROPS[k];
     result[k] = { meta: part.meta, tris: part.out.tris, colliders: part.out.colliders.map((c) => c.name), entry: await emit(P.id, { segment: P.segment, priority: P.priority, type: "glb", ext: "glb", data: glb, pos: P.pos }) };
-    console.log(`  ${P.id}: ${Object.keys(part.meta).length} props, ${part.out.tris} triangles, ${part.out.colliders.length} colliders`);
+    const extrasUV = back.getRoot().listMeshes().flatMap((m) => m.listPrimitives()).filter((p) => boundByExtras.includes(p.getMaterial()?.getName() ?? "")).length;
+    console.log(`  ${P.id}: ${Object.keys(part.meta).length} props, ${part.out.tris} triangles, ${part.out.colliders.length} colliders${boundByExtras.length ? `; ${extrasUV} primitives of ${boundByExtras.join(", ")} (textures bound from extras) keep TEXCOORD_0` : ""}`);
   }
   for (const n of r.notes) console.log(`  note: ${n}`);
   console.log(`  cuffs: wrist fill of the rope coil's inner section ${JSON.stringify(r.wrists)}`);

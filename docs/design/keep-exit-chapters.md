@@ -1848,8 +1848,8 @@ Sources: `FPM_KIT` in `tools/sources.mjs` lists the 34 kit models, the trim text
 |---|---|---|---|---|---|
 | `kit/fpm` | glb | **keep** | 92, [60, −662] | 1.85 MB / 1.46 MB | 34 Fantasy Props MegaKit models, 46.4k triangles, 5 materials. Trim sets at 1024² (colour and normal) plus 512² ORM, the cloth set at 512², the page texture at 256² (see Deviations). Four chest clips. |
 | `procprops/keep` | glb | **keep** | 91, [52, −700] | 1.03 MB / 0.65 MB | 21 procedural props, 39.9k triangles (the gallery set piece is 26.5k, mostly chain links), 11 colliders. |
-| `procprops/exit` | glb | **exit** | 90, [−22, −718] | 44 KB / 29 KB | The den's three bone piles, 3.8k triangles, vertex colour only. |
-| `props/meta` | json | keep | 93, [60, −662] | 32 KB / 8 KB | Resolution table, per-prop data, attach recipes, world placements and joins (below). Load it with `loadJSON("props/meta")`. |
+| `procprops/exit` | glb | **exit** | 90, [−22, −718] | 42 KB / 27 KB | The den's three bone piles, 3.8k triangles, vertex colour only. |
+| `props/meta` | json | keep | 93, [60, −662] | 35 KB / 9 KB | Resolution table, per-prop data, attach recipes (`held`, `worn`), world placements and joins (below). Load it with `loadJSON("props/meta")`. |
 | `ph/wooden_table_02` | glb | keep | 90, [60, −662] | 142 KB / 138 KB | 196 triangles, 512² textures. The hall's cover tables. |
 | `ph/stone_fire_pit` | glb | keep | 88, [53.5, −724] | 224 KB / 218 KB | Simplified to 2.9k triangles, 512² textures. The cave camp. |
 | `ph/rock_face_02` | glb | **muster, streamed** | 60, [−19, −675] | 718 KB / 710 KB | Simplified to 4.4k triangles, 1024² textures. The outcrop brow. |
@@ -1858,11 +1858,23 @@ Start packs (brotli) after the first build (`--only=props/`, manifest `453014cd3
 
 After the review fixes (`--only=props/`, manifest `68300d7447b0`), the start packs are unchanged at keep 6.27 MB and exit 0.39 MB. All 101 ids still exist. Only `kit/fpm` (the stand's `leanRest`), `procprops/keep` and `props/meta` changed.
 
+After the second review fixes (`--only=props/`, manifest `fdc0e45219ff` → `bcdea0c2696d`; the build is reproducible, two runs give the same hashes), all 186 ids still exist and every referenced file is on disk. Four ids changed:
+
+| Id | Hash before → after | Raw / brotli bytes before → after | Why |
+|---|---|---|---|
+| `kit/fpm` | `42efa72cb3ce7c9b` → `1e4cfc73a48b8620` | 1,853,228 / 1,456,655 → 1,853,892 / 1,456,651 | `collider` in each model's extras; the stand's slot nodes moved onto its base beam (y 0.14) |
+| `procprops/keep` | `da1c604148d65c93` → `53d82a0988c5f63b` | 1,029,816 / 652,159 → 1,032,420 / 653,695 | `pp_rock` keeps TEXCOORD_0; untextured materials lose their unused UVs before welding; `cuffs_rope` extras reshaped (`worn`) |
+| `procprops/exit` | `0e4c9a46e9428047` → `b8f04e8e19d90a28` | 43,892 / 28,758 → 41,556 / 26,649 | the bones' unused UVs dropped before welding (fewer vertices) |
+| `props/meta` | `8f338fab5535f831` → `89759fe12584ab45` | 32,233 / 8,031 → 34,747 / 8,606 | `worn`, kit `collider`s, the weapon stand fits, the `colliders` convention |
+
+Start packs (brotli) now: keep **8.63 MB** (+2.1 KB; estimate 8.4, limit 15), exit **1.29 MB** (−2.1 KB), cart 8.54, muster 12.57, execution 2.90, dragon 4.84, menu 0.02 (unchanged). The keep and exit packs were already this size before these fixes: steps built after the first props build added their own assets to those segments.
+
 **Conventions** (both GLBs; repeated in `props/meta.conventions`):
 - **One top-level node per prop.**
   - It sits at the origin with an identity transform. Instantiate it by name: `kit/fpm#Barrel` or `procprops/keep#cage`. `gear.ts`'s `instantiate(world, "id#node")` already does this.
   - Geometry is on `<node>_mesh` leaf children, so mesh quantisation only moves those.
-  - Colliders are `*_col` nodes: POSITION only, no material. Hide them and build static bodies from their world geometry. Their glTF extras carry `tag` (and `state` on the bridge decks).
+  - **`procprops/*`:** colliders are `*_col` nodes: POSITION only, no material. Hide them and build static bodies from their world geometry. Their glTF extras carry `tag` (and `state` on the bridge decks).
+  - **`kit/fpm` has no `*_col` nodes.** Each model's `collider` (meta `kit[*].collider` and its extras) says how it collides: `"bbox"` is one static box of the model's `bbox` (centre (min + max) / 2, half-size (max − min) / 2, in the model's frame, so it turns with the placement), and `"none"` needs no body. See "Kit colliders" below. Adding box `*_col` nodes to the kit was rejected: `spawn()` hides any `*_col` it copies, and `props.ts` already builds these boxes (`bboxCollider`), so new nodes would only invite a second body.
   - Anchors are empty nodes.
   - Moving parts are pivot nodes whose identity is the rest pose: door closed, lever at rest (leaning about 55° toward the puller, not upright), deck lowered.
 - **No mesh is shared between nodes.** A glTF mesh used twice becomes a Babylon InstancedMesh tied to the other node, which breaks per-node instantiation. The build fails if a mesh is shared.
@@ -1885,6 +1897,14 @@ After the review fixes (`--only=props/`, manifest `68300d7447b0`), the start pac
   - Each material also binds the ORM image as occlusion.
   - The palette is muted through `baseColorFactor` (furniture 0.8, metal 0.85, props 0.9, cloth 0.78).
 - **Materials:** `fpm_furniture`, `fpm_metal`, `fpm_props`, `fpm_cloth`, `fpm_page`.
+- **Kit colliders** (`collider`; `props/meta.assets["kit/fpm"].colliders.bbox` lists the first group):
+
+  | `collider` | Models |
+  |---|---|
+  | `"bbox"`: one static box of `bbox` | Barrel, Crate_Wooden, Crate_Metal, Chest_Wood, Bag, Table_Large, Chair_1, Bench, Stool, Bed_Twin1, WeaponStand, Shelf_Small_Bottles, Dummy, Cage_Small, Cauldron |
+  | `"none"` | Sword_Bronze, Axe_Bronze, Shield_Wooden, Torch_Metal, Lantern_Wall, Candle_1, Pouch_Large, Peg_Rack, Chain_Coil, Key_Metal, Potion_1/2/4, Bottle_1, SmallBottle, SmallBottles_1, Scroll_1, Book, Mug |
+
+  What the runtime does now (`src/prologue/keep/props.ts`, not changed here): `bboxCollider()` builds exactly this box for the kit models it places, which are Chest_Wood (three chests and the footlocker), WeaponStand (both stands), Cauldron (three braziers), Table_Large (`use_records`, `prop_j_table`) and Bed_Twin1 (four beds). It builds **no** body for the two that the anchors also place: **Stool** (`prop_j_stool`, B5) and **Shelf_Small_Bottles** (`use_store_potions`, G4, against the wall). Both are flagged `"bbox"`; give them `bboxCollider(root, "Stool" | "Shelf_Small_Bottles", …)` if the player should not walk through them. The other `"bbox"` models are not placed by the keep anchors yet; use the same box when they are. The chest's box covers the closed lid only, which is enough for a static body.
 - **`Chest_Wood` is rigid, not skinned.** The source skin is rigid: the base is 100 % `Chest_Bottom` and the lid 100 % `Chest_Top`.
   - Nodes: `Chest_Wood` → `Chest_Wood_body` → `Chest_Wood_mesh` and the hinge `Chest_Wood_lid` (at (0, 0.429, 0.314), the back edge) → `Chest_Wood_lid_mesh`.
   - The four clips are retargeted to `Chest_Wood_body` and `Chest_Wood_lid` and renamed **`Chest_Wood_Open`, `Chest_Wood_Opened`, `Chest_Wood_Close`, `Chest_Wood_Closed`**. This avoids a clash with the UAL body clip `Chest_Open`.
@@ -1899,7 +1919,7 @@ After the review fixes (`--only=props/`, manifest `68300d7447b0`), the start pac
   | `Table_Large` | `_top` (y 0.815) |
   | `Chair_1`, `Bench`, `Stool` | `_sit` (seat height) |
   | `Bed_Twin1` | `_lie` |
-  | `WeaponStand` | `_slot_0`…`_slot_4` at x −0.35, −0.17, 0, 0.17, 0.35 **on the floor (y 0)**, under the five notches of the top bar (y 0.84) that hold the weapons upright. The slots are turned 90° about Y so a blade's flat faces along the bar. An upright weapon stands with its lowest point on its slot (`placements.weapon_stands` lifts it already). Also `_lean` (0, 0, −0.55), on the floor in front of the stand, where a shield's tip goes. Meta `leanRest` gives the front of the top bar, where the shield rests (z −0.137, y 0.81…0.86). |
+  | `WeaponStand` | `_slot_0`…`_slot_4` at x −0.35, −0.17, 0, 0.17, 0.35, **on the base beam (y 0.14)**. The stand's top "bar" is two rails (y 0.76…0.86, z ±0.036…±0.137) with a 7 cm gap between them along x, notched at the slots; under the gap runs a base beam (y 0.056…0.14, measured by a ray at the stand's centre). A weapon stands with its lowest point on its slot and rises through the gap, which holds it upright. (The slots were on the floor, y 0, before the second review fixes, which sank every weapon 14 cm into the beam.) The slots are turned 90° about Y so a blade's flat faces along the gap. `placements.weapon_stands` places the items already. Also `_lean` (0, 0, −0.55), on the floor in front of the stand, where a shield's tip goes. Meta `leanRest` gives the front of the front rail, where the shield rests (z −0.137, y 0.81…0.86). |
   | `Shelf_Small_Bottles` | `_top_0`, `_top_1` (on the top board, for the two `Potion_2`) |
 
 **Attach recipes** (`props/meta.held`, keyed `asset#node`; also in each node's extras `held`).
@@ -1917,9 +1937,17 @@ After the review fixes (`--only=props/`, manifest `68300d7447b0`), the start pac
 | `ph/kite_shield` | `hand_l` | (0.5, −0.5, −0.5, 0.5), as §3.3 | (−0.001, 0.095, −0.05) | (0, 0.05, −0.031): the model has no handle, so the fist sits 3.5 cm behind the back at its centre; the face is +Z | faces forward in `Idle_Shield_Loop` (7°) and `Shield_OneShot` (5°). The entry carries `tune: true`: tune the position by eye. |
 | `ph/wooden_axe_03` | `hand_r` | (0, 0.7071, 0.7071, 0), as §3.3 | (−0.03, 0.095, 0.15) | | not re-measured; **`scale` 1.25**, also on its stand |
 | `kit/fpm#Potion_2`, `kit/fpm#Key_Metal`, `procprops/keep#key_ring` | see the meta | | | | upright; no clip pins their roll, so tune by eye |
-| `procprops/keep#cuffs_rope` | `cuffs_rope_l` on `hand_l`, `cuffs_rope_r` on `hand_r` | identity | (0, 0.008, 0) | | The coil clears both base bodies' wrists, checked on the skins' bind pose: it is filled to 0.99 (male) and 0.88 (female) of its inner section. `BoneSocket` ignores bone scale, so a forearm the appearance sliders thicken may touch it. |
 
-**Runtime note on the sword:** `gear.ts` estimates the sword's grip from its bounds at pommel + 0.09, which is y −0.118. That is 14 cm below the measured grip (0.026) and puts the hand on the pommel. Use `props/meta.held["kit/fpm#Sword_Bronze"]`. The `ph/wooden_axe_03` entry copies the §3.3 recipe, which was not re-measured. The `ph/kite_shield` entry keeps the §3.3 rotation and has a measured, numeric position; every `held` recipe now has a numeric `position`. Some recipes also have a `scale`, which the runtime must apply.
+**Worn items** (`props/meta.worn`, keyed `asset#node` like `held`, recipes keyed by bone, no `grip`). The rope cuffs used to sit in `held` under `procprops/keep#cuffs_rope`, with no grip and recipes keyed by node name, unlike every other `held` entry and the runtime's `PropsMeta.held` type. They moved out of `held`, which now holds only gripped items:
+
+| Item (`asset#node`) | Bone | `rotation` | `position` | Checked |
+|---|---|---|---|---|
+| `procprops/keep#cuffs_rope_l` | `hand_l` | identity | (0, 0.008, 0) | `checks`: each base body's wrist fills the coil's inner section to 0.99 (male) and 0.88 (female), on the skins' bind pose (48 and 38 wrist vertices sampled) |
+| `procprops/keep#cuffs_rope_r` | `hand_r` | identity | (0, 0.008, 0) | the same, mirrored |
+
+Each entry also names its parent prop (`of: "procprops/keep#cuffs_rope"`). Instantiate the child node (`spawn(pa, "procprops/keep#cuffs_rope_l", …)` copies just it) and `attachToSocket(node, BoneSocket(bone), worn[id].recipes[bone])`. `BoneSocket` ignores bone scale, so a forearm the appearance sliders thicken may touch the coil. The runtime does not read the pipeline's cuffs yet: `gear.ts` `setCuffs` wears its own stand-in `cuff()` at (0, 0.015, 0).
+
+**Runtime note on the sword:** `gear.ts` estimates the sword's grip from its bounds at pommel + 0.09, which is y −0.118. That is 14 cm below the measured grip (0.026) and puts the hand on the pommel. Use `props/meta.held["kit/fpm#Sword_Bronze"]`. There is no sheathed (`spine_03`) recipe in the meta: `gear.ts` composes it from the hand recipe (`relativeRecipe("spine_03", SHEATH_HAND, hand)`), so a checkpoint resume with the sword sheathed needs nothing from the pipeline. The `ph/wooden_axe_03` entry copies the §3.3 recipe, which was not re-measured. The `ph/kite_shield` entry keeps the §3.3 rotation and has a measured, numeric position; every `held` recipe now has a numeric `position`. Some recipes also have a `scale`, which the runtime must apply.
 
 **`procprops/keep`** (top-level nodes):
 
@@ -1931,12 +1959,12 @@ After the review fixes (`--only=props/`, manifest `68300d7447b0`), the start pac
 | `shackles` | Wall plates, rings, wrist chains and cuffs, and an ankle chain. The wall is at z +0.3. `shackles_cuff_l/r` are at (∓0.30, 1.25, 0.10). | `prop_shackles_corpse`: pose the corpse's wrists at the cuff anchors. |
 | `bars_panel` | Barred panel 1.0 × 2.4 m (bars r 15 mm every 0.12 m, like the cell fronts), with `bars_panel_col` (tag `bars`). | Spare blocker. |
 | `chain_link`, `chain_strip`, `chain_hang` | One link; a 1 m chain along +Y with 8 links, which tiles seamlessly end to end; a 2 m chain hanging from a ceiling ring. | Live chains; dressing. |
-| `cuffs_rope` → `cuffs_rope_l`, `cuffs_rope_r` (mirrored) | Rope coils for the K1 bonds. | Recipes above; remove them when the bonds are cut. |
+| `cuffs_rope` → `cuffs_rope_l`, `cuffs_rope_r` (mirrored) | Rope coils for the K1 bonds. Extras `worn.<child>.recipes.<bone>`. | `props/meta.worn` (above); remove them when the bonds are cut. |
 | `bow` | Recurve bow: limbs ±Y, string on +Z, back −Z. Children: `bow_limbs`, `bow_string` (a separate mesh), `bow_nock` (string centre, brace 0.198 m), `bow_string_top` / `bow_string_bottom` (where the string leaves the limbs), `bow_rest`. | While drawing, hide `bow_string` and draw `bow_string_top` → hand → `bow_string_bottom`. |
 | `arrow` | Along **+Z**, tip at +0.42, nock at −0.39: the same convention as `src/prologue/fx/arrow.ts`. | Can replace the built-in arrow template. |
 | `torch` | Hand torch: shaft +Y, `torch_flame` at (0, 0.62, 0). | Companion's torch (K9–X3) |
 | `sconce` | Wall bracket plus torch, baked into **one vertex-coloured primitive** (`sconce_mesh`, material `pp_vcol`, 792 triangles), so each sconce costs one draw call. Origin on the light anchor's **`wall`** point, wall plane z = 0, facing −Z. `sconce_flame` (0, 0, −0.22) lands exactly on the light anchor. | Placed on all 20 sconce lights (`placements.sconces`): 20 draw calls, against the 60 the textured version needed. All sconces share `pp_vcol`, so the runtime can merge or thin-instance them per zone if draw calls run short. |
-| `sconce_empty` | The same bracket without its torch (`sconce_empty_mesh`, `sconce_empty_flame`). | K9: replace the sconce whose torch the companion takes with `sconce_empty` (same transform), and hang a `torch` on the companion. |
+| `sconce_empty` | The same bracket without its torch (`sconce_empty_mesh`, `sconce_empty_flame`). | K9: replace the sconce whose torch the companion takes with `sconce_empty` (same transform), and hang a `torch` on the companion. **There is no `sconce_torch` node to hide** (see the runtime checklist, item 6). |
 | `straw_bed` | Straw mound and loose strands, 1.8 × 0.9 m, long along X; double-sided straw material; no collider. | `placements.straw_beds`: one along the back wall of each of the 10 cells |
 | `drain_grate` | The bent and broken grate in the drain mouth. Origin at the opening's bottom centre on the B5 wall face; the bars are 8 cm inside. The middle is forced open (x ±0.62, full height). `drain_grate_col` holds the two side clusters (tag `drain_grate`), leaving 1.40 m between them. | `placements.drain_grate` (54.1, 32.13, −688.0), yaw 0 |
 | `paper_warrant`, `paper_letter` | Sealed sheet 0.21 × 0.30 m: written front (−Z), blank back, procedural parchment. Sealed letter packet. | K6 bluff (Ivo, `hand_l`); footlocker and cocoon letter |
@@ -1976,7 +2004,7 @@ After the review fixes (`--only=props/`, manifest `68300d7447b0`), the start pac
     - A planar lever cannot follow that drift. A best-fit lever turned 11° about Y gets only to 0.15 m, so the fit is kept.
     - **Runtime:** pull `hand_r` onto `lever_grip` with a small two-bone IK over `extras.lever.ik.window` (1.06…1.68 s), blending in and out over about 0.1 s. Alternatively, shift the stance by up to −0.04 m in x to centre the drift on the plane, and accept the rest of the gap.
 - **Slab.** `slab` (2.4 × 1.0 × 1.8 m rock chunk) at the cave anchor `slab_drop`, with extras `debris.half` (1.2, 0.5, 0.9). It sits 0.2 m under the dome and **overlaps the raised deck**, so keep it hidden until K12 2.8 s, then drop it as a Debris box.
-- **Material `pp_rock`.** The slab, the hinge blocks, the winch foundation and the lever block use `pp_rock`. It is untextured in the GLB and its extras name `cave/tex/rock_{d,n,arm}`, tile 2.0. Bind it with the cave's code (§ "Cave and balcony outcrop").
+- **Material `pp_rock`.** The slab, the hinge blocks, the winch foundation and the lever block use `pp_rock`. It is untextured in the GLB and its extras name `cave/tex/rock_{d,n,arm}`, tile 2.0. Bind it with the cave's code (§ "Cave and balcony outcrop"). Its four primitives (`bridge_frame`, `winch_frame`, `lever_base`, `slab`) carry **TEXCOORD_0**, box-projected position ÷ 2 in texture repeats (float, since it runs outside 0…1: about ±0.7). Before the second review fixes, the final prune dropped it (prune keeps only the UVs a texture *inside* the GLB reads), so these four rendered as one flat texel of the cave rock. The build now keeps the attributes and checks the decoded GLB (below).
 - **Checked against the cave's rock field** (`tools/gen/cave.mjs` `_debug.S`); the build fails on a miss. Clearance to the rock:
 
   | Part | Clearance |
@@ -2003,16 +2031,18 @@ After the review fixes (`--only=props/`, manifest `68300d7447b0`), the start pac
 | `pp_planks` | `weathered_planks` (1024² colour, 512² normal, 256² ARM) | the deck |
 | `pp_wood` | `dark_wooden_planks` (512²) | |
 | `pp_iron` | `rusty_metal_02` (512²), metallic from ARM | |
-| `pp_rock` | cave textures via extras (above) | |
-| `pp_leather`, `pp_rope` | flat colours | |
-| `pp_vcol` | none; white, colour from COLOR_0 | torch wraps, seals, dice, fletching, bones |
+| `pp_rock` | cave textures via extras (above); TEXCOORD_0 box-projected, kept | |
+| `pp_leather`, `pp_rope` | flat colours; no UVs | |
+| `pp_vcol` | none; white, colour from COLOR_0; no UVs | torch wraps, seals, dice, fletching, bones |
 | `pp_straw` | procedural 256², double-sided | |
 | `pp_paper` | procedural 512 × 256: front text at u 0…0.5, blank back at u 0.5…1 | |
 
 **`props/meta`** (version 1):
 - `resolve`: `"kit/<Model>"` and `"procprops/<name>"` → `{asset, node}`. The keep anchors' `prop` fields (`kit/Chest_Wood`, `kit/Book`, `procprops/cage`, …) resolve through it, and so do the cave anchors' "procprops lever / winch / bones".
-- `kit` and `procprops.{keep,exit}`: per-node bounds, facing, anchors, hinges, pivots, colliders and tags.
-- `held`: the recipes above.
+- `kit` and `procprops.{keep,exit}`: per-node bounds, facing, anchors, hinges, pivots, colliders and tags. Every `kit` model has `collider` (`"bbox"` or `"none"`, above).
+- `assets`: per GLB its segment and triangles; `kit/fpm` also its clips and `colliders.bbox`, the procedural GLBs their `*_col` node names.
+- `conventions`: the rules above in short, now with a separate `colliders` entry.
+- `held`: the gripped items' recipes above. `worn`: the rope cuffs (above).
 - **`placements`** (world positions plus a game-convention yaw):
 
   | Key | What |
@@ -2026,7 +2056,7 @@ After the review fixes (`--only=props/`, manifest `68300d7447b0`), the start pac
   | `dice` | on the J table top |
   | `records` | `Scroll_1` and `Book` on the B3 table |
   | `store_shelf` | the shelf and its two potions (see below) |
-  | `weapon_stands` | Per stand: the items in their slots, already lifted. The rebel stand's `ph/wooden_axe_03` has **`scale` 1.25**, the size it has in the hand, and is lifted for it. On the imperial stand, the kite shield is placed with **`rotation`** (a Babylon quaternion, also given as the node Euler `euler`). Its face is turned to the stand's facing and it is tilted back 25.25°, so its tip is on the floor at the stand's `_lean` point and its back rests on the top bar. This was checked against the source vertices: no vertex is more than 1 cm into the bar. Use `rotation`, not `yaw`. `shield` is `null` on the rebel stand. |
+  | `weapon_stands` | Per stand: the items in their slots, each with `at`, **`rotation`** (use it, not a yaw), `scale` where it has one and `fit`. Every item stands on the stand's base beam (y 0.14) and rises through the gap between the top rails, which holds it upright (`fit`: `on` "beam", stand-local `lift` of its origin, `top`, and `depth`, how far it sits inside the stand: 0 for all). The rebel stand's `ph/wooden_axe_03` has **`scale` 1.25**, the size it has in the hand: its head (y 0.74…0.93) rises between the rails, its blade along the gap toward the empty `slot_0`. `kit/fpm#Axe_Bronze` turns its head along the gap too, toward the empty `slot_4`. The swords keep the slots' turn. On the imperial stand, the kite shield is placed with **`rotation`** (a Babylon quaternion, also given as the node Euler `euler`). Its face is turned to the stand's facing and it is tilted back 25.25°, so its tip is on the floor at the stand's `_lean` point and its back rests on the front rail. This was checked against the source vertices: no vertex is more than 1 cm into the rail. `shield` is `null` on the rebel stand. |
   | `camp_fire` | `ph/stone_fire_pit` at `camp_fire` + 0.15 m (the scan's origin is mid-height) |
   | `outcrop_brow` | `ph/rock_face_02` at the cave's suggestion (−19, 60.5, −674.6) |
 
@@ -2050,24 +2080,28 @@ After the review fixes (`--only=props/`, manifest `68300d7447b0`), the start pac
 - The lever's handle stays at least 0.17 m from the puller's body bones throughout the pull.
 - The B3 cage, chair and shackles footprints lie inside their rooms.
 - The props join: every input in `joins.inputs` is still the shipped file.
-- The rope cuffs fail the build when a base body is missing; they are no longer skipped with a note.
+- The rope cuffs fail the build when a base body is missing; they are no longer skipped with a note. They also fail when a body has no skin with both `hand_<side>` and `lowerarm_<side>`, or when no wrist vertex (weighted ≥ 0.5 to those joints) falls in the coil's height band, so the check can no longer pass having measured nothing (`checks` records the samples: 48 per male wrist, 38 per female).
+- **UVs survive encoding.** In the decoded `kit/fpm`, `procprops/keep` and `procprops/exit`, every primitive has the TEXCOORD_n its material reads: those of its own texture slots, and TEXCOORD_0 when its extras name textures the runtime binds (`extras.textures`, i.e. `pp_rock`). The materials with `extras.textures` must still carry them, so the check cannot pass vacuously (`tools/lib/gltf.mjs` `missingTexcoords`). `procprops/*` finalize with `keepAttributes: true` after `dropUnusedTexcoords` removes the UVs of materials that read no texture.
+- **Weapon stand items** (`standFit` in `tools/gen/props.mjs`, against the stand's triangles by vertical rays): each item stands on what is under it below the rails, no vertex is more than 5 mm inside the stand, each reaches up between the rails, and no two items' boxes overlap. `kit/fpm#Axe_Bronze` turned like the slots would fail: its blade sat 1.8 cm in the back rail.
 - The kite shield's face-forward checks, and its lean resting on the stand's bar within 40°.
 
 **Runtime integration checklist (props):**
 1. Load `props/meta`, then `kit/fpm` and `procprops/keep` with the keep chapter and `procprops/exit` with the exit chapter.
    - **Resolve each anchor's `prop` suggestion through `meta.resolve`**, for example `procprops/cage` → `{asset: "procprops/keep", node: "cage"}`. There are no manifest ids per prop. As of this build, `src/prologue/keep/props.ts` `propSources()` guesses `procprops/cage`, `procprops#cage` and `props/procprops#cage`, which match nothing, so every procedural prop falls back to its stand-in.
    - Instantiate the resolved node and place it by the anchor (or by `meta.placements`) and its yaw. Where a placement has `rotation`, use it instead of the yaw. Apply `scale` where a placement has one.
-2. Hide every `*_col` and build static bodies from them, using the tags in their extras. For the drawbridge, enable one deck collider per state.
+2. Hide every `*_col` and build static bodies from them, using the tags in their extras. For the drawbridge, enable one deck collider per state. **`kit/fpm` has no `*_col` nodes:** give every placed kit model whose `collider` is `"bbox"` one static box of its `bbox` under the placed node (`props.ts` `bboxCollider` already does this for Chest_Wood, WeaponStand, Cauldron, Table_Large and Bed_Twin1; it still builds none for Stool and Shelf_Small_Bottles, see "Kit colliders").
 3. **Gallery:**
    - lowering over 4.5 s: deck angle −1.0472 → 0, spin `winch_drum`, live chains;
    - the lever: the `curve` against `Farm_PickingTree`;
    - K12: `slab` shown and dropped, planks to Debris, hinge to +0.6109, `bridge_chain_broken`, `bridge_deck_broken_col`.
 4. **Held items:** switch `gear.ts` from the bounds estimate to `meta.held` (the sword's grip above). The torch, bow and warrant recipes are ready.
 5. **Chest:** play **`Chest_Wood_Open`**, or drive `Chest_Wood_lid`. As of this build, `props.ts` documents a `Chest_Open` clip. It finds the clip with `/open/i`, which picks `Chest_Wood_Open` only because that clip comes before `Chest_Wood_Opened` (the static open pose) in the file. Match the name exactly.
-6. **Sconces:** place them from `placements.sconces`, one draw call each. The flame sprites and pool lights stay on the light anchors. In K9, swap the sconce for `sconce_empty`.
+6. **Sconces:** place them from `placements.sconces`, one draw call each. The flame sprites and pool lights stay on the light anchors. In K9, swap the sconce for `sconce_empty`. **Runtime fix needed:** `props.ts` `buildSconces()` stores `torch: sp.find("sconce_torch")`, but the baked `sconce` has no such node, so `torch` is always `null` and the K9 torch-take (`underground.ts` `giveTorch`) leaves the torch on the wall. When the companion takes the torch from a sconce: dispose that sconce's spawned copy (`procprops/keep#sconce` under the `sconce_<anchor>` root), spawn `procprops/keep#sconce_empty` under the **same root** (same transform, no other change), and keep or stop that anchor's flame sprite as the beat wants (the hand torch brings its own flame). `sconce_empty_flame` marks where the empty bracket's flame would be, exactly where `sconce_flame` was.
 7. **Lever:** drive `lever_pivot` by `extras.lever.clip.curve` and close the remaining hand gap with the IK in `extras.lever.ik` (above).
 8. **Outcrop brow:** load the streamed `ph/rock_face_02` with the town (outdoor set) and place it at `placements.outcrop_brow`.
-9. **Materials:** bind `pp_rock`'s `extras.textures` with the cave's code.
+9. **Materials:** bind `pp_rock`'s `extras.textures` with the cave's code. `loadPropAssets` already does (`bindCaveMaterials` on `procprops/keep`'s materials); with TEXCOORD_0 now shipped, the K12 slab, the hinge blocks, the winch foundation and the lever block show the cave rock texture instead of one flat texel. No runtime change.
+10. **Rope cuffs:** read them from `meta.worn` (recipes keyed by bone), not `meta.held`; `held["procprops/keep#cuffs_rope"]` is gone. Nothing in `src` read it.
+11. **Weapon stands:** place the items by `at`, `rotation` and `scale` as now (`makeRack` → `placeNode`). The items moved up 0.14 m onto the base beam and the two axes turned; no code change.
 
 **Deviations:**
 - **`Chest_Wood` is rigid, with renamed clips.** §10.2 asks for the skinned chest with its animated `Chest_Open`. Rigid nodes give the same motion without a skeleton, they instantiate per node, and they open like the doors. `Chest_Open` remains the name of the UAL body clip.
@@ -2088,6 +2122,7 @@ After the review fixes (`--only=props/`, manifest `68300d7447b0`), the start pac
 - **Cell bars.** They stay in `keep/interior`. `bars_panel` is a spare panel.
 - **Extra procedural props:** `bars_panel`, `strap_chair`, `brazier_irons`, `dice`, `key_ring`, `paper_letter`, `arrow`, `sconce`, `sconce_empty`, `chain_strip` and `chain_hang`. The keep anchors and the beats ask for them, but §10.1 does not list them.
 - **Weapon stand.** The imperial stand's anchor (65.55, −656.75), turned to face −X, puts the stand's back feet 4 cm into the east partition. This was left as anchored.
+- **Weapon stand items.** Before the second review fixes the items stood on the floor (y 0) at their slots: inside the stand's base beam (y 0.056…0.14), and `ph/wooden_axe_03` (0.79 m at scale 1.25) ended 1 cm under the rails, standing free. The slots now sit on the beam and every item is fitted against the stand's triangles. The axes do not keep the slots' turn. `kit/fpm#Axe_Bronze` (head along its model X) turns π, so its head runs along the gap instead of across the rails, where its blade cut 1.8 cm into the back rail. `ph/wooden_axe_03` (head along its model Z) turns −π/2: the slots' turn also runs its head along the gap, but points its blade at the sword in `slot_2`, to within 2 cm of the sword's centre line.
 
 ### Creatures (`creatures/*`)
 
