@@ -163,6 +163,24 @@
       #toast.on { opacity: 1; transform: none; }
       #toast.on::after { width: 120%; }
       #dlstatus { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); font-size: 11px; color: var(--ink-faint); pointer-events: none; letter-spacing: .2em; }
+      /* the compass with the quest marker (hidden, like the objective line, while the screen is black, paused or in menus) */
+      #compass { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); width: min(520px, 62vw); height: 26px; pointer-events: none; opacity: 0; transition: opacity .4s;
+        background: linear-gradient(90deg, transparent, var(--line-strong) 18%, var(--line-strong) 82%, transparent) left bottom / 100% 1px no-repeat,
+                    radial-gradient(ellipse 50% 100% at 50% 100%, rgba(0,0,0,.35), transparent 75%); }
+      #compass.on { opacity: 1; }
+      body:has(#fade.on) #compass, body:has(#fade.on) #objective, body:has(#pause) #compass, body:has(#pause) #objective,
+      body:has(#menu:not(.hidden)) #compass, body:has(#menu:not(.hidden)) #objective, body:has(#endcard) #compass, body:has(#endcard) #objective { opacity: 0 !important; transition: none; }
+      #compass i { position: absolute; bottom: 0; width: 1px; height: 5px; background: var(--ink-dim); transform: translateX(-50%); }
+      #compass i.major { height: 8px; }
+      #compass i.card { width: auto; height: auto; background: none; bottom: 6px; font: 400 13px/1 var(--display); color: var(--ink); text-shadow: 0 0 4px #000; font-style: normal; }
+      #compass .mark { position: absolute; bottom: -5px; width: 0; height: 0; transform: translateX(-50%); display: none; }
+      #compass .mark.on { display: block; }
+      #compass .mark::before { content: ""; position: absolute; left: -5px; top: -2px; width: 9px; height: 9px; background: #e6d39a; border: 1px solid #3a3322; transform: rotate(45deg); box-shadow: 0 0 6px rgba(230,211,154,.6); }
+      #compass .mark.left::after, #compass .mark.right::after { content: ""; position: absolute; top: -1px; width: 0; height: 0; border-top: 5px solid transparent; border-bottom: 5px solid transparent; }
+      #compass .mark.left::after { left: 9px; border-right: 7px solid #e6d39a; }
+      #compass .mark.right::after { right: 9px; border-left: 7px solid #e6d39a; }
+      #compass .dist { position: absolute; top: 12px; left: 0; transform: translateX(-50%); font-size: 11px; letter-spacing: .1em; color: #cfc8b8; white-space: nowrap; text-shadow: 0 0 3px #000, 0 0 2px #000; }
+      @media (max-width: 1150px) { #toast { top: 58px; } }
       #prompt { position: fixed; left: 50%; bottom: 26vh; transform: translateX(-50%); font-size: 14px; letter-spacing: .2em; color: var(--ink-dim); text-shadow: 0 0 4px #000; pointer-events: none; }
 
       /* ---------------- gameplay HUD: hairline frames with diamond ends, bars that shrink toward their centre */
@@ -189,14 +207,14 @@
       #vitals .st { right: max(34px, 7vw); width: min(220px, 22vw); }
       #vitals.low .hp i { animation: lowhp 1.15s ease-out infinite; }
       @keyframes lowhp { 0%, 60%, 100% { filter: none; } 10%, 32% { filter: brightness(1.7); } }
-      #target, #boss { position: fixed; left: 50%; top: 34px; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none; opacity: 0; transition: opacity .6s, top .3s; }
+      #target, #boss { position: fixed; left: 50%; top: 58px; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none; opacity: 0; transition: opacity .6s, top .3s; }
       #target.on, #boss.on { opacity: 1; transition-duration: .2s, .3s; }
       #target .name, #boss .name { font-family: var(--display); font-size: 14px; letter-spacing: .3em; padding-left: .3em; color: var(--ink); text-shadow: 0 0 6px #000, 0 0 2px #000; white-space: nowrap; }
       #target .hbar { position: relative; width: min(260px, 40vw); height: 8px; }
       #boss .name { font-size: 18px; letter-spacing: .45em; padding-left: .45em; }
       #boss .hbar { position: relative; width: min(520px, 64vw); height: 11px; }
-      body:has(#boss.on) #target { top: 100px; }
-      #objective { position: fixed; right: 34px; top: 30px; max-width: min(440px, 46vw); text-align: right; font-family: var(--display); font-size: 15px; line-height: 1.6; letter-spacing: .2em; color: var(--ink-dim); text-shadow: 0 0 6px #000, 0 0 2px #000; pointer-events: none; opacity: 0; transition: opacity .6s, color 1.6s, text-shadow 1.6s; }
+      body:has(#boss.on) #target { top: 124px; }
+      #objective { position: fixed; right: 34px; top: 54px; max-width: min(440px, 46vw); text-align: right; font-family: var(--display); font-size: 15px; line-height: 1.6; letter-spacing: .2em; color: var(--ink-dim); text-shadow: 0 0 6px #000, 0 0 2px #000; pointer-events: none; opacity: 0; transition: opacity .6s, color 1.6s, text-shadow 1.6s; }
       #objective::before { content: ""; display: inline-block; width: 5px; height: 5px; margin: 0 12px 3px 0; border: 1px solid currentColor; transform: rotate(45deg); vertical-align: middle; }
       #objective.on { opacity: 1; }
       #objective.new { color: #fff; text-shadow: 0 0 12px var(--glow), 0 0 2px #000; transition: opacity .6s; }
@@ -234,7 +252,7 @@
         #keyhints { display: none !important; }
         #vitals .hp { width: 56vw; }
         #vitals .st { right: auto; left: 50%; bottom: -16px; width: 40vw; transform: translateX(-50%); }
-        #objective { right: 16px; top: 16px; font-size: 13px; letter-spacing: .1em; max-width: 60vw; }
+        #objective { right: 16px; top: 50px; font-size: 13px; letter-spacing: .1em; max-width: 60vw; }
         #tip { left: 16px; top: 28vh; }
       }
     </style>

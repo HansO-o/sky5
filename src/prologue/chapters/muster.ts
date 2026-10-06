@@ -2,6 +2,8 @@ import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { audio } from "../../core/audio";
 import { input } from "../../core/input";
 import { hud } from "../../ui/hud";
+import { objective } from "../../ui/compass";
+import { nag } from "../nag";
 import { openCreator } from "../../ui/creator";
 import { OUTFITS, type Character } from "../../world/characters";
 import { applyAppearance, defaultAppearance, type Appearance } from "../../world/appearance";
@@ -197,7 +199,8 @@ export class MusterChapter implements Chapter {
 
     // walk to the square behind the captain
     this.player.canMove = true;
-    hud.toast("跟随帝国队长前往广场", 5000);
+    const goal = new Vector3(WAIT(4).x, 0, WAIT(4).z);
+    objective.set("跟随帝国队长前往广场", () => new Vector3(goal.x, w.heightAt(goal.x, goal.z) + 1, goal.z));
     hud.prompt(input.usingPad ? "左摇杆移动" : "WASD 移动");
     void walkPath(w, n("captain"), [new Vector3(56, 0, -552), new Vector3(58, 0, -580), new Vector3(LAYOUT.square.x + 6, 0, LAYOUT.square.z + 2)], { ground: true, speed: 1.6 });
     // the soldiers come along to stand guard around the square
@@ -208,12 +211,14 @@ export class MusterChapter implements Chapter {
           if (arrived) faceTo(c, PLATFORM);
         });
     }
-    const goal = new Vector3(WAIT(4).x, 0, WAIT(4).z);
-    await d.until(() => {
-      const p = this.player.position;
-      if (Math.hypot(p.x - goal.x, p.z - goal.z) < 6) return true;
-      return false;
-    });
+    const near = () => Math.hypot(this.player.position.x - goal.x, this.player.position.z - goal.z) < 6;
+    // the captain does not like waiting
+    const stopNag = nag(w, "帝国队长", ["囚犯！跟上，别磨蹭！", "广场在前面。走！"], near, 14, () => Math.hypot(this.player.position.x - goal.x, this.player.position.z - goal.z));
+    try {
+      await d.until(near);
+    } finally {
+      stopNag();
+    }
     hud.prompt(null);
   }
 

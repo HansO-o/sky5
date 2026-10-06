@@ -1,6 +1,9 @@
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { audio } from "../../core/audio";
+import { input } from "../../core/input";
 import { hud } from "../../ui/hud";
+import { objective } from "../../ui/compass";
+import { nag } from "../nag";
 import { OUTFITS, type Character } from "../../world/characters";
 import { LAYOUT } from "../../world/town";
 import { Ragdoll } from "../../physics/ragdoll";
@@ -19,6 +22,8 @@ const T = LAYOUT.tower;
 const INN = LAYOUT.inn;
 const TOWER_TOP = 13.5;
 const TOWER_HALF = 3.5;
+/** first floor of the watchtower (tools/gen/townbuildings.mjs TOWER.floor1) */
+const TOWER_FLOOR1 = 3.2;
 /** inside the tower, by the foot of the stairs */
 const TOWER_IN = { x: T.x - 1.6, z: T.z + 1.2 };
 const TOWER_DOOR = { x: T.x - TOWER_HALF - 1.2, z: T.z };
@@ -242,9 +247,19 @@ export class DragonChapter implements Chapter {
       await d.say("布伦", `${name}！别躺着——再躺下去，就真起不来了！`, { npc: brun, look: () => pl.eye(new Vector3()), duration: 2.9 });
       await d.say("布伦", "塔楼！石头墙烧不透——走！", { npc: brun, look: () => pl.eye(new Vector3()), duration: 2.5 });
       pl.canMove = true;
-      hud.toast("跟随布伦进入塔楼", 5000);
+      const door = () => g(TOWER_DOOR.x, TOWER_DOOR.z).add(new Vector3(0, 1.5, 0));
+      objective.set("跟随布伦进入塔楼", door);
       void walkPath(w, brun, [g(70, -592), g(TOWER_DOOR.x, TOWER_DOOR.z), g(TOWER_IN.x, TOWER_IN.z + 0.6)], { speed: 4.2, clip: "Sprint_Loop" }).then(() => faceTo(brun, { x: TOWER_DOOR.x, z: TOWER_DOOR.z }));
-      await d.until(() => this.inTower(pl.position));
+      // show where he is going before he disappears behind the houses
+      w.rig.lookToward(door, 1.6);
+      const toDoor = () => Math.hypot(pl.position.x - TOWER_DOOR.x, pl.position.z - TOWER_DOOR.z);
+      const stopNag = nag(w, "布伦", ["这边！塔楼在这边！", `${name}，快！到塔里来！`], () => this.inTower(pl.position), 12, toDoor);
+      try {
+        await d.until(() => this.inTower(pl.position));
+      } finally {
+        stopNag();
+      }
+      objective.retarget(null);
       this.step = 1;
       void this.ctx.game.save("auto");
     }
@@ -253,8 +268,23 @@ export class DragonChapter implements Chapter {
       faceTo(n("leader"), pl.position);
       await d.say("托尔瓦德", "我在寒脊听了一辈子的歌……没有一首说它会这么大。", { npc: n("leader"), look: () => pl.eye(new Vector3()) });
       await d.say("布伦", "管它是什么，活下来再说！楼上有窗——往上爬！", { npc: n("brun"), look: () => pl.eye(new Vector3()) });
-      hud.toast("爬上塔楼", 4000);
-      await d.until(() => this.inTower(pl.position) && pl.position.y > this.base + T.floor2 - 0.6);
+      // the stairs run along the walls: flight 1 rises +X along the -Z wall, flight 2 rises -X along the
+      // +Z wall (tools/gen/townbuildings.mjs): point at the top of the flight being climbed
+      objective.set("爬上塔楼", () => {
+        const y = pl.position.y - this.base;
+        if (y < 0.4) return new Vector3(T.x - 2.7, this.base + 0.8, T.z - 2.35); // foot of flight 1
+        if (y < TOWER_FLOOR1 - 0.15) return new Vector3(T.x + 2.1, this.base + TOWER_FLOOR1 + 0.8, T.z - 2.35); // its top
+        if (y < TOWER_FLOOR1 + 0.15) return new Vector3(T.x + 2.1, this.base + TOWER_FLOOR1 + 0.8, T.z + 2.35); // foot of flight 2
+        if (y < T.floor2 - 0.6) return new Vector3(T.x - 2.7, this.base + T.floor2 + 0.8, T.z + 2.35); // its top
+        return new Vector3(T.x + TOWER_HALF, this.base + T.floor2 + 1.2, T.z);
+      });
+      const up = () => this.inTower(pl.position) && pl.position.y > this.base + T.floor2 - 0.6;
+      const stopNag = nag(w, "布伦", ["往上爬！别停！", "楼梯就在墙边——上去！"], up, 14, () => this.base + T.floor2 - pl.position.y);
+      try {
+        await d.until(up);
+      } finally {
+        stopNag();
+      }
       // the dragon smashes the wall in front of the player
       const dr = this.dragon;
       const breach = new Vector3(T.x + TOWER_HALF, this.base + T.floor2 + 1.2, T.z);
@@ -281,16 +311,31 @@ export class DragonChapter implements Chapter {
       w.env.setMood(1);
       this.rampage();
       await d.say("布伦", "对面旅店的房顶烧穿了——跳！我带领主大人从楼梯绕下去，咱们在楼下碰头！", { npc: n("brun"), duration: 4.3 });
-      hud.toast("从缺口跳进旅店的屋顶", 6000);
-      hud.prompt("空格 跳跃");
+      const breachMark = new Vector3(T.x + TOWER_HALF, this.base + T.floor2 + 1.2, T.z);
+      const roofHole = new Vector3(INN.x - INN.w / 2 + 2.2, this.base + INN.floor + 1, INN.z);
+      objective.set("从缺口跳进旅店的屋顶", () => (pl.position.x < T.x + TOWER_HALF ? breachMark : roofHole));
+      hud.prompt(input.usingPad ? "A 跳跃" : "空格 跳跃");
       // in the inn (or anywhere on the far side of the wall)
-      await d.until(() => pl.position.x > T.x + TOWER_HALF + 0.4 && pl.position.y < this.base + T.floor2 - 0.4);
-      hud.prompt(null);
-      if (this.inInn(pl.position)) {
-        hud.toast("从地板的破洞下去，找到出口", 5000);
-        stage.townFires?.track(this.fx.fire(new Vector3(INN.x - 3, this.base + INN.floor + 0.3, INN.z + 2.6), 0.6, { light: true }));
+      const across = () => pl.position.x > T.x + TOWER_HALF + 0.4 && pl.position.y < this.base + T.floor2 - 0.4;
+      const stopNag = nag(w, "布伦", ["跳啊！它马上就回来了！", "往缺口外跳——旅店的屋顶接得住你！"], across, 12);
+      try {
+        await d.until(across);
+      } finally {
+        stopNag();
       }
-      await d.until(() => !this.inInn(pl.position) || Vector3.Distance(pl.position, g(STREET.x, STREET.z)) < 4);
+      hud.prompt(null);
+      const floorHole = new Vector3(INN.x + 2.6, this.base + INN.floor, INN.z - 0.1);
+      const innDoor = new Vector3(INN.x + 1.9, this.base + 1, INN.z + INN.d / 2 + 0.6);
+      if (this.inInn(pl.position)) {
+        objective.set("从地板的破洞下去，找到出口", () => (pl.position.y > this.base + INN.floor - 0.6 ? floorHole : innDoor));
+        stage.townFires?.track(this.fx.fire(new Vector3(INN.x - 3, this.base + INN.floor + 0.3, INN.z + 2.6), 0.6, { light: true }));
+        await d.until(() => !this.inInn(pl.position) || Vector3.Distance(pl.position, g(STREET.x, STREET.z)) < 4);
+      } else {
+        // missed the roof: down in the street already — go round to where the scribe waits
+        objective.set("到旅店门前的街上去", () => g(STREET.x, STREET.z).add(new Vector3(0, 1, 0)));
+        await d.until(() => Math.hypot(pl.position.x - STREET.x, pl.position.z - STREET.z) < 8);
+      }
+      objective.retarget(null);
       this.step = 3;
       void this.ctx.game.save("auto");
     }
@@ -303,7 +348,7 @@ export class DragonChapter implements Chapter {
     w.rig.lookToward(head("scribe"), 1.2);
     await d.say("书记官", `${name}？……你命真硬。`, { npc: scribe, look: () => pl.eye(new Vector3()) });
     await d.say("书记官", "贴着我走，别离开三步以内。", { npc: scribe, look: () => pl.eye(new Vector3()) });
-    hud.toast("跟随书记官前往要塞", 5000);
+    objective.set("跟随书记官前往要塞", () => scribe.root.position.add(new Vector3(0, 1.6, 0)));
     const route = LAYOUT.escape.slice(1);
     for (let i = 0; i < route.length; i++) {
       const p = route[i];
@@ -338,7 +383,13 @@ export class DragonChapter implements Chapter {
       if (Vector3.Distance(pl.position, scribe.root.position) > 9) {
         scribe.play("Idle_Loop", { blend: 0.3 });
         faceTo(scribe, pl.position);
-        await d.until(() => Vector3.Distance(pl.position, scribe.root.position) < 7);
+        const close = () => Vector3.Distance(pl.position, scribe.root.position) < 7;
+        const stopNag = nag(w, "书记官", ["这边！跟上！", `${name}！别掉队！`], close, 10);
+        try {
+          await d.until(close);
+        } finally {
+          stopNag();
+        }
       }
     }
     // at the keep

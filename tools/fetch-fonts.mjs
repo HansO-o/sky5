@@ -12,7 +12,7 @@ for (const f of files) text += await fs.readFile(path.join(ROOT, f), "utf8");
 // chapter labels and objective toasts
 for (const f of await fs.readdir(path.join(ROOT, "src/prologue/chapters"))) {
   const s = await fs.readFile(path.join(ROOT, "src/prologue/chapters", f), "utf8");
-  for (const m of s.matchAll(/(?:hud\.toast\(|label = )"([^"]+)"/g)) text += m[1];
+  for (const m of s.matchAll(/(?:hud\.toast\(|objective\.set\(|label = )"([^"]+)"/g)) text += m[1];
 }
 const cjk = [...new Set(text.match(/[　-〿一-鿿＀-￯·—…“”‘’]/g))].sort().join("");
 const chars = cjk + "0123456789%°.:/-+ ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
