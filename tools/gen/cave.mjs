@@ -508,11 +508,17 @@ function Hc(x, z) {
   const a = HGRID[j * n + i], b = HGRID[j * n + i + 1], c = HGRID[(j + 1) * n + i], d = HGRID[(j + 1) * n + i + 1];
   return lerp(lerp(a, b, u), lerp(c, d, u), v);
 }
+const HR_CACHE = new Map();
 /** The render terrain's own surface (tools/gen/terrain.mjs): 2 m grid, same triangulation. */
 function Hrender(x, z) {
   const sp = 2, i = Math.floor(x / sp), j = Math.floor(z / sp);
   const fx = x / sp - i, fz = z / sp - j;
-  const h = (a, b) => T.height(a * sp, b * sp);
+  const h = (a, b) => {
+    const k = hkey(a, b);
+    let y = HR_CACHE.get(k);
+    if (y === undefined) HR_CACHE.set(k, (y = T.height(a * sp, b * sp)));
+    return y;
+  };
   // grid origins are multiples of 200 m, so the parity of i + j matches terrain.mjs
   const odd = (((i + j) % 2) + 2) % 2 === 1;
   const h00 = h(i, j), h10 = h(i + 1, j), h01 = h(i, j + 1), h11 = h(i + 1, j + 1);
@@ -524,6 +530,8 @@ function Hrender(x, z) {
   return fx + fz < 1 ? h00 + (h10 - h00) * fx + (h01 - h00) * fz : h11 + (h01 - h11) * (1 - fx) + (h10 - h11) * (1 - fz);
 }
 const ground = (x, y, z) => y - (Hc(x, z) - 0.5);
+/** the outcrop skin's border runs at least this far under the render terrain (no crack between them) */
+const SKIN_UNDER = 0.05;
 const inOBox = (x, y, z) => x > OUTCROP.bbox.min[0] && x < OUTCROP.bbox.max[0] && y > OUTCROP.bbox.min[1] && y < OUTCROP.bbox.max[1] && z > OUTCROP.bbox.min[2] && z < OUTCROP.bbox.max[2];
 /** 2D distance to a rectangle (negative inside), rounded by r */
 function sdRect2(x, z, xr, zr, r = 0) {
@@ -1067,6 +1075,23 @@ export function buildCaveData({ log = () => {} } = {}) {
       }
     }
     if (far) errors.push(`the cave opens through the outcrop away from the mouth at ${far} vertices (first at ${at})`);
+  }
+  // The ground term's surface lies 0.5 m under the render terrain, except at its crease with the
+  // outcrop on a steep slope: surface nets put the crease vertex up to a cell off the true crease,
+  // there up to 0.6 m above the render terrain, and the skin's border would hover over the terrain mesh
+  // (a sliver crack into the rock at grazing angles). Ground triangles reaching above the render
+  // terrain stay with the outcrop's skin, so its border runs under the terrain mesh everywhere
+  // (checked below: no border vertex of the skin above the render terrain).
+  let groundKept = 0;
+  for (let t = 0; t < ntri0; t++) {
+    if (cls0[t] !== "terrain") continue;
+    const vs = [0, 1, 2].map((k) => surf.idx[t * 3 + k]);
+    const c = [0, 1, 2].map((k) => (surf.pos[vs[0] * 3 + k] + surf.pos[vs[1] * 3 + k] + surf.pos[vs[2] * 3 + k]) / 3);
+    if (!inOBox(c[0], c[1], c[2])) continue;
+    if (vs.some((v) => surf.pos[v * 3 + 1] > Hrender(surf.pos[v * 3], surf.pos[v * 3 + 2]) - SKIN_UNDER)) {
+      cls0[t] = "outcrop";
+      groundKept++;
+    }
   }
   const clipped = clipBreach(surf.pos, [...nrm], [...ao], surf.idx, cls0);
   const kept = compact(clipped.pos, clipped.nrm, clipped.ao, clipped.idx, (t) => clipped.cls[t] !== "terrain");
@@ -2105,37 +2130,37 @@ export function buildCaveData({ log = () => {} } = {}) {
     if (hole.runtimeColliderIntrusions) errors.push(`the runtime terrain collider reaches into the tunnel at ${hole.runtimeColliderIntrusions} points`);
     if (hole.uncovered) errors.push(`EXIT_HOLE is not covered by the outcrop at ${hole.uncovered} points`);
   }
-  // the outcrop skin must reach below the terrain mesh along its lower edge
+  // the outcrop skin's own border (where the dropped ground triangles were) runs under the render
+  // terrain: the skin and the terrain mesh close the outcrop without a crack. Border edges of the
+  // simplified group-O triangles; vertices shared with a cave zone (the mouth) are seams, not borders.
+  const skinBorder = { vertices: 0, above: 0, maxAboveTerrain: -Infinity, groundKept };
   {
-    let above = 0, worst = 0;
-    const O = colliders.O;
-    // border edges of the outcrop render surface
-    const geo = render.O.outcrop_rock;
-    if (geo) {
-      const ec = new Map();
-      for (let k = 0; k < geo.i.length; k += 3)
-        for (let e = 0; e < 3; e++) {
-          const a = geo.i[k + e], b = geo.i[k + ((e + 1) % 3)];
-          const pa = geo.p.slice(a * 3, a * 3 + 3).map((v) => v.toFixed(4)).join(), pb = geo.p.slice(b * 3, b * 3 + 3).map((v) => v.toFixed(4)).join();
-          const key = pa < pb ? pa + "|" + pb : pb + "|" + pa;
-          ec.set(key, (ec.get(key) ?? 0) + 1);
-        }
-      for (const [key, n] of ec) {
-        if (n !== 1) continue;
-        for (const s of key.split("|")) {
-          const [x, y, z] = s.split(",").map(Number);
-          if (z > BREACH.clipZ - 1 && x > 40) continue;
-          const d = y - Hrender(x, z);
-          // border vertices along the mouth rim (inside the tunnel) are not on the terrain
-          if (d > -0.05 && surfaceClass(x, y, z) !== "cave" && Math.abs(S(x, y, z)) < 0.3 && ground(x, y, z) < 0.3) {
-            above++;
-            worst = Math.max(worst, d);
-          }
+    const ec = new Map();
+    for (let t = 0; t < nR; t++) {
+      if (rGroup[t] !== "O") continue;
+      for (let e = 0; e < 3; e++) {
+        const a = rIdx[t * 3 + e], b = rIdx[t * 3 + ((e + 1) % 3)], k = a < b ? a * 1e7 + b : b * 1e7 + a;
+        ec.set(k, (ec.get(k) ?? 0) + 1);
+      }
+    }
+    const seen = new Set();
+    let at = null;
+    for (const [k, n] of ec) {
+      if (n !== 1) continue;
+      for (const v of [Math.floor(k / 1e7), k % 1e7]) {
+        if (seen.has(v) || vGroups.get(v).size > 1) continue;
+        seen.add(v);
+        const p = V(v), d = p[1] - Hrender(p[0], p[2]);
+        skinBorder.maxAboveTerrain = Math.max(skinBorder.maxAboveTerrain, d);
+        if (d > -SKIN_UNDER + 0.01) {
+          skinBorder.above++;
+          at ??= p.map(r2);
         }
       }
-      void O;
     }
-    if (above) warnings.push(`outcrop skin border above the terrain mesh at ${above} vertices (worst ${worst.toFixed(2)} m)`);
+    skinBorder.vertices = seen.size;
+    skinBorder.maxAboveTerrain = r2(skinBorder.maxAboveTerrain);
+    if (skinBorder.above) errors.push(`the outcrop skin's border is not under the render terrain at ${skinBorder.above} of ${seen.size} vertices (first at ${at}, worst ${skinBorder.maxAboveTerrain} m above): a crack between the skin and the terrain mesh`);
   }
   // the drawbridge (procprops): deck 8.8 × 1.8 m hinged at (48, 27.0, −735.6) swings from lowered
   // (0°, tip at z −726.8) to raised (60°, tip ≈ y 34.6); broken, its south 5.2 m hangs at −35°; the
@@ -2331,7 +2356,7 @@ export function buildCaveData({ log = () => {} } = {}) {
       probes: { minClearance: r2(probes.minClear), clearanceAt: probes.at, minHalfWidth: r2(probes.minHalfW), halfWidthAt: probes.halfAt, maxSlope: probes.maxSlope },
       walk: { samples: walkStats.samples, maxStepUp: +walkStats.maxUp.toFixed(3), maxStepDown: +walkStats.maxDown.toFixed(3), maxColliderDev: +walkStats.maxDev.toFixed(3), minHeadRoom: r2(walkStats.minHead) },
       connectivity: { centreSamples: connectivity.samples, chasm: connectivity.chasm, breaks: connectivity.breaks.length },
-      hole, breach, platform, vista, bridge: { minGap: r2(bridge.minGap), crown: bridge.crown }, denPathMinToWolf: r2(denMin), movedAnchors: moved,
+      hole, skinBorder, breach, platform, vista, bridge: { minGap: r2(bridge.minGap), crown: bridge.crown }, denPathMinToWolf: r2(denMin), movedAnchors: moved,
       stair: { s0: STAIR.s0, sEnd: r2(stair.sEnd), risers: stair.K, riser: +stair.r.toFixed(3), y0: +stair.y0.toFixed(3), yTop: stair.yTop },
       perchRampDeg: +perchSteps.ramp.deg.toFixed(1), cornerWebs: cornerWebs.length, cocoons: cocoons.length, eggs: eggList.length,
     },

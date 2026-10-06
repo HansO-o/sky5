@@ -36,6 +36,11 @@ export const FOLLOW = {
 export interface FollowTarget {
   /** where to walk now */
   point: XYZ;
+  /**
+   * how far along the trail the follower is: the number of the crumb nearest it (crumbs are
+   * numbered from the first ever dropped, so this grows as it advances, across trimming and resets)
+   */
+  progress: number;
   /** distance to the leader along the trail (straight when off it) */
   along: number;
   /** close enough to the trail to walk it */
@@ -46,6 +51,8 @@ export interface FollowTarget {
 
 export class Breadcrumbs {
   private crumbs: XYZ[] = [];
+  /** crumbs dropped so far (the newest crumb's number + 1) */
+  private total = 0;
 
   constructor(private o: { spacing?: number; keep?: number; jump?: number } = {}) {}
 
@@ -81,9 +88,11 @@ export class Breadcrumbs {
       for (let k = spacing; k <= d - spacing + 1e-9; k += spacing) {
         const u = k / d;
         this.crumbs.push({ x: last.x + (p.x - last.x) * u, y: last.y + (p.y - last.y) * u, z: last.z + (p.z - last.z) * u });
+        this.total++;
       }
     }
     this.crumbs.push({ x: p.x, y: p.y, z: p.z });
+    this.total++;
     const keep = this.o.keep ?? FOLLOW.keep;
     if (this.crumbs.length > keep) this.crumbs.splice(0, this.crumbs.length - keep);
     return true;
@@ -92,6 +101,12 @@ export class Breadcrumbs {
   /** Start over from `p` (a teleport, a checkpoint). */
   reset(p?: XYZ | null) {
     this.crumbs = p ? [{ x: p.x, y: p.y, z: p.z }] : [];
+    if (p) this.total++;
+  }
+
+  /** The number of crumb `i` of `list` (see `FollowTarget.progress`). */
+  numberOf(i: number) {
+    return this.total - this.crumbs.length + i;
   }
 
   /** Trail distance from each crumb to the leader (`s[i]`), newest last. */
@@ -127,22 +142,23 @@ export class Breadcrumbs {
       }
     }
     const straight = Math.hypot(leader.x - self.x, leader.z - self.z);
+    const progress = this.numberOf(k);
     if (best > offTrail) {
       const keep = this.pointBehind(leader, behind) ?? leader;
       const toKeep = Math.hypot(keep.x - self.x, keep.z - self.z);
-      if (toKeep <= best) return { point: keep, along: straight, onTrail: false, arrived: straight <= behind };
-      return { point: c[k], along: best + s[k], onTrail: false, arrived: false };
+      if (toKeep <= best) return { point: keep, progress, along: straight, onTrail: false, arrived: straight <= behind };
+      return { point: c[k], progress, along: best + s[k], onTrail: false, arrived: false };
     }
     const along = s[k] + best;
-    if (along <= behind + 0.05) return { point: { x: self.x, y: c[k].y, z: self.z }, along, onTrail: true, arrived: true };
+    if (along <= behind + 0.05) return { point: { x: self.x, y: c[k].y, z: self.z }, progress, along, onTrail: true, arrived: true };
     let j = k;
     while (j + 1 < n && s[j + 1] >= behind && s[k] - s[j + 1] <= lookahead) j++;
     // the next crumb is already too close to the leader: walk to the exact place to keep
     if (j === k && (k + 1 >= n || s[k + 1] < behind)) {
       const keep = this.pointBehind(leader, behind);
-      if (keep) return { point: keep, along, onTrail: true, arrived: false };
+      if (keep) return { point: keep, progress, along, onTrail: true, arrived: false };
     }
-    return { point: c[j], along, onTrail: true, arrived: false };
+    return { point: c[j], progress, along, onTrail: true, arrived: false };
   }
 
   /** The point `back` m behind `leader` along the trail (null: the trail is shorter). */

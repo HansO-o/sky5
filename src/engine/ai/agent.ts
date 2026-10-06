@@ -377,11 +377,14 @@ export abstract class AgentCore implements AgentControl, CrowdMember {
 
 /**
  * An agent with no physics: each `step(dt)` moves it at the goal's velocity on a flat floor
- * (height kept). For tests and for actors that only need to walk around in the open.
+ * (height kept). For tests and for actors that only need to walk around in the open. `constrain`
+ * may move it back after each step (walls); its speed is what it actually travelled.
  */
 export class KinematicAgent extends AgentCore {
   /** clips it "has" (tests: every clip when null) and those it played, latest last */
   played: { clip: string; speed: number; loop: boolean }[] = [];
+  /** called after every step with its position, to push it out of whatever it walked into */
+  constrain: ((p: XYZ) => void) | null;
   private v = { x: 0, z: 0 };
   private disposeCrowd: (() => void) | null = null;
   private clips: Record<string, number> | null;
@@ -389,12 +392,13 @@ export class KinematicAgent extends AgentCore {
   constructor(
     start: XYZ,
     yaw = 0,
-    o: { crowd?: Crowd | null; clips?: Record<string, number> | null; turnRate?: number } = {},
+    o: { crowd?: Crowd | null; clips?: Record<string, number> | null; turnRate?: number; constrain?: ((p: XYZ) => void) | null } = {},
   ) {
     super(o.turnRate ?? STEER.turn, o.crowd ?? null);
     this.p = { x: start.x, y: start.y, z: start.z };
     this.yawValue = yaw;
     this.clips = o.clips ?? null;
+    this.constrain = o.constrain ?? null;
     if (o.crowd) this.disposeCrowd = o.crowd.add(this);
   }
 
@@ -418,10 +422,12 @@ export class KinematicAgent extends AgentCore {
       return;
     }
     const d = this.desired(dt, this.speed);
-    this.v = { x: d.vx, z: d.vz };
+    const x0 = this.p.x, z0 = this.p.z;
     this.p.x += d.vx * dt;
     this.p.z += d.vz * dt;
-    this.frame(dt, d.vx, d.vz);
+    this.constrain?.(this.p);
+    this.v = dt > 0 ? { x: (this.p.x - x0) / dt, z: (this.p.z - z0) / dt } : { x: 0, z: 0 };
+    this.frame(dt, this.v.x, this.v.z);
   }
 
   teleport(p: XYZ, yaw?: number) {

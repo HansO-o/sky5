@@ -129,16 +129,17 @@ export class HumanoidBrain extends CombatBrain {
           this.events.emit({ type: "bark", kind: "suspicious" });
           this.agent.stop();
           const s = this.sensor;
-          this.investigate = s?.lastNoise ?? s?.lastKnown ?? null;
+          // the freshest clue: a glimpse, else the last noise
+          this.investigate = s?.lastKnown ?? s?.lastNoise ?? null;
           this.arrived = null;
           if (this.investigate) this.agent.face(this.investigate);
         },
         update: () => {
           const s = this.sensor;
           const e = this.fsm.elapsed();
-          // a fresher noise: that is where to look now
-          if (s?.lastNoise && s.lastNoise !== this.investigate && s.meter >= PERCEPTION.suspicious) {
-            this.investigate = s.lastNoise;
+          // a fresher clue (another noise, a glimpse): that is where to look now
+          if (s?.lastKnown && s.lastKnown !== this.investigate && s.meter >= PERCEPTION.suspicious) {
+            this.investigate = s.lastKnown;
             this.arrived = null;
           }
           // first it turns toward the noise
@@ -146,7 +147,8 @@ export class HumanoidBrain extends CombatBrain {
           const at = this.investigate;
           if (this.arrived === null) {
             const me = this.agent.position;
-            if (at && Math.hypot(at.x - me.x, at.z - me.z) > AI.investigate.stop && this.agent.stuckFor < 2) {
+            // (arrived a little short of the stop distance: steering eases in and stops 2 cm short)
+            if (at && Math.hypot(at.x - me.x, at.z - me.z) > AI.investigate.stop + 0.15 && this.agent.stuckFor < 2) {
               this.agent.moveTo(at, AI.investigate.speed, AI.investigate.stop);
               this.agent.face(null);
             } else {

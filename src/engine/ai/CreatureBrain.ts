@@ -132,9 +132,9 @@ export class CreatureBrain extends CombatBrain {
     super.engage(target);
   }
 
-  alert(at: XYZ | null = null, by: Combatant | null = null) {
+  alert(at: XYZ | null = null, by: Combatant | null = null, o: { relayed?: boolean } = {}) {
     if (at && !this.canChase(at)) return;
-    super.alert(at, by);
+    super.alert(at, by, o);
   }
 
   /** Every combat update: the leash (a target beyond it for 1.5 s sends it home), the torch. */

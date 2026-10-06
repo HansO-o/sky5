@@ -18,8 +18,9 @@ import { Emitter } from "../core/emitter";
 import type { Disposer } from "../core/types";
 import type { DisposerSink } from "../core/emitter";
 import type { RootMotionCurve } from "../anim/rootMotion";
-import { ARROW, BACKSTAB, STAGGER, type Archetype, type CompanionTuning } from "../combat/attacks";
-import type { AttackHandle, Awareness, CombatEvent, Combatant, CombatSystem, HitResult } from "../combat/CombatSystem";
+import { ARROW, BACKSTAB, COMPANION, GUARDS, STAGGER, type Archetype, type CompanionTuning } from "../combat/attacks";
+import type { AttackHandle, Awareness, CombatantSpec, CombatEvent, Combatant, CombatSystem, HitResult } from "../combat/CombatSystem";
+import { Vitals } from "../combat/vitals";
 import type { XYZ } from "../combat/hit";
 import type { AttackDef, SpecialDef } from "../combat/weapons";
 import type { AgentControl } from "./agent";
@@ -81,6 +82,44 @@ export function companionFighter(t: CompanionTuning): FighterSpec {
   return { kind: "humanoid", light: t.attack, block: t.block, interval: t.interval, shield: t.shield };
 }
 
+/** The parts of a `CombatantSpec` an archetype or a companion's tuning decides. */
+export type FighterCombatant = Pick<CombatantSpec, "vitals" | "radius" | "chest" | "kind" | "guard" | "absorbLights" | "surrenderAt" | "staggerBy" | "essential" | "tokens" | "hitChance">;
+
+/**
+ * The combat side of an archetype (§8): fresh vitals (HP × `hpMul`, the adaptive difficulty's
+ * enemy HP), body radius and chest height, the shield's guard and passive absorb, surrender and
+ * stagger rules. Spread it into `CombatSystem.add({ id, faction, position, yaw, awareness, ...})`.
+ */
+export function combatantOf(a: Archetype, o: { hpMul?: number } = {}): FighterCombatant {
+  return {
+    vitals: new Vitals({ health: Math.max(1, Math.round(a.hp * (o.hpMul ?? 1))), poise: a.poise, stamina: 100 }),
+    radius: a.radius,
+    chest: a.kind === "creature" ? Math.max(0.3, 0.6 * (a.scale ?? 1)) : 1.2,
+    kind: a.kind,
+    guard: a.shield ? GUARDS.shield : GUARDS.weapon,
+    absorbLights: a.absorbLights,
+    surrenderAt: a.surrenderAt,
+    staggerBy: a.staggerBy,
+  };
+}
+
+/**
+ * The combat side of a companion (§8 "Companions"): essential (down at 0 HP for 6 s, up at 50 %),
+ * at most one enemy on it at once, its hit chance, its shield.
+ */
+export function companionCombatant(t: CompanionTuning): FighterCombatant {
+  return {
+    vitals: new Vitals({ health: t.hp, poise: t.poise, stamina: 100 }),
+    radius: COMPANION.radius,
+    chest: 1.2,
+    kind: "humanoid",
+    guard: t.shield ? GUARDS.shield : GUARDS.weapon,
+    essential: true,
+    tokens: COMPANION.tokens,
+    hitChance: t.hitChance,
+  };
+}
+
 /** Clips a brain plays (defaults for UAL humanoids; creatures pass their own). */
 export interface BrainClips {
   /** reacting to an alert (null: none) */
@@ -127,7 +166,9 @@ export type BrainEvent =
   | { type: "glint"; at: XYZ }
   /** a projectile left the bow: it arrives in `seconds` */
   | { type: "shoot"; from: XYZ; to: XYZ; seconds: number }
-  | { type: "died"; hit: HitResult | null; ragdoll: boolean };
+  | { type: "died"; hit: HitResult | null; ragdoll: boolean }
+  /** the companion reappeared behind the player (catch-up) */
+  | { type: "caughtUp"; at: XYZ };
 
 /** What the brain asks of its AI system (implemented by `AISystem`). */
 export interface BrainSystem {
@@ -137,6 +178,8 @@ export interface BrainSystem {
   alertAllies(from: CombatBrain, at: XYZ | null, radius: number): number;
   /** a ragdoll may start now (at most 2 at once) */
   ragdollSlot(): boolean;
+  /** every brain it knows */
+  readonly brains: readonly CombatBrain[];
   brainOf(key: unknown): CombatBrain | undefined;
 }
 
@@ -236,6 +279,8 @@ export abstract class CombatBrain {
   protected flights: Flight[] = [];
   protected shot = { glint: false, loosed: false };
   protected untilHit = false;
+  /** the alert under way came from an ally's shout (no shout of its own) */
+  protected relayed = false;
   /** where it is going back to after a scene (set by `resume`) */
   protected resumeTo: string | null = null;
   protected disposed = false;
@@ -308,11 +353,22 @@ export abstract class CombatBrain {
     if (!this.fsm.in("combat")) this.fsm.go("alert");
   }
 
-  /** Alerted by an ally's shout or a scripted alarm (`at`: where the threat is). */
-  alert(at: XYZ | null = null, by: Combatant | null = null) {
+  /**
+   * Alerted by an ally's shout or a scripted alarm (`at`: where the threat is). `relayed`: it heard
+   * an ally's shout, so it does not shout on itself (an alert reaches the faction within 15 m of
+   * whoever noticed, or the group, never a chain of guards across the map).
+   */
+  alert(at: XYZ | null = null, by: Combatant | null = null, o: { relayed?: boolean } = {}) {
     if (this.disposed || !this.self.active) return;
-    this.onAlerted(at);
-    this.engage(by);
+    // (nested: the sensor learning of it calls back in here)
+    const outer = this.relayed;
+    this.relayed = outer || !!o.relayed;
+    try {
+      this.onAlerted(at);
+      this.engage(by);
+    } finally {
+      this.relayed = outer;
+    }
   }
 
   /** Subclasses: the sensor learns too. */
@@ -369,8 +425,14 @@ export abstract class CombatBrain {
         break;
       case "stagger":
         if (e.target === me && !this.fsm.in("dead") && !this.fsm.in("scripted")) {
+          const calm = !this.fsm.in("combat");
           this.stagger = { seconds: e.seconds, clip: e.clip, push: e.push, from: e.from, knockdown: e.knockdown };
           this.fsm.go("stagger", { restart: true });
+          // a first blow that staggers skips the alert state: its senses and allies still learn of it
+          if (calm && this.fsm.in("combat")) {
+            this.onAlerted(e.from);
+            this.ai?.alertAllies(this, e.from, AI.alert.radius);
+          }
         }
         break;
       case "death":
@@ -528,13 +590,18 @@ export abstract class CombatBrain {
     this.lastDef = def;
     this.agent.stop();
     if (t) this.agent.face(() => t.pose);
+    // (the system reports the wind-up rate from inside attack(), before the handle exists: the clip
+    // and its root motion start below with that rate; later changes come through here)
+    let handle: AttackHandle | null = null;
     const h = this.combat.attack(this.self, def, {
       target: t,
       onRate: (r) => {
+        if (!handle) return;
         this.agent.setActRate(r);
-        this.rideRootMotion(def, r, h?.time ?? 0);
+        this.rideRootMotion(def, r, handle.time);
       },
     });
+    handle = h;
     this.swing = h;
     if (!h) return;
     this.agent.act(def.clip, { speed: h.rate, blend: def.blend ?? 0.1, hold: true });
@@ -648,6 +715,10 @@ export abstract class CombatBrain {
           this.releaseToken();
           this.agent.face(null);
           this.agent.stop();
+          this.agent.stopRootMotion();
+          // a swing's held last pose, a guard: the body goes back to its locomotion (the state
+          // entered next plays its own clip, if any)
+          if (this.agent.acting) this.agent.act(null);
         },
       }),
       alert: S({
@@ -657,7 +728,7 @@ export abstract class CombatBrain {
           this.timer = from === null || from === "scripted" ? 0 : between(AI.alert.react, this.random);
           this.events.emit({ type: "bark", kind: "alert" });
           const t = this.target ?? this.pickTarget();
-          this.ai?.alertAllies(this, t ? t.pose : null, AI.alert.radius);
+          if (!this.relayed) this.ai?.alertAllies(this, t ? t.pose : null, AI.alert.radius);
           if (this.timer > 0 && this.clips.alert && (from === "post" || from === "suspicious")) this.agent.act(this.clips.alert, { blend: 0.1 });
         },
         update: () => {
@@ -710,7 +781,11 @@ export abstract class CombatBrain {
           const def = this.lastDef;
           const rec = def?.recover;
           this.timer = 0.15;
-          if (!rec) return;
+          if (!rec) {
+            // no recovery clip (jab, kick, a creature's bite): the swing's held pose ends here
+            if (def && this.agent.acting === def.clip) this.agent.act(null);
+            return;
+          }
           const rate = rec.speed ?? def?.speed ?? 1;
           const len = this.agent.act(rec.clip, { speed: rate, blend: rec.blend ?? 0.1 });
           this.timer = (len || rec.length) / Math.max(0.05, rate);

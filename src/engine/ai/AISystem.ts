@@ -145,7 +145,7 @@ export class AISystem implements BrainSystem {
       const grouped = !!from.group && b.group === from.group;
       const near = b.self.faction === from.self.faction && Math.hypot(b.agent.position.x - p.x, b.agent.position.z - p.z) <= radius && Math.abs(b.agent.position.y - p.y) < 4;
       if (!grouped && !near) continue;
-      b.alert(at, from.target);
+      b.alert(at, from.target, { relayed: true });
       n++;
     }
     return n;

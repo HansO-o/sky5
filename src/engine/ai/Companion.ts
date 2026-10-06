@@ -11,7 +11,7 @@
 import type { CompanionTuning } from "../combat/attacks";
 import type { Combatant } from "../combat/CombatSystem";
 import type { XYZ } from "../combat/hit";
-import { Breadcrumbs, FOLLOW, followSpeed, shouldCatchUp } from "./breadcrumbs";
+import { Breadcrumbs, FOLLOW, followSpeed, shouldCatchUp, type FollowTarget } from "./breadcrumbs";
 import { CombatBrain, type CombatBrainOptions } from "./CombatBrain";
 import type { BrainState } from "./fsm";
 
@@ -57,6 +57,8 @@ export class Companion extends CombatBrain {
   private onPlayer = new Map<Combatant, number>();
   /** the attacker the shield wall is against */
   private wallAgainst: Combatant | null = null;
+  /** following: since when it has made no progress along the trail (see `trackProgress`) */
+  private progress = { trying: false, crumb: -1, along: Infinity, since: 0 };
 
   constructor(o: CompanionOptions) {
     super(o);
@@ -113,10 +115,11 @@ export class Companion extends CombatBrain {
     const sp = this.copts.special;
     const player = this.leader.combatant;
     if (!sp || !player) return;
-    // who has been on the player, since when
-    const holders = new Set(this.combat.tokenHolders(player));
-    for (const c of [...this.onPlayer.keys()]) if (!holders.has(c)) this.onPlayer.delete(c);
-    for (const c of holders) if (!this.onPlayer.has(c)) this.onPlayer.set(c, this.time);
+    // who has been fighting the player, since when (tokens come and go between swings; the fight
+    // is the brain's target; without an AI system, the token holders)
+    const engaged = this.engagedWith(player);
+    for (const c of [...this.onPlayer.keys()]) if (!engaged.has(c)) this.onPlayer.delete(c);
+    for (const c of engaged) if (!this.onPlayer.has(c)) this.onPlayer.set(c, this.time);
     if (this.time < this.specialAt || player.vitals.dead) return;
     const low = player.vitals.hpFrac < sp.hpBelow;
     if (sp.name === SPECIALS.roar) {
@@ -148,6 +151,15 @@ export class Companion extends CombatBrain {
       this.events.emit({ type: "bark", kind: "special" });
       return "guard";
     }
+  }
+
+  /** Enemies fighting `c` now. */
+  private engagedWith(c: Combatant) {
+    const out = new Set<Combatant>(this.combat.tokenHolders(c));
+    for (const b of this.ai?.brains ?? []) {
+      if (b.target === c && b.fighting && b.self.active && this.combat.isHostile(b.self, this.self)) out.add(b.self);
+    }
+    return out;
   }
 
   private nearestTo(c: Combatant) {
@@ -236,11 +248,12 @@ export class Companion extends CombatBrain {
     const sneak = this.stealth || L.sneaking();
     this.agent.crouch = sneak;
     const straight = Math.hypot(lp.x - me.x, lp.z - me.z);
-    if (shouldCatchUp(straight, this.copts.visible?.(me) ?? false, this.agent.stuckFor)) {
-      if (this.catchUp(lp)) return;
-    }
     const t = this.trail.next(me, lp);
     const speed = followSpeed(t?.along ?? straight, { leaderMoving: L.moving(), stealth: sneak });
+    this.trackProgress(t, !!t && !t.arrived && speed > 0);
+    if (shouldCatchUp(straight, this.copts.visible?.(me) ?? false, Math.max(this.agent.stuckFor, this.noProgressFor))) {
+      if (this.catchUp(lp)) return;
+    }
     if (!t || t.arrived || speed <= 0) {
       this.agent.stop();
       if (straight < 10) this.agent.face(() => this.leader.position());
@@ -252,6 +265,30 @@ export class Companion extends CombatBrain {
     this.agent.face(null);
   }
 
+  /**
+   * Stuck is "trying to follow and getting nowhere": no crumb further along (2 crumbs, 1 m) and no
+   * metre closer to the player for `FOLLOW.catchUp.stuck` s. (Sliding along a wall is movement but
+   * not progress; keeping pace with a walking player is progress.)
+   */
+  private trackProgress(t: FollowTarget | null, trying: boolean) {
+    const p = this.progress;
+    if (!t || !trying) {
+      p.trying = false;
+      return;
+    }
+    if (!p.trying || t.progress >= p.crumb + 2 || t.along <= p.along - 1) {
+      p.trying = true;
+      p.crumb = t.progress;
+      p.along = t.along;
+      p.since = this.time;
+    }
+  }
+
+  /** Seconds it has been trying to follow without getting anywhere. */
+  get noProgressFor() {
+    return this.progress.trying ? this.time - this.progress.since : 0;
+  }
+
   /** Appear on the trail 6–14 m behind the player, out of view. True when it did. */
   private catchUp(lp: XYZ) {
     const c = FOLLOW.catchUp;
@@ -260,6 +297,8 @@ export class Companion extends CombatBrain {
     if (!spot) return false;
     this.agent.teleport({ x: spot.x, y: spot.y + 0.05, z: spot.z });
     this.agent.face(() => this.leader.position());
+    this.progress.trying = false;
+    this.events.emit({ type: "caughtUp", at: { x: spot.x, y: spot.y, z: spot.z } });
     return true;
   }
 }

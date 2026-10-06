@@ -12,7 +12,10 @@ for (const f of files) text += await fs.readFile(path.join(ROOT, f), "utf8");
 // chapter labels and objective toasts
 for (const f of await fs.readdir(path.join(ROOT, "src/prologue/chapters"))) {
   const s = await fs.readFile(path.join(ROOT, "src/prologue/chapters", f), "utf8");
-  for (const m of s.matchAll(/(?:hud\.toast\(|objective\.set\(|label = )"([^"]+)"/g)) text += m[1];
+  for (const m of s.matchAll(/(?:hud\.\w+\(|objective\.set\(|objective\(|label = )"([^"]+)"/g)) text += m[1];
+  // the chapters' data tables (objectives, prompts, toasts, tips, end card), but not the dialogue
+  // and barks: subtitles use the body font
+  if (/Script\.ts$/.test(f)) text += s.replace(/^export const \w+_(?:SCRIPT|BARKS|CUT_TEXT)\b[\s\S]*?^}/gm, "");
 }
 const cjk = [...new Set(text.match(/[　-〿一-鿿＀-￯·—…“”‘’]/g))].sort().join("");
 const chars = cjk + "0123456789%°.:/-+ ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
