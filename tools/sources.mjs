@@ -83,7 +83,7 @@ export const FPM_KIT = {
   dir: "Exports/glTF/",
   models: [
     "Sword_Bronze", "Axe_Bronze", "Shield_Wooden",
-    "Torch_Metal", "Lantern_Wall", "Candle_1", "CandleStick",
+    "Torch_Metal", "Lantern_Wall", "Candle_1",
     "Barrel", "Crate_Wooden", "Crate_Metal", "Chest_Wood", "Bag", "Pouch_Large",
     "Table_Large", "Chair_1", "Bench", "Stool", "Bed_Twin1", "WeaponStand", "Peg_Rack", "Shelf_Small_Bottles", "Dummy",
     "Chain_Coil", "Cage_Small", "Cauldron", "Key_Metal",

@@ -49,6 +49,8 @@ export class Brain<C> {
   private enteredAt = new Map<string, number>();
   private paths = new Map<string, readonly string[]>();
   private suspendedFlag = false;
+  /** counts suspends and resumes (a scope's resume hook acts only for its own suspend) */
+  private suspensions = 0;
   private disposed = false;
   /** transitions so far in this update or outside call (a runaway loop of moves is cut off) */
   private chain = 0;
@@ -190,11 +192,16 @@ export class Brain<C> {
   suspend(scope?: DisposerSink, state?: string) {
     if (state) this.go(state);
     this.suspendedFlag = true;
-    scope?.add(() => this.resume());
+    // only this suspension: a scope ending after a resume (and a newer suspend) leaves it be
+    const n = ++this.suspensions;
+    scope?.add(() => {
+      if (this.suspensions === n) this.resume();
+    });
   }
 
   /** Update again (from `state`, when given). */
   resume(state?: string) {
+    this.suspensions++;
     this.suspendedFlag = false;
     if (state) this.go(state);
   }

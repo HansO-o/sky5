@@ -42,13 +42,32 @@ export interface AgentMoverOptions {
 }
 
 const tmpQ = new Quaternion();
+/** how far (m) a scripted body moves before the capsule is carried after it */
+const FOLLOW_EPS = 0.03;
+const tmpPos = new Vector3();
+
+/** A body root's world feet position (shared vector) and facing in the game's convention (the root faces +Z). */
+function bodyPose(r: TransformNode) {
+  const pos = r.parent ? r.getAbsolutePosition() : r.position;
+  tmpPos.copyFrom(pos);
+  let yaw: number;
+  if (r.parent) {
+    r.computeWorldMatrix(true).decompose(undefined, tmpQ);
+    yaw = 2 * Math.atan2(tmpQ.y, tmpQ.w) - Math.PI;
+  } else {
+    const q = r.rotationQuaternion;
+    yaw = q ? 2 * Math.atan2(q.y, q.w) - Math.PI : r.rotation.y - Math.PI;
+  }
+  return { position: tmpPos, yaw: Math.atan2(Math.sin(yaw), Math.cos(yaw)) };
+}
 
 /**
  * An NPC on a `CapsuleMover` (design §3.6): every fixed physics step the goal becomes the
  * capsule's velocity (with separation, the stuck slide, knockback and root motion); every frame
  * the body is placed where the capsule is drawn, turned toward its facing at 8 rad/s and given its
  * locomotion clip, unless an action (attack, hit reaction, kneel) has it. While `suspended` it
- * leaves the body to a script; when resumed the capsule moves to wherever the script left the body.
+ * leaves the body to a script and follows it (position, facing and capsule go where the script puts
+ * the body); when resumed it walks on from there.
  */
 export class AgentMover extends AgentCore {
   readonly body: AgentBody | null;
@@ -143,12 +162,34 @@ export class AgentMover extends AgentCore {
     // back from a script: the capsule goes to wherever the body was left, facing its way
     const b = this.body;
     if (b && this.mover) {
-      const r = b.root;
-      const q = r.rotationQuaternion;
-      const yaw = q ? 2 * Math.atan2(q.y, q.w) - Math.PI : r.rotation.y - Math.PI;
-      this.teleport({ x: r.position.x, y: r.position.y, z: r.position.z }, Math.atan2(Math.sin(yaw), Math.cos(yaw)));
+      const r = bodyPose(b.root);
+      this.teleport(r.position, r.yaw);
     }
     this.drive();
+  }
+
+  /**
+   * While a script has the body (walkPath, place3, a kneel), the agent goes where the script puts
+   * it: its position and facing (what the combatant's pose, the sensor and the crowd read) and the
+   * capsule (the inner body others bump into), moved once it is more than a few cm off, so no
+   * invisible collider is left where the script took the body from.
+   */
+  private follow() {
+    const b = this.body;
+    if (!b || this.releasedFlag) return;
+    const r = bodyPose(b.root);
+    this.yawValue = r.yaw;
+    const p = r.position;
+    const dx = p.x - this.p.x, dy = p.y - this.p.y, dz = p.z - this.p.z;
+    if (dx * dx + dy * dy + dz * dz < FOLLOW_EPS * FOLLOW_EPS) return;
+    if (this.mover) {
+      this.mover.teleport(p);
+      this.readPosition();
+    } else {
+      this.p.x = p.x;
+      this.p.y = p.y;
+      this.p.z = p.z;
+    }
   }
 
   teleport(p: XYZ, yaw?: number) {
@@ -182,7 +223,11 @@ export class AgentMover extends AgentCore {
   }
 
   private update(dt: number) {
-    if (this.disposed || this.suspendedFlag) return;
+    if (this.disposed) return;
+    if (this.suspendedFlag) {
+      this.follow();
+      return;
+    }
     if (this.releasedFlag) {
       // (the action still runs out: a death clip ending gives the body to nothing)
       this.frame(dt, 0, 0);

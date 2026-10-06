@@ -126,6 +126,15 @@ export class PrologueAI {
     hud.stealth(key === null ? null : k);
   }
 
+  /**
+   * Hide the stealth eye now (a chapter ended and the stage cleared the HUD): what this shows next
+   * is decided afresh, even a value equal to the last one shown.
+   */
+  resetEye() {
+    if (this.eyeShown !== null) hud.stealth(null);
+    this.eyeShown = null;
+  }
+
   /** Whether the camera sees `p` (a body's feet): catch-ups happen only out of view. */
   visible(p: XYZ) {
     const cam = this.world.rig.camera;
@@ -462,8 +471,7 @@ export class PrologueAI {
     this.offs = [];
     this.system.dispose();
     this.events.clear();
-    if (this.eyeShown !== null) hud.stealth(null);
-    this.eyeShown = null;
+    this.resetEye();
   }
 }
 

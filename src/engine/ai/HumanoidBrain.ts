@@ -91,6 +91,10 @@ export class HumanoidBrain extends CombatBrain {
     if (s && !s.alerted) s.alert(at);
   }
 
+  protected get senseOrgan() {
+    return this.sensor;
+  }
+
   protected senses(on: boolean) {
     const s = this.sensor;
     if (!s) return;

@@ -50,6 +50,32 @@ const HOUSES: [number, number, number, number][] = [
 
 const KIT_PART = /^modular_fort_01_/;
 
+/** The keep gate's opening in keep-local heights (tools/gen/townbuildings.mjs KEEP: threshold 0.42, gateH 5). */
+const KEEP_GATE = { bottom: 0.43, top: 4.97 };
+
+/** Scale and lift `parts` (children of `hinge`) so their meshes span world heights `y0`…`y1`. */
+function fitHeight(hinge: TransformNode, parts: TransformNode[], y0: number, y1: number) {
+  const bounds = () => {
+    let lo = Infinity, hi = -Infinity;
+    hinge.computeWorldMatrix(true);
+    for (const r of parts)
+      for (const m of r.getChildMeshes(false)) {
+        if (!m.getTotalVertices()) continue;
+        m.computeWorldMatrix(true);
+        const b = m.getBoundingInfo().boundingBox;
+        lo = Math.min(lo, b.minimumWorld.y);
+        hi = Math.max(hi, b.maximumWorld.y);
+      }
+    return { lo, hi };
+  };
+  const b = bounds();
+  if (!(b.hi > b.lo)) return;
+  const k = (y1 - y0) / (b.hi - b.lo);
+  for (const r of parts) r.scaling.y *= k;
+  const c = bounds();
+  for (const r of parts) r.position.y += y0 - c.lo;
+}
+
 function piece(container: AssetContainer, name: string, scene: Scene, isPart: (n: string) => boolean) {
   const inst = instantiateSubset(container, (n) => n === name, isPart);
   const holder = new TransformNode(`town_${name}`, scene);
@@ -180,7 +206,11 @@ export async function buildTown(
           m.setEnabled(false);
         }
       }
-      leaf.position.set(L.keep.x + side * 2.0, heightAt(L.keep.x, L.keep.z + L.keep.d / 2) - 0.2, L.keep.z + L.keep.d / 2 - 0.65);
+      // stand the leaf in the opening between the stone threshold (keep-local 0.42) and the arch's
+      // top (5.0): its bottom no longer hides under the threshold, its top under the lintel
+      const keepY = heightAt(L.keep.x, L.keep.z) - 0.2;
+      leaf.position.set(L.keep.x + side * 2.0, keepY, L.keep.z + L.keep.d / 2 - 0.65);
+      fitHeight(hinge, inst.rootNodes as TransformNode[], keepY + KEEP_GATE.bottom, keepY + KEEP_GATE.top);
       keepDoors.push(hinge);
     }
   }

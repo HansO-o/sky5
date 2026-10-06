@@ -298,6 +298,10 @@ export abstract class CombatBrain {
   protected relayed = false;
   /** where it is going back to after a scene (set by `resume`) */
   protected resumeTo: string | null = null;
+  /** counts suspensions and resumes: a scope's resume hook acts only for its own suspension */
+  private suspension = 0;
+  /** whether the senses were on when a scene paused them (null: not paused) */
+  private heldSenses: boolean | null = null;
   /** the ragdoll slot its body holds (released when the content freezes the ragdoll, or on dispose) */
   private ragdollHeld: Disposer | null = null;
   protected disposed = false;
@@ -414,14 +418,25 @@ export abstract class CombatBrain {
     this.untilHit = !!o.untilHit;
     if (!this.fsm.in("scripted")) this.resumeTo = this.fsm.in("combat") ? "approach" : null;
     this.fsm.go("scripted");
-    o.scope?.add(() => this.resume());
+    // only this suspension: a scope that ends after a resume (and a newer scene's suspend) must
+    // not hand the body back in the middle of that newer scene
+    const n = ++this.suspension;
+    o.scope?.add(() => {
+      if (this.suspension === n) this.resume();
+    });
   }
 
   /** Control back after a scene: into `state` (default: the fight it was in, else its calm state). */
   resume(state?: string) {
     if (this.disposed || !this.fsm.in("scripted")) return;
-    this.untilHit = false;
+    this.leaveScript();
     this.fsm.go(state ?? this.resumeTo ?? this.calmState());
+  }
+
+  /** The scene's hold ends (its scope hook goes stale); the caller picks the state. */
+  private leaveScript() {
+    this.untilHit = false;
+    this.suspension++;
   }
 
   get suspended() {
@@ -444,6 +459,8 @@ export abstract class CombatBrain {
     this.stagger = null;
     this.untilHit = false;
     this.nextAttackAt = this.time;
+    // (leaving a scene below gives nothing back: the senses are on from here)
+    this.heldSenses = null;
     this.senses(true);
     this.fsm.go(this.resetState(), { restart: true });
   }
@@ -455,6 +472,27 @@ export abstract class CombatBrain {
 
   /** Subclasses: switch the senses on or off (off when dead or surrendered). */
   protected senses(_on: boolean) {}
+
+  /**
+   * Subclasses: hold the senses through a scene (`true`) and give them back as they were
+   * (`false`), without calming them (the state entered next decides that).
+   */
+  protected pauseSenses(paused: boolean) {
+    const s = this.senseOrgan;
+    if (!s) return;
+    if (paused) {
+      this.heldSenses ??= s.enabled;
+      s.enabled = false;
+    } else if (this.heldSenses !== null) {
+      s.enabled = this.heldSenses;
+      this.heldSenses = null;
+    }
+  }
+
+  /** Subclasses: the sensor `pauseSenses` holds (none by default). */
+  protected get senseOrgan(): { enabled: boolean } | null {
+    return null;
+  }
 
   // ---------------------------------------------------------------- combat events
 
@@ -469,7 +507,14 @@ export abstract class CombatBrain {
         if (e.hit.target === me && e.hit.attacker !== me) this.hitBy(e.hit);
         break;
       case "stagger":
-        if (e.target === me && !this.fsm.in("dead") && !this.fsm.in("scripted")) this.staggered({ seconds: e.seconds, clip: e.clip, push: e.push, from: e.from, knockdown: e.knockdown });
+        if (e.target !== me || this.fsm.in("dead")) break;
+        if (this.fsm.in("scripted")) {
+          // a scene holds it until the first blow: a blow that staggers ends the scene into the reel
+          // (the combat system has staggered it already; the hit event comes after this one)
+          if (!this.untilHit) break;
+          this.leaveScript();
+        }
+        this.staggered({ seconds: e.seconds, clip: e.clip, push: e.push, from: e.from, knockdown: e.knockdown });
         break;
       case "death":
         if (e.target === me) {
@@ -516,6 +561,8 @@ export abstract class CombatBrain {
     if (this.fsm.in("scripted")) {
       if (!this.untilHit) return;
       this.resume("alert");
+      // (its senses were off through the scene: they learn who struck)
+      this.onAlerted(h.attacker.pose);
     }
     if (!this.fsm.in("combat") && this.combat.isHostile(h.attacker, this.self)) {
       this.onAlerted(h.attacker.pose);
@@ -606,6 +653,11 @@ export abstract class CombatBrain {
 
   protected releaseToken() {
     this.combat.releaseToken(this.self);
+  }
+
+  /** Farther from its target than this (m) it neither asks for nor keeps a turn. */
+  protected get tokenReach() {
+    return this.ring[1] + 3;
   }
 
   // ---------------------------------------------------------------- attacks
@@ -848,7 +900,7 @@ export abstract class CombatBrain {
           if (this.time >= this.tokenAt) {
             this.tokenAt = this.time + AI.tokens.every;
             const held = this.combat.tokenOf(this.self);
-            if (held && (held !== this.target || this.dist(held) > this.ring[1] + 3)) this.releaseToken();
+            if (held && (held !== this.target || this.dist(held) > this.tokenReach)) this.releaseToken();
           }
           return this.combatCheck();
         },
@@ -1072,9 +1124,12 @@ export abstract class CombatBrain {
           this.agent.stopRootMotion();
           this.agent.act(null);
           this.agent.suspended = true;
+          // the scene decides what it noticed: no meter climbing through the dialogue
+          this.pauseSenses(true);
         },
         exit: () => {
           this.agent.suspended = false;
+          this.pauseSenses(false);
         },
       }),
     };
@@ -1093,7 +1148,9 @@ export abstract class CombatBrain {
       this.agent.face(() => t.pose);
       return;
     }
-    const ready = this.time >= this.nextAttackAt;
+    // a turn is asked for only near the foe (the 2 Hz release lets go of it farther out: asking
+    // again from there would keep it from the others while this one is still on its way)
+    const ready = this.time >= this.nextAttackAt && d <= this.tokenReach;
     if (ready && this.specialReady(d) && this.token()) {
       this.planAttack(d);
       return this.specialState();

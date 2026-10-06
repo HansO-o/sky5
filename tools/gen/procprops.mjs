@@ -41,7 +41,6 @@ const len = (a) => Math.hypot(a[0], a[1], a[2]);
 const nrm = (a) => mul(a, 1 / (len(a) || 1));
 const lerp3 = (a, b, t) => add(a, mul(sub(b, a), t));
 const r3 = (v) => v.map((x) => Math.round(x * 1000) / 1000 + 0);
-const r4 = (v) => v.map((x) => Math.round(x * 1e4) / 1e4 + 0);
 /** quaternion [x, y, z, w] for `ang` radians about unit `axis` */
 const qAxis = (axis, ang) => [...mul(nrm(axis), Math.sin(ang / 2)), Math.cos(ang / 2)];
 /** rotate about X by a: (y, z) → (y cos a − z sin a, y sin a + z cos a) */
@@ -179,7 +178,25 @@ class Parts {
 }
 
 /**
- * A node spec: `parts` (render geometry → child `<name>_mesh`), `meshOf` (reuse another spec's mesh),
+ * A copy of `parts` with every vertex moved by `fp` (position) and `fn` (normal); `mirror` flips the
+ * winding (for a reflection). Props never share a mesh: the runtime instantiates nodes one by one, and a
+ * glTF mesh used twice becomes a Babylon InstancedMesh tied to the other node.
+ */
+function copyParts(parts, fp, fn = fp, mirror = false) {
+  const out = new Parts();
+  for (const [k, mb] of Object.entries(parts.m)) {
+    const c = out.get(k);
+    for (let v = 0; v < mb.vertexCount; v++) {
+      const col = mb.c.length ? mb.c.slice(v * 4, v * 4 + 4) : undefined;
+      c.vertex(fp(mb.p.slice(v * 3, v * 3 + 3)), nrm(fn(mb.n.slice(v * 3, v * 3 + 3))), mb.uv.slice(v * 2, v * 2 + 2), col);
+    }
+    for (let t = 0; t < mb.i.length; t += 3) mirror ? c.tri(mb.i[t], mb.i[t + 2], mb.i[t + 1]) : c.tri(mb.i[t], mb.i[t + 1], mb.i[t + 2]);
+  }
+  return out;
+}
+
+/**
+ * A node spec: `parts` (render geometry → child `<name>_mesh`),
  * `col` (a collider MeshBuilder: the node itself is the collider mesh), `t`/`r`/`s`, `children`, `extras`.
  */
 const N = (name, o = {}) => ({ name, children: [], ...o });
@@ -187,8 +204,6 @@ const N = (name, o = {}) => ({ name, children: [], ...o });
 /** Box collider geometry (positions only are used). */
 const colBox = (mb, center, size, rot = [0, 0, 0]) => box(mb, center, size, rot);
 
-/** A box given by two corners. */
-const boxMinMax = (mb, min, max, o) => box(mb, mul(add(min, max), 0.5), sub(max, min), [0, 0, 0], o);
 
 /** Oval ring (chain link): centre C, long axis d (unit), width axis u (unit), half-length L, half-width W, wire r. */
 function ovalRing(mb, C, d, u, L, W, r, { segments = 8, sides = 4, color } = {}) {
@@ -303,7 +318,6 @@ function lumpBox(mb, center, size, { amp = 0.06, round = 0.25, seed = 1, div = [
 // ------------------------------------------------------------------------------------------------
 // props
 
-const C_IRON_DARK = [0.25, 0.24, 0.24, 1];
 
 /** The gallery set piece: drawbridge (3 states), pulleys, chains, winch, lever, slab. Origin = bridge_hinge. */
 function galleryBridge(ctx) {
@@ -676,21 +690,39 @@ function chains() {
   ];
 }
 
-/** Rope cuffs (two turns of rope around a wrist), one per hand; the bound player in K1. */
+/** A barred panel 1.0 × 2.4 m (bars r 15 mm every 0.12 m, as the keep's cell fronts), with its collider. */
+function barsPanel() {
+  const p = new Parts(), iron = p.get("iron");
+  const W = 1.0, H = 2.4;
+  for (const y of [0.04, 1.2, H - 0.04]) box(iron, [0, y, 0], [W, 0.05, 0.03], [0, 0, 0], { tile: 0.6 });
+  for (const x of [-W / 2 + 0.02, W / 2 - 0.02]) box(iron, [x, H / 2, 0], [0.04, H, 0.04], [0, 0, 0], { tile: 0.6 });
+  for (let x = -W / 2 + 0.12; x < W / 2 - 0.05; x += 0.12) cylinder(iron, [x, H / 2, 0], 0.015, H - 0.06, [0, 0, 0], { sides: 6, caps: false, tile: 0.6 });
+  const col = new MeshBuilder();
+  colBox(col, [0, H / 2, 0], [W, H, 0.06]);
+  return N("bars_panel", { children: [N("bars_panel_iron", { parts: p }), N("bars_panel_col", { col, extras: { tag: "bars", static: true } })], extras: { kind: "fixture", size: [W, H, 0.04], note: "origin at the bottom centre; tile side by side every 1.0 m" } });
+}
+
+/**
+ * Rope cuffs (two turns of rope around a wrist), one per hand; the bound player in K1. Sized on the
+ * base bodies' wrists (checked at build time): the section around hand_l's origin spans x −0.021…0.030,
+ * z −0.039…0.041 (male and female), so the coil is centred at x +0.003 (left; mirrored for the right).
+ */
+export const CUFF = { cx: 0.003, rx: 0.0395, rz: 0.054, r: 0.0075, y0: -0.012, rise: 0.028 };
 function cuffs() {
   const p = new Parts(), rope = p.get("rope");
   const pts = [];
   const turns = 2.3, n = 64;
   for (let i = 0; i <= n; i++) {
     const a = (i / n) * turns * Math.PI * 2;
-    pts.push([Math.cos(a) * 0.036, -0.012 + (i / n) * 0.03 + Math.sin(a * 3) * 0.0015, Math.sin(a) * 0.046]);
+    pts.push([CUFF.cx + Math.cos(a) * CUFF.rx, CUFF.y0 + (i / n) * CUFF.rise + Math.sin(a * 3) * 0.0015, Math.sin(a) * CUFF.rz]);
   }
-  tube(rope, pts, 0.0075, { sides: 6, tile: 0.05 });
+  tube(rope, pts, CUFF.r, { sides: 6, tile: 0.05 });
   // the knot and a loose end
-  tube(rope, [[0.038, 0.004, -0.02], [0.05, 0.0, -0.01], [0.058, -0.012, 0.0], [0.06, -0.05, 0.012]], 0.0075, { sides: 6, tile: 0.05 });
+  const kx = CUFF.cx + CUFF.rx;
+  tube(rope, [[kx + 0.002, 0.004, -0.02], [kx + 0.014, 0.0, -0.01], [kx + 0.022, -0.012, 0.0], [kx + 0.024, -0.05, 0.012]], CUFF.r, { sides: 6, tile: 0.05 });
   const recipe = (bone) => ({ bone, position: [0, 0.008, 0], rotation: [0, 0, 0, 1] });
   return N("cuffs_rope", {
-    children: [N("cuffs_rope_l", { parts: p }), N("cuffs_rope_r", { meshOf: "cuffs_rope_l" })],
+    children: [N("cuffs_rope_l", { parts: p }), N("cuffs_rope_r", { parts: copyParts(p, (v) => [-v[0], v[1], v[2]], (n) => [-n[0], n[1], n[2]], true) })],
     extras: {
       kind: "worn",
       recipes: { cuffs_rope_l: recipe("hand_l"), cuffs_rope_r: recipe("hand_r") },
@@ -775,7 +807,7 @@ function torches() {
   torus(iron, cup, 0.024, 0.007, [-lean, 0, 0], { segments: 12, sides: 4, tile: 0.2 });
   box(iron, [0, cup[1] - 0.01, cup[2] / 2 - 0.012], [0.02, 0.02, -cup[2]], [0, 0, 0], { tile: 0.3 });
   const sconce = N("sconce", {
-    children: [N("sconce_bracket", { parts: s }), N("sconce_torch", { t: base, r: qAxis([1, 0, 0], -lean), children: [N("sconce_torch_body", { meshOf: "torch_body" })] }), N("sconce_flame", { t: flameAt })],
+    children: [N("sconce_bracket", { parts: s }), N("sconce_torch", { parts: copyParts(p, (v) => add(base, rotX(v, -lean)), (n) => rotX(n, -lean)) }), N("sconce_flame", { t: flameAt })],
     extras: { kind: "wall", wall: "origin on the wall at the light anchor's `wall` point, facing −Z (yaw = the anchor's yaw); sconce_flame lands on the light anchor itself", takeTorch: "K9: hide sconce_torch and hang a `torch` on the companion's hand_l" },
   });
   return [torch, sconce];
@@ -1085,11 +1117,6 @@ function emitTree(doc, mats, spec, parent, meshes, out) {
     meshes.set(spec.name, mesh);
     node.addChild(doc.createNode(`${spec.name}_mesh`).setMesh(mesh));
   }
-  if (spec.meshOf) {
-    const mesh = meshes.get(spec.meshOf);
-    if (!mesh) throw new Error(`procprops: ${spec.name} reuses ${spec.meshOf}, which is not built yet`);
-    node.addChild(doc.createNode(`${spec.name}_mesh`).setMesh(mesh));
-  }
   for (const c of spec.children) emitTree(doc, mats, c, node, meshes, out);
   return node;
 }
@@ -1191,6 +1218,52 @@ async function checkGallery(spec, cave, problems, notes) {
   return out;
 }
 
+/** The rope cuffs clear both base bodies' wrists (bind pose, hand-local; the cuff recipe lifts the coil 8 mm). */
+async function checkWrists(SRC, problems, notes) {
+  const out = {};
+  for (const body of ["Superhero_Male_FullBody", "Superhero_Female_FullBody"]) {
+    const file = path.join(SRC, "chars/base", `${body}.gltf`);
+    const doc = await io.read(file).catch(() => null);
+    if (!doc) {
+      notes.push(`cuffs not checked against ${body} (missing)`);
+      continue;
+    }
+    const root = doc.getRoot();
+    for (const skin of root.listSkins()) {
+      const joints = skin.listJoints();
+      for (const side of ["l", "r"]) {
+        const ji = joints.findIndex((j) => j.getName() === `hand_${side}`), li = joints.findIndex((j) => j.getName() === `lowerarm_${side}`);
+        if (ji < 0) continue;
+        const M = skin.getInverseBindMatrices().getElement(ji, []);
+        let worst = 0;
+        const cx = side === "l" ? CUFF.cx : -CUFF.cx;
+        for (const n of root.listNodes())
+          if (n.getSkin() === skin && n.getMesh())
+            for (const prim of n.getMesh().listPrimitives()) {
+              const P = prim.getAttribute("POSITION"), J = prim.getAttribute("JOINTS_0"), W = prim.getAttribute("WEIGHTS_0");
+              if (!J) continue;
+              const v = [], j = [], w = [];
+              for (let i = 0; i < P.getCount(); i++) {
+                J.getElement(i, j);
+                W.getElement(i, w);
+                let wt = 0;
+                for (let k = 0; k < 4; k++) if (j[k] === ji || j[k] === li) wt += w[k];
+                if (wt < 0.5) continue;
+                P.getElement(i, v);
+                const h = [0, 1, 2].map((r) => M[r] * v[0] + M[4 + r] * v[1] + M[8 + r] * v[2] + M[12 + r]);
+                // within the coil's height (recipe lift 8 mm)
+                if (h[1] < CUFF.y0 + 0.008 || h[1] > CUFF.y0 + CUFF.rise + 0.008) continue;
+                worst = Math.max(worst, Math.hypot((h[0] - cx) / (CUFF.rx - CUFF.r), h[2] / (CUFF.rz - CUFF.r)));
+              }
+            }
+        out[`${body}.hand_${side}`] = +worst.toFixed(2);
+        if (worst > 1) problems.push(`cuffs: ${body}'s ${side} wrist pokes through the rope coil (${worst.toFixed(2)} of its inner radius)`);
+      }
+    }
+  }
+  return out;
+}
+
 function checkKeep(keep, problems) {
   const rooms = keep.rooms;
   const A = keep.anchors;
@@ -1226,8 +1299,9 @@ export async function buildProcPropsDocs(SRC, { anchors, poses } = {}) {
   const problems = [], notes = [];
   const lever = leverFromClip(poses, caveA);
   if (lever.gap > 0.25) problems.push(`lever: the handle grip strays ${lever.gap} m from the puller's hand during the pull (> 0.25)`);
+  const wrists = await checkWrists(SRC, problems, notes);
 
-  const keepSpecs = [galleryBridge({ cave: caveA, lever }), cage(), strapChair(), shackles(), ...chains(), cuffs(), ...bowAndArrow(), ...torches(), strawBed(), drainGrate(), ...papers(), dice(), brazierIrons(), keyRing()];
+  const keepSpecs = [galleryBridge({ cave: caveA, lever }), cage(), strapChair(), shackles(), barsPanel(), ...chains(), cuffs(), ...bowAndArrow(), ...torches(), strawBed(), drainGrate(), ...papers(), dice(), brazierIrons(), keyRing()];
   const exitSpecs = [bonePile("bones_a", 101, { skull: true }), bonePile("bones_b", 202), bonePile("bones_c", 303)];
   const gb = keepSpecs[0];
   const findIn = (name, s) => (s.name === name ? s : s.children.map((c) => findIn(name, c)).find(Boolean));
@@ -1301,7 +1375,7 @@ export async function buildProcPropsDocs(SRC, { anchors, poses } = {}) {
   const keep = await build(keepSpecs, "procprops_keep");
   const exit = await build(exitSpecs, "procprops_exit");
   if (problems.length) throw new Error(`procprops:\n  ${problems.join("\n  ")}`);
-  return { keep, exit, gallery, lever, notes };
+  return { keep, exit, gallery, lever, wrists, notes };
 }
 
 function countTris(s) {
@@ -1311,7 +1385,7 @@ function countTris(s) {
 /** Build and emit procprops/keep and procprops/exit; returns their metadata (for props/meta). */
 export async function buildProcProps({ emit, SRC, anchors }) {
   const r = await buildProcPropsDocs(SRC, { anchors });
-  const result = { notes: r.notes, gallery: r.gallery };
+  const result = { notes: r.notes, gallery: r.gallery, wrists: r.wrists };
   for (const [k, part] of [["keep", r.keep], ["exit", r.exit]]) {
     await compressTextures(part.doc, 1024, 512, 256);
     const glb = await finalize(part.doc, { keepLeaves: true });
@@ -1319,6 +1393,10 @@ export async function buildProcProps({ emit, SRC, anchors }) {
     const back = await io.readBinary(glb);
     const names = new Set(back.getRoot().listNodes().map((n) => n.getName()));
     for (const n of part.out.names) if (!names.has(n)) throw new Error(`procprops: ${n} is missing from the encoded ${PROCPROPS[k].id}`);
+    for (const mesh of back.getRoot().listMeshes()) {
+      const users = mesh.listParents().filter((x) => x.propertyType === "Node");
+      if (users.length > 1) throw new Error(`procprops: mesh ${mesh.getName()} is shared by ${users.map((n) => n.getName()).join(", ")} (props must not share meshes)`);
+    }
     for (const top of back.getRoot().listScenes()[0].listChildren()) {
       const t = top.getTranslation(), q = top.getRotation(), s = top.getScale();
       if (t.some((v) => v !== 0) || q[3] !== 1 || s.some((v) => v !== 1)) throw new Error(`procprops: top-level ${top.getName()} is not at the identity after encoding`);
@@ -1328,6 +1406,7 @@ export async function buildProcProps({ emit, SRC, anchors }) {
     console.log(`  ${P.id}: ${Object.keys(part.meta).length} props, ${part.out.tris} triangles, ${part.out.colliders.length} colliders`);
   }
   for (const n of r.notes) console.log(`  note: ${n}`);
+  console.log(`  cuffs: wrist fill of the rope coil's inner section ${JSON.stringify(r.wrists)}`);
   if (r.gallery) console.log(`  gallery: rock clearances ${JSON.stringify(r.gallery.minClear)}, deck steps ${JSON.stringify(r.gallery.steps)}; lever hand gap ${r.lever.gap} m`);
   return result;
 }

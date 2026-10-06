@@ -65,7 +65,6 @@ const MODELS = {
   Torch_Metal: { turn: true, wall: true, anchors: { flame: "torch_basket" } },
   Lantern_Wall: { turn: true, wall: true, anchors: { flame: "lantern" } },
   Candle_1: { anchors: { flame: (b) => [0, b.max[1] + 0.02, 0] } },
-  CandleStick: { turn: true, anchors: { flame: "candle_top" } },
   Barrel: {},
   Crate_Wooden: { turn: true },
   Crate_Metal: { turn: true },
@@ -77,9 +76,17 @@ const MODELS = {
   Bench: { turn: true, seat: 0.526, anchors: { sit: [0, 0.526, 0] } },
   Stool: { seat: 0.582, anchors: { sit: [0, 0.582, 0] } },
   Bed_Twin1: { turn: true, anchors: { lie: (b) => [0, b.max[1] - 0.12, 0.1] } },
-  WeaponStand: { turn: true },
+  // five notches in the top bar (y 0.84): an upright weapon stands at a slot (its lowest point on the
+  // slot node, its handle axis +Y, turned 90° so a blade's flat faces along the bar); a shield leans at `lean`
+  WeaponStand: {
+    turn: true,
+    anchors: Object.fromEntries([
+      ...[-0.35, -0.17, 0, 0.17, 0.35].map((x, i) => [`slot_${i}`, { at: [x, 0, 0], rotY: Math.PI / 2 }]),
+      ["lean", { at: [0, 0, -0.55] }],
+    ]),
+  },
   Peg_Rack: { turn: true, wall: true },
-  Shelf_Small_Bottles: { turn: true, wall: true },
+  Shelf_Small_Bottles: { turn: true, wall: true, anchors: { top_0: [-0.24, 0.628, -0.15], top_1: [0.22, 0.628, -0.15] } },
   Dummy: { turn: true },
   Chain_Coil: {},
   Cage_Small: { turn: true },
@@ -92,7 +99,7 @@ const MODELS = {
   SmallBottle: {},
   SmallBottles_1: { turn: true },
   Scroll_1: {},
-  Book_7: { turn: true },
+  Book_7: { turn: true, rebase: true },
   Mug: { turn: true },
 };
 
@@ -103,9 +110,10 @@ const MODELS = {
  * (character space: +Y up, +Z forward, +X left), within `deg`.
  */
 const HELD = {
-  // handle +Y, blade tip up the grip axis, edge (+X) toward the knuckles: the design §3.3 rotation (0.5, 0.5, 0.5, 0.5)
+  // handle +Y, blade tip up the grip axis, edge (+X) toward the knuckles: the design §3.3 rotation (0.5, 0.5, 0.5, 0.5).
+  // The leather grip runs y −0.109…0.076 (a hand-and-a-half grip); one hand sits under the guard.
   Sword_Bronze: {
-    grip: (p) => [0, (p.grip.min[1] + p.grip.max[1]) / 2, 0],
+    grip: (p) => [0, p.grip.max[1] - 0.05, 0],
     hands: { r: { Y: "+Z", X: "+Y" } },
     check: [{ hand: "r", clip: "Sword_Attack", t: 0.4, axis: [0, 1, 0], want: [0, 1, 0], deg: 40, what: "blade up in the overhead swing" }],
   },
@@ -216,10 +224,6 @@ function partBounds(name, parts) {
     const far = b.all.min[2];
     b.lantern = bounds(parts, (p, i) => p.pos[i * 3 + 2] < far + 0.3 && p.pos[i * 3 + 1] < b.all.max[1] - 0.25);
   }
-  if (name === "CandleStick") {
-    const top = b.all.max[1];
-    b.candle_top = bounds(parts, (p, i) => p.pos[i * 3 + 1] > top - 0.01);
-  }
   for (const k of Object.keys(b)) if (!Number.isFinite(b[k].min[0])) throw new Error(`propkit: ${name}: part "${k}" matched no vertices`);
   return b;
 }
@@ -291,6 +295,11 @@ export async function buildPropKitDoc(SRC, { poses } = {}) {
     seen.add(name.toLowerCase());
     const sdoc = await io.read(path.join(dir, `${src}.gltf`));
     const parts = extract(sdoc, cfg);
+    if (cfg.rebase) {
+      // lay it on y = 0 (the source is centred on its thickness)
+      const y0 = bounds(parts).min[1];
+      for (const p of parts) for (let i = 1; i < p.pos.length; i += 3) p.pos[i] -= y0;
+    }
     const b = partBounds(src, parts);
     const group = doc.createNode(name);
     scene.addChild(group);
@@ -359,9 +368,12 @@ export async function buildPropKitDoc(SRC, { poses } = {}) {
     if (cfg.anchors) {
       info.anchors = {};
       for (const [k, spec] of Object.entries(cfg.anchors)) {
-        const p = r3(anchorPoint(spec, b));
-        group.addChild(doc.createNode(`${name}_${k}`).setTranslation(p));
-        info.anchors[k] = { node: `${name}_${k}`, at: p };
+        const isObj = spec && typeof spec === "object" && !Array.isArray(spec);
+        const p = r3(anchorPoint(isObj ? spec.at : spec, b));
+        const node = doc.createNode(`${name}_${k}`).setTranslation(p);
+        if (isObj && spec.rotY) node.setRotation([0, Math.sin(spec.rotY / 2), 0, Math.cos(spec.rotY / 2)]);
+        group.addChild(node);
+        info.anchors[k] = { node: `${name}_${k}`, at: p, ...(isObj && spec.rotY ? { rotY: +spec.rotY.toFixed(4) } : {}) };
       }
     }
 
@@ -397,6 +409,10 @@ export async function buildPropKit({ emit, SRC }) {
   const glb = await finalize(doc, { keepLeaves: true });
   // the decoded kit must still name every model (prune/dedup must not have merged or dropped any)
   const back = await io.readBinary(glb);
+  for (const mesh of back.getRoot().listMeshes()) {
+    const users = mesh.listParents().filter((x) => x.propertyType === "Node");
+    if (users.length > 1) throw new Error(`propkit: mesh ${mesh.getName()} is shared by ${users.map((n) => n.getName()).join(", ")}`);
+  }
   const names = new Set(back.getRoot().listNodes().map((n) => n.getName()));
   for (const n of Object.keys(meta.models)) if (!names.has(n)) throw new Error(`propkit: ${n} is missing from the encoded kit`);
   for (const n of Object.keys(meta.models)) {

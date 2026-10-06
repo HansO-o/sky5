@@ -21,12 +21,16 @@ export const KEEP_HOLE: TownHole = {
   cover: "keep/interior",
 };
 
-/** Where the cave tunnel comes up inside the balcony outcrop (footprint x −26…−9, z −684…−664). */
+/**
+ * Where the cave tunnel comes up inside the balcony outcrop (footprint x −26…−9, z −684…−664). Its
+ * cover is `cave/outcrop` (shown with the town from the muster on): the outcrop's skin caps the
+ * hole and its mouth stub floors it, as tools/gen/terrainHoles.mjs says.
+ */
 export const EXIT_HOLE: TownHole = {
   id: "exit",
   samples: { x0: -22, x1: -16, z0: -680, z1: -676 },
   render: { x0: -24, x1: -14, z0: -682, z1: -674 },
-  cover: "cave/mesh",
+  cover: "cave/outcrop",
 };
 
 export const TERRAIN_HOLES: readonly TownHole[] = [KEEP_HOLE, EXIT_HOLE];

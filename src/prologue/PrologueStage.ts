@@ -13,8 +13,8 @@ import { buildTown, GATE, LAYOUT, type Town } from "../world/town";
 import { Physics, type BodyId } from "../engine/physics/Physics";
 import { Debris } from "../engine/physics/Debris";
 import { BodyFollower } from "../engine/physics/BodyFollower";
+import { appendWorldGeometry } from "../engine/physics/meshGeometry";
 import { activeTerrainHoles } from "../world/terrainHoles";
-import { VertexBuffer } from "@babylonjs/core/Buffers/buffer";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import type { AbstractMesh } from "@babylonjs/core/Meshes/abstractMesh";
 import type { TransformNode } from "@babylonjs/core/Meshes/transformNode";
@@ -38,6 +38,7 @@ import { RoamChapter } from "./chapters/roam";
 import { DragonChapter } from "./chapters/dragon";
 import { ExecutionChapter } from "./chapters/execution";
 import { MusterChapter } from "./chapters/muster";
+import { KeepChapter } from "./chapters/keep";
 import { WorldState, type WorldSnapshot } from "../engine/state/WorldState";
 import { DEFAULT_FLAGS, normalizeFlags, type PrologueFlags } from "./flags";
 import { FireFx } from "./fx/fire";
@@ -46,6 +47,12 @@ import { prepareArrows } from "./fx/arrow";
 import { DragonDirector } from "./dragonDirector";
 import { NodeHider } from "../engine/world/visibility";
 import { Zones, type ZoneDef, type ZoneEffects } from "../engine/world/zones";
+import { HingedDoor } from "../engine/world/HingedDoor";
+import { precompile } from "../engine/render/precompile";
+import { worldGeometry } from "../engine/physics/meshGeometry";
+import { bindCaveMaterials } from "./keep/caveMaterials";
+import { loadUnderground, type Underground } from "./keep/underground";
+import type { AssetContainer } from "@babylonjs/core/assetContainer";
 import type { InteriorOptions, LightingProfile } from "../world/environment";
 
 type ChapterFactory = (ctx: ChapterContext) => Chapter;
@@ -61,6 +68,36 @@ export interface DoorLeaf {
   body: BodyId | null;
   sync(): void;
 }
+/** The keep's main gate: two leaves that swing together (design §4.1: inward 85° over 1.4 s). */
+export interface KeepGate {
+  l: HingedDoor;
+  r: HingedDoor;
+  /** 0 shut … 1 open (the west leaf's) */
+  readonly t: number;
+  open(seconds?: number): Promise<boolean>;
+  close(seconds?: number): Promise<boolean>;
+  set(t: number): void;
+}
+
+/** How far the gate's leaves swing (rad): 85°. */
+const GATE_OPEN = (85 * Math.PI) / 180;
+
+function keepGate(l: HingedDoor, r: HingedDoor): KeepGate {
+  return {
+    l,
+    r,
+    get t() {
+      return l.t;
+    },
+    open: (seconds = 1.4) => Promise.all([l.open(seconds), r.open(seconds)]).then(([a, b]) => a && b),
+    close: (seconds = 1.4) => Promise.all([l.close(seconds), r.close(seconds)]).then(([a, b]) => a && b),
+    set: (t) => {
+      l.set(t);
+      r.set(t);
+    },
+  };
+}
+
 /** A chapter and the script scope its scripts run in. */
 type ScopedChapter = { chapter: Chapter; scope: ScriptScope };
 
@@ -70,6 +107,7 @@ export const CHAPTERS: { id: SegmentId; make: ChapterFactory }[] = [
   { id: "muster", make: (c) => new MusterChapter(c) },
   { id: "execution", make: (c) => new ExecutionChapter(c) },
   { id: "dragon", make: (c) => new DragonChapter(c) },
+  { id: "keep", make: (c) => new KeepChapter(c) },
 ];
 const DEBUG = new URLSearchParams(location.search);
 if (DEBUG.has("debug") && DEBUG.has("roam")) CHAPTERS.splice(0, CHAPTERS.length, { id: "muster", make: (c) => new RoamChapter(c) });
@@ -124,6 +162,19 @@ export class PrologueStage implements Stage {
   debris: Debris | null = null;
   /** the keep gate's leaves with their colliders (set with the physics when the town has the doors) */
   keepDoors: { l: DoorLeaf; r: DoorLeaf } | null = null;
+  /**
+   * The keep's main gate as two hinged leaves (swing inward 85°; `open()` both over 1.4 s by
+   * default) and the west postern (design §4.1), made with the physics. Their colliders follow the
+   * leaves. Null when the town lacks them.
+   */
+  gate: KeepGate | null = null;
+  postern: HingedDoor | null = null;
+  /** the keep's interior and the cave gallery (made by `ensureUnderground()`, kept until the stage goes) */
+  underground: Underground | null = null;
+  /** the balcony outcrop over the exit hole (cave/outcrop, shown with the town; null when the build lacks it) */
+  outcrop: { root: TransformNode; plug: AbstractMesh[]; colliders: AbstractMesh[]; plugBody: BodyId | null } | null = null;
+  private undergroundP: Promise<Underground> | null = null;
+  private exteriorDoors = new Set<HingedDoor>();
   /**
    * Persistent story state (faction, inventory, outcomes, ...). Saves record it as of the last
    * checkpoint: every autosave is one, and so is `snapshotFlags()` (e.g. an encounter starting).
@@ -253,7 +304,13 @@ export class PrologueStage implements Stage {
     this.townP ??= (async () => {
       const t0 = performance.now();
       const opt = (id: string) => loadGLB(id, this.scene).catch((e) => (console.warn(id, e), null));
-      const [fort, houses, buildings, door] = await Promise.all([loadGLB("ph/modular_fort_01", this.scene), opt("cart/houses"), opt("town/buildings"), opt("ph/large_castle_door")]);
+      const [fort, houses, buildings, door, outcrop] = await Promise.all([
+        loadGLB("ph/modular_fort_01", this.scene),
+        opt("cart/houses"),
+        opt("town/buildings"),
+        opt("ph/large_castle_door"),
+        assets.has("cave/outcrop") ? opt("cave/outcrop") : Promise.resolve(null),
+      ]);
       if (this.world.disposed) return;
       const town = await buildTown(this.scene, { fort, houses, buildings, door }, (x, z) => this.world.heightAt(x, z), {
         casters: (m) => this.world.addShadowCasters(m),
@@ -265,6 +322,8 @@ export class PrologueStage implements Stage {
       this.world.addOutdoorPart({
         setOutdoorVisible: (on, o) => this.townHider.hideOnly(on ? [] : town.root.getChildren().filter((c) => !(o.keep && keepParts.has(c)))),
       });
+      // the balcony outcrop over the exit hole (the terrain is open under it from the start)
+      if (outcrop) await this.addOutcrop(outcrop);
       // the arrows' shader, ahead of the first shot (muster, raid)
       void prepareArrows(this.world);
       console.info(`[timing] town built +${(performance.now() - t0).toFixed(0)} ms`);
@@ -274,6 +333,76 @@ export class PrologueStage implements Stage {
       this.townReady = true; // never block the story forever
     });
     return this.townP;
+  }
+
+  /**
+   * The balcony outcrop (`cave/outcrop`, design Appendix "Cave and balcony outcrop"): its skin, the
+   * platform and the mouth stub cap and floor `EXIT_HOLE`, which the terrain has open from the
+   * start. Shown with the outdoor world; its colliders are built with the town's (`ensurePhysics`).
+   */
+  private async addOutcrop(c: AssetContainer) {
+    c.addAllToScene();
+    await bindCaveMaterials(this.scene, c.materials);
+    const all = [...c.transformNodes, ...c.meshes];
+    const node = (name: string) => all.find((n) => n.name === name) ?? null;
+    const meshesOf = (name: string) => {
+      const n = node(name);
+      return n ? ([n, ...n.getDescendants(false)].filter((m) => "getTotalVertices" in m && (m as AbstractMesh).getTotalVertices() > 0) as AbstractMesh[]) : [];
+    };
+    const root = (c.meshes.find((m) => !m.parent) ?? c.meshes[0]) as unknown as TransformNode;
+    const colliders = ["outcrop_col", "outcrop_rails_col"].flatMap(meshesOf);
+    const plugCol = meshesOf("outcrop_mouth_plug_col");
+    for (const m of [...colliders, ...plugCol]) m.setEnabled(false);
+    const render = c.meshes.filter((m) => m.getTotalVertices() > 0 && !colliders.includes(m) && !plugCol.includes(m));
+    for (const m of render) {
+      m.isPickable = false;
+      m.hasVertexAlpha = false;
+      m.receiveShadows = true;
+      m.computeWorldMatrix(true);
+      m.freezeWorldMatrix();
+    }
+    this.world.addShadowCasters(meshesOf("outcrop_rock"));
+    root.setEnabled(false);
+    await precompile(render, { shadows: this.world.env.shadows, timeout: 15 });
+    if (this.world.disposed) return;
+    root.setEnabled(true);
+    this.outcrop = { root, plug: meshesOf("outcrop_mouth_plug_mesh"), colliders: [...colliders, ...plugCol], plugBody: null };
+    this.world.addOutdoorPart({ setOutdoorVisible: (on) => root.setEnabled(on) });
+  }
+
+  /**
+   * The keep's interior and the cave gallery, loaded and built once (design §3.1, §3.2, §4.2):
+   * colliders, doors, blockers, zones with their lighting profiles, the light anchors' flames and
+   * the props, all hidden until the player's zone shows them. Kept until the stage goes (keep and
+   * exit both play in it). Needs the physics (and so the town) and the town's fire effects.
+   */
+  ensureUnderground(): Promise<Underground> {
+    this.undergroundP ??= (async () => {
+      const [ph, fx] = await Promise.all([this.ensurePhysics(), this.ensureTownFx().catch((e) => (console.warn("underground: no fire effects", e), null))]);
+      if (this.disposed || this.world.disposed) throw new Cancelled();
+      const u = await loadUnderground({
+        world: this.world,
+        physics: ph,
+        fx,
+        keepHolder: this.town?.keep ?? null,
+        probe: () => this.player?.position ?? this.world.rig.position,
+        exteriorOpen: () => [...this.exteriorDoors].some((d) => d.isOpen),
+        onExterior: (fn) => {
+          const offs = [...this.exteriorDoors].map((d) => d.changed.on(() => fn()));
+          return () => offs.forEach((o) => o());
+        },
+      });
+      if (this.disposed || this.world.disposed) {
+        u.dispose();
+        throw new Cancelled();
+      }
+      this.underground = u;
+      return u;
+    })().catch((e) => {
+      this.undergroundP = null; // a later chapter tries again
+      throw e;
+    });
+    return this.undergroundP;
   }
 
   /** Jolt world with the town's static colliders (lazy: only chapters on foot need it). */
@@ -286,6 +415,9 @@ export class PrologueStage implements Stage {
         if (w.disposed) throw new Cancelled();
       };
       let doors: PrologueStage["keepDoors"] = null;
+      let gate: KeepGate | null = null;
+      let postern: HingedDoor | null = null;
+      let posternBody: BodyId | null = null;
       try {
         alive();
         // terrain around the town (512 m square, ~2 m spacing), open where the keep's basement and
@@ -304,11 +436,14 @@ export class PrologueStage implements Stage {
           const doorTag = new Map<unknown, "l" | "r">();
           town.keepDoors.forEach((hinge, i) => hinge.parent && doorTag.set(hinge.parent, i === 0 ? "l" : "r"));
           const doorBody: Partial<Record<"l" | "r", BodyId>> = {};
+          // the west postern's leaf has a body of its own (it opens), not part of the keep's
+          const posternHinge = (town.keep.getDescendants(false, (n) => n.name === "keep_postern")[0] as TransformNode | undefined) ?? null;
           // one static mesh body per building, built over several frames
           const groups = new Map<unknown, AbstractMesh[]>();
           for (const m of town.colliders) {
             let top: unknown = m;
             while ((top as AbstractMesh).parent && (top as AbstractMesh).parent !== town.root) top = (top as AbstractMesh).parent;
+            if (posternHinge && m.isDescendantOf(posternHinge)) top = posternHinge;
             if (!groups.has(top)) groups.set(top, []);
             groups.get(top)!.push(m);
           }
@@ -317,8 +452,10 @@ export class PrologueStage implements Stage {
             for (const m of list) appendWorldGeometry(m, pos, idx);
             const side = doorTag.get(top);
             if (idx.length) {
-              const id = ph.addStaticMesh(pos, idx, side ? { tag: `keep_door_${side}` } : {});
+              const tag = side ? `keep_door_${side}` : top === posternHinge ? "postern" : undefined;
+              const id = ph.addStaticMesh(pos, idx, tag ? { tag } : {});
               if (side) doorBody[side] = id;
+              if (top === posternHinge) posternBody = id;
             }
             // the leaves move when the gate opens: their meshes follow their hinges again
             if (side) for (const m of list) m.unfreezeWorldMatrix();
@@ -332,10 +469,23 @@ export class PrologueStage implements Stage {
               return { hinge, body, sync: () => f?.sync() };
             };
             doors = { l: leaf("l", town.keepDoors[0]), r: leaf("r", town.keepDoors[1]) };
+            // the gate swings inward (north): the west leaf (hinged at x 58) turns +85°, the east one −85°
+            const swing = (i: number, side: "l" | "r") => new HingedDoor({ hinge: town.keepDoors[i], openYaw: (i === 0 ? 1 : -1) * GATE_OPEN, physics: ph, body: doorBody[side] ?? null, bus: w });
+            gate = keepGate(swing(0, "l"), swing(1, "r"));
           }
+          if (posternHinge) postern = new HingedDoor({ hinge: posternHinge, openYaw: Math.PI / 2, physics: ph, body: posternBody, bus: w });
           const b: number[] = [], bi: number[] = [];
           for (const m of this.town.breach.meshes) appendWorldGeometry(m, b, bi);
           if (bi.length) this.breachBody = ph.addStaticMesh(b, bi, { tag: "tower_breach" });
+        }
+        // the outcrop over the exit hole: its skin, deck and rails, and the mouth plug (removed once the cave shows)
+        const oc = this.outcrop;
+        if (oc) {
+          const plugCols = oc.colliders.filter((m) => m.name.startsWith("outcrop_mouth_plug"));
+          const g = worldGeometry(oc.colliders.filter((m) => !plugCols.includes(m)));
+          if (g.idx.length) ph.addStaticMesh(g.pos, g.idx, { tag: "outcrop" });
+          const pg = worldGeometry(plugCols);
+          if (pg.idx.length) oc.plugBody = ph.addStaticMesh(pg.pos, pg.idx, { tag: "blocker_mouth" });
         }
       } catch (e) {
         ph.dispose();
@@ -344,6 +494,9 @@ export class PrologueStage implements Stage {
       this.physics = ph;
       this.world.physics = ph;
       this.keepDoors = doors;
+      this.gate = gate;
+      this.postern = postern;
+      for (const d of [gate?.l, gate?.r, postern]) if (d) this.exteriorDoors.add(d);
       this.debris = new Debris({ physics: ph, scene: this.scene, shadows: (m) => this.world.addShadowCasters(m) });
       // the breach stones' shader, ahead of the raid
       void this.debris.warm([this.town?.breach.meshes[0]?.material]);
@@ -700,6 +853,8 @@ export class PrologueStage implements Stage {
         this.objective(null);
         // and so does its compass marker
         objective.clear();
+        // (the AI's cache of the eye's value too: it shows the eye again from scratch)
+        this.ai?.resetEye();
         hud.stealth(null);
         this.combatHud?.clear();
         // every chapter starts with no music states (it registers its own tracks), and at normal
@@ -869,6 +1024,11 @@ export class PrologueStage implements Stage {
     this.gear = null;
     this.player?.dispose();
     this.debris?.dispose();
+    this.underground?.dispose();
+    this.underground = null;
+    this.gate?.l.dispose();
+    this.gate?.r.dispose();
+    this.postern?.dispose();
     this.world.dispose();
     this.physics?.dispose();
     // a stage that never reached the screen (a failed load from the pause menu) owns none of the
@@ -895,22 +1055,4 @@ function whenReady(scene: { whenReadyAsync(): Promise<void> }, seconds: number) 
 function hideSubtitle(hidden: boolean) {
   const s = document.getElementById("subtitle");
   if (s) s.style.visibility = hidden ? "hidden" : "";
-}
-
-/** Append a mesh's triangles in world space (for static colliders). */
-function appendWorldGeometry(m: AbstractMesh, pos: number[], idx: number[]) {
-  const p = m.getVerticesData(VertexBuffer.PositionKind);
-  const ind = m.getIndices();
-  if (!p || !ind) return;
-  m.computeWorldMatrix(true);
-  const W = m.getWorldMatrix();
-  const base = pos.length / 3;
-  const v = new Vector3();
-  for (let i = 0; i < p.length; i += 3) {
-    Vector3.TransformCoordinatesFromFloatsToRef(p[i], p[i + 1], p[i + 2], W, v);
-    pos.push(v.x, v.y, v.z);
-  }
-  // a mirrored transform (negative scale) flips winding; Jolt mesh shapes are double-sided for
-  // the character anyway, so winding does not matter here
-  for (let i = 0; i < ind.length; i++) idx.push(base + ind[i]);
 }

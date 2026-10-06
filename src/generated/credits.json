@@ -225,6 +225,18 @@
    "licenseUrl": "https://polyhaven.com/license"
   },
   {
+   "id": "rock_face_02",
+   "kind": "model",
+   "name": "Rock Face 02",
+   "authors": [
+    "Dario Barresi",
+    "Rico Cilliers"
+   ],
+   "source": "https://polyhaven.com/a/rock_face_02",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
    "id": "rock_face_03",
    "kind": "texture",
    "name": "Rock Face 03",
@@ -359,6 +371,17 @@
    "licenseUrl": "https://polyhaven.com/license"
   },
   {
+   "id": "stone_fire_pit",
+   "kind": "model",
+   "name": "Stone Fire Pit",
+   "authors": [
+    "Sebastian Platen"
+   ],
+   "source": "https://polyhaven.com/a/stone_fire_pit",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
    "id": "thatch_roof_angled",
    "kind": "texture",
    "name": "Thatch Roof Angled",
@@ -390,6 +413,18 @@
     "Rico Cilliers"
    ],
    "source": "https://polyhaven.com/a/weathered_brown_planks",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
+   "id": "weathered_planks",
+   "kind": "texture",
+   "name": "Weathered Planks",
+   "authors": [
+    "Dario Barresi",
+    "Dimitrios Savva"
+   ],
+   "source": "https://polyhaven.com/a/weathered_planks",
    "license": "CC0 1.0",
    "licenseUrl": "https://polyhaven.com/license"
   },
@@ -469,6 +504,17 @@
    "source": "https://polyhaven.com/a/wooden_lantern_01",
    "license": "CC0 1.0",
    "licenseUrl": "https://polyhaven.com/license"
+  },
+  {
+   "id": "wooden_table_02",
+   "kind": "model",
+   "name": "Wooden Table 02",
+   "authors": [
+    "Serhii Khromov"
+   ],
+   "source": "https://polyhaven.com/a/wooden_table_02",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://polyhaven.com/license"
   }
  ],
  "extra": [
@@ -503,6 +549,18 @@
     "Quaternius"
    ],
    "source": "https://quaternius.com/packs/modularcharacteroutfitsfantasy.html",
+   "license": "CC0 1.0",
+   "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "quaternius-fpm",
+   "kind": "model",
+   "name": "Fantasy Props MegaKit [Standard]",
+   "authors": [
+    "Quaternius"
+   ],
+   "note": "已修改：合并为一个道具包，顶点色调整（青铜兵器改为钢铁色），贴图缩小并转为 KTX2，宝箱改为刚体盖子",
+   "source": "https://quaternius.itch.io/fantasy-props-megakit",
    "license": "CC0 1.0",
    "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/"
   },

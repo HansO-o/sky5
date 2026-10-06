@@ -364,6 +364,11 @@ const PH = {
   wicker_basket_01: { ratio: 0.3, tex: 512, segment: "muster", priority: 55, pos: [60, -540] },
   wooden_axe_03: { ratio: 0.5, tex: 512, segment: "muster", priority: 80, pos: [60, -590] },
   wooden_bucket_02: { ratio: 0.6, tex: 512, segment: "muster", priority: 50, pos: [60, -590] },
+  // keep/exit props (design §10.2; placements in props/meta): hall cover tables, the cave camp fire, and
+  // the outcrop brow, which is shown with the town like cave/outcrop (streamed in muster, see STREAMED)
+  wooden_table_02: { ratio: 1, tex: 512, segment: "keep", priority: 90, pos: [60, -662] },
+  stone_fire_pit: { ratio: 0.5, tex: 512, segment: "keep", priority: 88, pos: [53.5, -724] },
+  rock_face_02: { ratio: 0.15, error: 0.01, tex: 1024, segment: "muster", priority: 60, pos: [-19, -675] },
 };
 for (const [id, o] of Object.entries(PH)) {
   await step(`ph/${id}`, async () => {
@@ -374,6 +379,21 @@ for (const [id, o] of Object.entries(PH)) {
     await emit(`ph/${id}`, { segment: o.segment, priority: o.priority, type: "glb", ext: "glb", data: glb, pos: o.pos });
   });
 }
+
+// ------------------------------------------------------------------ props (segments keep, exit)
+// kit/fpm (the Quaternius Fantasy Props MegaKit, merged), procprops/keep + procprops/exit (procedural:
+// the gallery drawbridge set piece, cage, shackles, cuffs, bow, torches, ...) and props/meta (json:
+// how to resolve, attach and place them). Built from the shipped cave and keep anchors (the steps
+// above, built or reused); a gate below checks they still match. Imported lazily (it loads cave.mjs).
+const readManifestJSON = async (id) => {
+  const a = manifest.assets.find((x) => x.id === id);
+  return a ? JSON.parse(await fs.readFile(path.join(ROOT, "public", a.url), "utf8")) : null;
+};
+await step("props/", async () => {
+  const anchors = { cave: await readManifestJSON("cave/anchors"), keep: await readManifestJSON("keep/anchors") };
+  if (!anchors.cave || !anchors.keep) throw new Error("props/: needs cave/anchors and keep/anchors in the manifest (build cave/ and keep/interior first)");
+  await (await import("./gen/props.mjs")).buildProps({ emit, SRC, anchors });
+});
 
 // ------------------------------------------------------------------ dragon + effects
 await step("dragon/dragon", () => buildDragon({ emit, SRC }));
@@ -404,7 +424,7 @@ await shutdownKtx();
 const STREAMED = new Set([
   "ph/mountainside", "ph/rock_face_01", "ph/boulder_01", "ph/rock_moss_set_02", "ph/tree_stump_01",
   "ph/dead_tree_trunk", "audio/music_menu", "audio/music_cart", "audio/amb_forest",
-  "ph/wooden_lantern_01", "ph/kite_shield",
+  "ph/wooden_lantern_01", "ph/kite_shield", "ph/rock_face_02",
 ]);
 for (const a of manifest.assets) {
   if (STREAMED.has(a.id)) a.optional = true;
@@ -455,6 +475,16 @@ manifest.assets = manifest.assets.filter((a) => !a.id.endsWith("#aac"));
     if (!r.ok) throw new Error(r.message);
     console.log(r.message);
   }
+  // The props join: props/ placed the gallery set piece (drawbridge, lever, winch, slab) and the drain
+  // grate from the cave and keep anchors as they were when it ran; --only can rebuild either side.
+  const propsMeta = await readJSON("props/meta");
+  if (propsMeta && caveAnchors && keepAnchors) {
+    const { propJoins } = await import("./gen/props.mjs");
+    const now = propJoins({ cave: caveAnchors, keep: keepAnchors });
+    if (JSON.stringify(now) !== JSON.stringify(propsMeta.joins))
+      throw new Error(`props join: props/meta was built against other cave/keep anchors (${JSON.stringify(propsMeta.joins)} vs now ${JSON.stringify(now)}); rebuild with --only=props/`);
+    console.log("props join ok: the gallery set piece and the drain grate match the shipped cave and keep anchors");
+  }
 }
 manifest.assets.sort((a, b) => a.id.localeCompare(b.id));
 manifest.version = sha(Buffer.from(JSON.stringify(manifest.assets.map((a) => [a.id, a.hash])))).slice(0, 12);
@@ -479,7 +509,7 @@ console.log("manifest version", manifest.version);
 // credits page data (only assets that actually ship)
 const phIds = new Set(Object.keys(PH));
 for (const k of Object.keys(TERRAIN_LAYERS)) phIds.add(TERRAIN_LAYERS[k]);
-["pine_bark", "weathered_brown_planks", "rusty_metal_02", "plastered_stone_wall", "medieval_wood", "thatch_roof_angled", "fir_tree_01", "kloofendal_overcast_puresky", "rough_block_wall", "castle_wall_slates", "old_planks_02", "rough_wood", "stone_brick_wall_001", "rock_tile_floor", "dark_wooden_planks", "rock_face_03", "rocks_ground_08", "ganges_river_pebbles", "mossy_rock"].forEach((x) => phIds.add(x));
+["pine_bark", "weathered_brown_planks", "rusty_metal_02", "plastered_stone_wall", "medieval_wood", "thatch_roof_angled", "fir_tree_01", "kloofendal_overcast_puresky", "rough_block_wall", "castle_wall_slates", "old_planks_02", "rough_wood", "stone_brick_wall_001", "rock_tile_floor", "dark_wooden_planks", "rock_face_03", "rocks_ground_08", "ganges_river_pebbles", "mossy_rock", "weathered_planks"].forEach((x) => phIds.add(x));
 const ph = JSON.parse(await fs.readFile(path.join(SRC, "credits-polyhaven.json"), "utf8")).filter((c) => phIds.has(c.id));
 await fs.mkdir(path.join(ROOT, "src/generated"), { recursive: true });
 await fs.writeFile(path.join(ROOT, "src/generated/credits.json"), JSON.stringify({ polyhaven: ph, extra: EXTRA_CREDITS }, null, 1));
