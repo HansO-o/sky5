@@ -228,6 +228,8 @@ export abstract class CombatBrain {
   protected timer = 0;
   protected circleDir: 1 | -1 = 1;
   protected circleR = 3.5;
+  /** how long the next back-off lasts (s; default the 1.5 m step at the back-off speed) */
+  protected backoffFor: number | null = null;
   protected flipAt = 0;
   protected frozen = false;
   protected rising = false;
@@ -460,6 +462,14 @@ export abstract class CombatBrain {
     return best;
   }
 
+  /** Subclasses: a check on every combat update (a leash, a fear, a special); a state name to leave for. */
+  protected combatCheck(): string | void {}
+
+  /** The state a special starts from (creatures that run in first: "charge"). */
+  protected specialState() {
+    return "attack";
+  }
+
   /** Subclasses' extra target bias (the companion's preference for foes not on the player). */
   protected targetBias(_c: Combatant) {
     return 0;
@@ -632,6 +642,7 @@ export abstract class CombatBrain {
             const held = this.combat.tokenOf(this.self);
             if (held && (held !== this.target || this.dist(held) > this.ring[1] + 3)) this.releaseToken();
           }
+          return this.combatCheck();
         },
         exit: () => {
           this.releaseToken();
@@ -715,7 +726,8 @@ export abstract class CombatBrain {
       backoff: S({
         parent: "combat",
         enter: () => {
-          this.timer = AI.creature.backoff / AI.creature.backoffSpeed;
+          this.timer = this.backoffFor ?? AI.creature.backoff / AI.creature.backoffSpeed;
+          this.backoffFor = null;
         },
         update: () => {
           const t = this.target;
@@ -867,7 +879,7 @@ export abstract class CombatBrain {
     const ready = this.time >= this.nextAttackAt;
     if (ready && this.specialReady(d) && this.token()) {
       this.planAttack(d);
-      return "attack";
+      return this.specialState();
     }
     if (ready && this.token()) {
       if (!this.combo.length) this.planAttack(Infinity);
@@ -907,7 +919,7 @@ export abstract class CombatBrain {
     this.askAt = this.time + AI.tokens.every;
     if (this.specialReady(d) && this.token()) {
       this.planAttack(d);
-      return "attack";
+      return this.specialState();
     }
     if (this.token()) return "approach";
   }

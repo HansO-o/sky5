@@ -15,7 +15,7 @@ export type Place = XZ | (() => XZ);
 
 export type Goal =
   | { kind: "stop" }
-  | { kind: "point"; at: Place; speed: number; stop: number }
+  | { kind: "point"; at: Place; speed: number; stop: number; slow: number }
   | { kind: "circle"; center: Place; radius: number; dir: 1 | -1; speed: number }
   | { kind: "dir"; x: number; z: number; speed: number };
 
@@ -40,7 +40,8 @@ export interface AgentControl {
   /** horizontal speed after the last step (m/s) */
   readonly speed: number;
   readonly goal: Goal;
-  moveTo(at: Place, speed: number, stop?: number): void;
+  /** walk toward `at`, stopping `stop` m short and slowing over the last `slow` m (default 0.6; 0: full speed, e.g. along a trail) */
+  moveTo(at: Place, speed: number, stop?: number, slow?: number): void;
   /** strafe on a ring around `center` toward its left (+1) or right (−1) as it faces the centre */
   circle(center: Place, radius: number, dir: 1 | -1, speed: number): void;
   /** move along a world direction (backing off) */
@@ -217,8 +218,8 @@ export abstract class AgentCore implements AgentControl, CrowdMember {
   }
   protected onSuspend(_on: boolean) {}
 
-  moveTo(p: Place, speed: number, stop = 0) {
-    this.goal = { kind: "point", at: p, speed, stop };
+  moveTo(p: Place, speed: number, stop = 0, slow = 0.6) {
+    this.goal = { kind: "point", at: p, speed, stop, slow };
   }
   circle(center: Place, radius: number, dir: 1 | -1, speed: number) {
     this.goal = { kind: "circle", center, radius, dir, speed };
@@ -295,7 +296,7 @@ export abstract class AgentCore implements AgentControl, CrowdMember {
     let vx = 0, vz = 0;
     const g = this.goal;
     if (g.kind === "point") {
-      const v = seek(self, at(g.at), g.speed, g.stop);
+      const v = seek(self, at(g.at), g.speed, g.stop, g.slow);
       vx = v.vx;
       vz = v.vz;
     } else if (g.kind === "circle") {
@@ -320,12 +321,15 @@ export abstract class AgentCore implements AgentControl, CrowdMember {
       vx += sep.vx;
       vz += sep.vz;
     }
-    if (this.shoveV.left > 0) {
-      vx += this.shoveV.x;
-      vz += this.shoveV.z;
+    let snap = false;
+    if (this.shoveV.left > 1e-6 && dt > 0) {
+      // (the last step of a shove gets only what is left of it)
+      const k = Math.min(dt, this.shoveV.left) / dt;
+      vx += this.shoveV.x * k;
+      vz += this.shoveV.z * k;
       this.shoveV.left -= dt;
+      snap = true;
     }
-    let snap = this.shoveV.left > 0;
     const tr = this.track;
     if (tr) {
       const st = tr.t.step(dt, this.yawValue, self.x, self.z, tr.target?.() ?? null);

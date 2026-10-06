@@ -165,12 +165,31 @@ const coverExempt = (x, z) => x > -27 && z > -686;
 export const OUTCROP = {
   box: { c: [-16.5, 46.25, -672.75], half: [7.5, 10.25, 7.75], r: 1.5 },
   hood: { min: [-23, 53.5, -681], max: [-7.8, 62.5, -674], r: 1.5 },
-  shoulder: { min: [-24.5, 50, -675.5], max: [-19, 61.5, -666.5], r: 1.2 },
-  cap: { x: [EXIT_HOLE.render.x0 - 1, EXIT_HOLE.render.x1 + 1], z: [EXIT_HOLE.render.z0 - 1, EXIT_HOLE.render.z1 + 1], lift: 3.0, r: 1.0 },
+  shoulder: { min: [-24.5, 50, -675.5], max: [-19, 58.6, -666.5], r: 1.2 },
+  cap: { x: [EXIT_HOLE.render.x0 - 1, EXIT_HOLE.render.x1 + 1], z: [EXIT_HOLE.render.z0 - 1, EXIT_HOLE.render.z1 + 1], lift: 1.3, r: 1.0 },
   noise: 0.5,
   platform: { y: 56.05, x: [-19, -11], z: [-674, -667], centre: [-15.0, 56.05, -670.5] },
-  /** invisible rails: `h` above the deck along the open edges (`open`), `t` thick; `edges` run on into the rock */
-  rails: { h: 1.4, t: 0.3, open: { S: [[-19, -667], [-11, -667]], E: [[-11, -674], [-11, -667]] }, edges: { S: [[-19.8, -667], [-11, -667]], E: [[-11, -675.2], [-11, -667]] } },
+  /**
+   * The deck's invisible enclosure (one collider node, outcrop_rails_col): the rails along the open S
+   * and E edges (`open`, at least `h` above the deck) and the walls on the rock sides, which stop
+   * anyone on the outcrop's top (the hillside runs up onto it) from dropping onto the deck or into the
+   * mouth: W across the shoulder 2.8 m west of its cut face (the tunnel's rounded end notches the
+   * shoulder there), N above the mouth from out of a jump's reach up (the deck + JUMP_REACH + the
+   * capsule's 1.8 m < 59.2). Each wall is a box from a to b (x/z, +0.15 m past both ends) over y,
+   * `t` thick (default rails.t), offset by `side` · t/2 along (−t_z, 0, t_x) of the direction a → b
+   * (N: −1, into the hood).
+   */
+  rails: {
+    h: 1.2,
+    t: 0.3,
+    open: { S: [[-19, -667], [-11, -667]], E: [[-11, -674], [-11, -667]] },
+    walls: {
+      S: { a: [-21.8, -667], b: [-11, -667], y: [55.55, 66] },
+      E: { a: [-11, -675.2], b: [-11, -667], y: [55.55, 66] },
+      W: { a: [-21.8, -674.2], b: [-21.8, -667], y: [55.55, 66] },
+      N: { a: [-21.8, -674], b: [-11, -674], y: [59.2, 66], t: 1.2, side: -1 },
+    },
+  },
   footprint: { x: [-26, -9], z: [-684, -664] },
   /** respawn below this height over the outcrop's skin (volumes.respawn_outcrop), north to `z0` (the tunnel runs below 50 m further north) */
   respawn: { y: 50, z0: -676, margin: 1.0 },
@@ -1096,15 +1115,18 @@ export function buildCaveData({ log = () => {} } = {}) {
   const V = (v) => [kept.pos[v * 3], kept.pos[v * 3 + 1], kept.pos[v * 3 + 2]];
   const Nv = (v) => [kept.nrm[v * 3], kept.nrm[v * 3 + 1], kept.nrm[v * 3 + 2]];
   const centroid = (I, t) => mul(add(add(V(I[t * 3]), V(I[t * 3 + 1])), V(I[t * 3 + 2])), 1 / 3);
-  // the stub (the cave in front of the mouth plug) ships with the outcrop: group O, material cave_moss
+  // Only cave and outcrop triangles were kept; after simplification a skin triangle along the terrain
+  // line can have its centroid on the ground's side, and it is still the outcrop's (not a cave zone's:
+  // the cave meets the terrain nowhere, see above). The stub (the cave in front of the mouth plug)
+  // ships with the outcrop too: group O, material cave_moss.
   const groupOf = (I, t) => {
     const c = centroid(I, t);
-    const k = surfaceClass(c[0], c[1], c[2]);
-    return k === "outcrop" || inStub(c) ? "O" : zoneOf(c[0], c[1], c[2]);
+    if (surfaceClass(c[0], c[1], c[2]) !== "cave") return "O";
+    return inStub(c) ? "O" : zoneOf(c[0], c[1], c[2]);
   };
   const isStub = (I, t) => {
     const c = centroid(I, t);
-    return surfaceClass(c[0], c[1], c[2]) !== "outcrop" && inStub(c);
+    return surfaceClass(c[0], c[1], c[2]) === "cave" && inStub(c);
   };
   // moss: the last 25 m of the climb (s along the exit spline), jittered so the change is ragged
   const exitLen = TUNNEL_LEN.exit;
@@ -1313,6 +1335,8 @@ export function buildCaveData({ log = () => {} } = {}) {
     // sides (inside the walls)
     gridQuad(riser, add(fl, [0, -h, 0]), [0, h, 0], mul(sl.t, sl.L), 1, nv, { tile: rTile, n: mul(sl.r, -1) });
     gridQuad(riser, add(add(fl, mul(sl.r, W)), [0, -h, 0]), mul(sl.t, sl.L), [0, h, 0], nv, 1, { tile: rTile, n: sl.r });
+    // back end (faces +t): inside the next slab, but the top slab's would be open toward the platform
+    gridQuad(riser, add(add(add(fl, mul(sl.t, sl.L)), mul(sl.r, W)), [0, -h, 0]), mul(sl.r, -W), [0, h, 0], nu, 1, { tile: rTile, n: sl.t });
   }
   {
     let out = 0, at = null;
@@ -1732,12 +1756,13 @@ export function buildCaveData({ log = () => {} } = {}) {
 
   // 4i. outcrop: rails and the mouth plug
   const rails = new Col();
-  for (const [a, b] of Object.values(OUTCROP.rails.edges)) {
-    const d = sub([b[0], 0, b[1]], [a[0], 0, a[1]]), L = len(d), t = norm(d);
-    const c = [(a[0] + b[0]) / 2, PLAT.y + OUTCROP.rails.h / 2 - 0.25, (a[1] + b[1]) / 2];
-    rails.box(c, [L / 2 + 0.15, OUTCROP.rails.h / 2 + 0.25, OUTCROP.rails.t / 2], [t, [0, 1, 0], [-t[2], 0, t[0]]]);
+  for (const w of Object.values(OUTCROP.rails.walls)) {
+    const d = sub([w.b[0], 0, w.b[1]], [w.a[0], 0, w.a[1]]), L = len(d), t = norm(d), side = [-t[2], 0, t[0]];
+    const th = w.t ?? OUTCROP.rails.t, off = ((w.side ?? 0) * th) / 2;
+    const c = add([(w.a[0] + w.b[0]) / 2, (w.y[0] + w.y[1]) / 2, (w.a[1] + w.b[1]) / 2], mul(side, off));
+    rails.box(c, [L / 2 + 0.15, (w.y[1] - w.y[0]) / 2, th / 2], [t, [0, 1, 0], side]);
   }
-  extra.outcrop_rails_col = { group: "O", col: rails, colOnly: true, note: `invisible rails along the platform's S and E edges, ${OUTCROP.rails.h} m above the deck; their ends run into the shoulder and the hood` };
+  extra.outcrop_rails_col = { group: "O", col: rails, colOnly: true, note: "the deck's invisible enclosure: rails along the S and E edges and walls on the shoulder's face and above the mouth, up to y 66 (outcrop.rails)" };
   const plug = new Geo();
   let plugInfo;
   {
@@ -2662,7 +2687,7 @@ async function checkOutdoor(data, { A, BE, O }) {
   {
     const g = new TriGrid();
     for (const [name, list] of Object.entries(O.tris)) if (!/_col$/.test(name)) for (const t of list) g.add(t, name);
-    for (const t of renderTerrainTris(region)) g.add(t, "terrain");
+    for (const t of renderTerrainTris({ x0: region.x0 - 20, x1: region.x1 + 20, z0: region.z0 - 20, z1: region.z1 + 20 })) g.add(t, "terrain");
     // targets: zone E's surface near the mouth (what cave/mesh would show), and air behind the plug
     const targets = [];
     for (const [mat, geo] of Object.entries(data.render.E)) {
@@ -2687,27 +2712,49 @@ async function checkOutdoor(data, { A, BE, O }) {
         const x = -16 + r * Math.cos((a * Math.PI) / 180), z = -674 + r * Math.sin((a * Math.PI) / 180), p = [x, ground(x, z), z];
         if (S(p[0], p[1], p[2]) > 0.3) eyes.push({ k: `hill ${a}°/${r}`, p });
       }
-    let rays = 0, fails = 0;
+    // A renderer culls back faces and shows the first front face. The void is rock deeper than 0.25 m
+    // or cave air outside the stub (cave/mesh is not loaded). A ray passes when its first front face
+    // comes before it enters the void: a sliver of back face at a grazing lip is not a hole. Only rays
+    // whose first hit is not a front face of the outcrop are marched through the field.
+    const VOID = 0.25;
+    const inVoid = (p) => S(p[0], p[1], p[2]) < -VOID || (air(p[0], p[1], p[2]) < -VOID && !(plugSide(p) > -0.3 && inStub(p, 0.3)));
+    let rays = 0, fails = 0, marched = 0;
     const byEye = {}, firsts = [];
     for (const e of eyes)
       for (const tp of T_) {
         const d = sub(tp, e.p), L = len(d), u = mul(d, 1 / L);
         const h = g.ray(e.p, u, L + 3);
         rays++;
-        let why = null;
-        if (!h) why = "nothing";
-        else if (dot(h.tri.n, u) >= 0) why = `back face of ${h.tri.tag}`;
-        else if (h.tri.tag === "terrain") {
-          const hp = add(e.p, mul(u, h.t));
-          if (S(hp[0], hp[1] + 0.3, hp[2]) < -0.1) why = "terrain inside the rock";
+        if (h && dot(h.tri.n, u) < 0 && h.tri.tag !== "terrain") continue;
+        // the first front face (if any), then where the ray enters the void before it
+        marched++;
+        let tf = Infinity, front = null;
+        for (let t0 = 0, o = e.p; ; ) {
+          const hh = g.ray(o, u, L + 3 - t0);
+          if (!hh) break;
+          if (dot(hh.tri.n, u) < 0) {
+            tf = t0 + hh.t;
+            front = hh.tri.tag;
+            break;
+          }
+          t0 += hh.t + 1e-4;
+          o = add(e.p, mul(u, t0));
         }
+        let tv = Infinity;
+        for (let t = Math.max(0, L - 30); t < Math.min(tf, L + 3); t += 0.1)
+          if (inVoid(add(e.p, mul(u, t)))) {
+            tv = t;
+            break;
+          }
+        const why = tv < Infinity ? `reaches the void ${(Math.min(tf, L + 3) - tv).toFixed(2)} m before ${front ? `the first front face (${front})` : "any front face"}` : tf === Infinity ? "meets nothing" : null;
         if (why) {
           fails++;
           byEye[e.k] = (byEye[e.k] ?? 0) + 1;
           if (firsts.length < 3) firsts.push(`${e.k} (${e.p.map(r2)}) → (${tp.map(r2)}): ${why}`);
+          if (_debug.last) (_debug.last.rays ??= []).push({ eye: e.p, target: tp, why });
         }
       }
-    stats.closure = { eyes: eyes.length, targets: T_.length, rays, fails };
+    stats.closure = { eyes: eyes.length, targets: T_.length, rays, marched, fails };
     if (fails) bad.push(`muster set (cave/outcrop without cave/mesh): ${fails} of ${rays} rays toward zone E reach the void (${Object.entries(byEye).map(([k, n]) => `${k} ${n}`).join(", ")}), e.g. ${firsts.join("; ")}`);
   }
 
@@ -3040,7 +3087,7 @@ export async function buildCave({ emit, SRC }) {
       platform: { y: PLAT.y, x: PLAT.x, z: PLAT.z, centre: PLAT.centre },
       vista: report.stats.vista,
       viewCorridor: { points: Object.values(report.stats.vista).map((v) => v.leavesDeck.at), note: "the vista lines leave the deck here 0.8–1.4 m above it: keep anything taller than 0.7 m at least 1.5 m away" },
-      rails: { height: OUTCROP.rails.h, open: OUTCROP.rails.open, edges: OUTCROP.rails.edges, note: "the boxes run 0.15 m past `edges`, their ends inside the shoulder and the hood" },
+      rails: { minHeight: OUTCROP.rails.h, open: OUTCROP.rails.open, walls: OUTCROP.rails.walls, thickness: OUTCROP.rails.t, note: "outcrop_rails_col: one box per wall from a to b (x/z, +0.15 m past both ends) over y; N is 1.2 m thick toward −z (into the hood), the others 0.3 m centred. S and E are the rails over the open edges; W and N keep anyone on the outcrop's top from dropping onto the deck" },
       mouthStub: { plane: { point: r3v(PLUG_PLANE.p), normal: r3v(PLUG_PLANE.t) }, behind: MOUTH.behind, note: "the cave in front of the plug's plane (and up to `behind` m behind it) ships in cave/outcrop: outcrop_rock (material cave_moss) and outcrop_col, the top stair slabs and their ramp included" },
       enclosure: outdoor.stats.enclosure,
       mouthPlug: data.plugInfo,

@@ -162,6 +162,9 @@ export class Sensor {
   noticed: string | null = null;
   /** where it believes the threat is (sight, then noise, then an ally's shout) */
   lastKnown: XYZ | null = null;
+  /** @internal bus time of its last look (it hears what sounded since), and the last noise it heard */
+  heardTo: number | null = null;
+  heardSeq = -1;
   readonly changes = new Emitter<SensorChange>();
   readonly kind: "human" | "beast";
 
@@ -255,6 +258,9 @@ export class Perception {
 
   addSensor(spec: SensorSpec): Sensor {
     const s = new Sensor(spec);
+    // it hears from now on (not the noises of before it was there)
+    s.heardTo = this.noise.time;
+    s.heardSeq = this.noise.seq;
     this.sensors.add(s);
     this.offs.set(s, [this.slicer.add(s), s.changes.on((c) => this.changes.emit(c))]);
     return s;
@@ -327,13 +333,15 @@ export class Perception {
     if (s.hearing) {
       const instant = spec.instant !== undefined ? spec.instant : beast ? BEAST.instant : null;
       const now = this.noise.time;
-      this.noise.heard(dt, (n, secs) => {
+      const since = s.heardTo ?? now - dt;
+      s.heardTo = now;
+      s.heardSeq = this.noise.heard(since, (n, secs, fresh) => {
         const d = Math.hypot(n.at.x - feet.x, n.at.y - eyeY, n.at.z - feet.z);
         let gain = 0;
         if (beast) {
           const one = BEAST_ONESHOT[n.kind];
-          // (once: in the look whose window it started in)
-          if (one) gain = d <= one.r && n.t > now - dt - 1e-9 ? one.add : 0;
+          // (once: in the look whose span it started in)
+          if (one) gain = d <= one.r && fresh ? one.add : 0;
           else {
             const b = BEAST_HEARING[n.kind];
             if (b) gain = beastRate(d, n.radius ?? b.r, b.w) * secs;
@@ -354,7 +362,7 @@ export class Perception {
             if (!s.seeing) s.lastKnown = s.lastNoise;
           }
         }
-      });
+      }, s.heardSeq);
     }
     if (wake) {
       s.alert(wake, wakeBy);

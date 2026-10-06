@@ -62,17 +62,26 @@ export class Breadcrumbs {
     return this.crumbs[this.crumbs.length - 1] ?? null;
   }
 
-  /** The leader is at `p`: a new crumb when it is grounded and `spacing` m from the last. True when one was dropped. */
+  /**
+   * The leader is at `p`: crumbs every `spacing` m since the last one while it is grounded (a
+   * sampled leader that went further in one look gets the crumbs in between). True when one was
+   * dropped.
+   */
   drop(p: XYZ, grounded: boolean): boolean {
     if (!grounded) return false;
     const last = this.last;
+    const spacing = this.o.spacing ?? FOLLOW.spacing;
     if (last) {
       const d = Math.hypot(p.x - last.x, p.z - last.z);
       if (d > (this.o.jump ?? FOLLOW.jump)) {
         this.reset(p);
         return true;
       }
-      if (d < (this.o.spacing ?? FOLLOW.spacing)) return false;
+      if (d < spacing) return false;
+      for (let k = spacing; k <= d - spacing + 1e-9; k += spacing) {
+        const u = k / d;
+        this.crumbs.push({ x: last.x + (p.x - last.x) * u, y: last.y + (p.y - last.y) * u, z: last.z + (p.z - last.z) * u });
+      }
     }
     this.crumbs.push({ x: p.x, y: p.y, z: p.z });
     const keep = this.o.keep ?? FOLLOW.keep;

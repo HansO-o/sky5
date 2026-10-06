@@ -46,6 +46,8 @@ export interface HeardNoise extends Required<Omit<Noise, "radius" | "source">> {
   radius: number | null;
   /** bus time it started */
   t: number;
+  /** emission order on its bus (steady sources: −1) */
+  seq: number;
 }
 
 /** How long momentary noises are kept for sensors that have not looked yet (s). */
@@ -61,12 +63,14 @@ export class NoiseBus {
   readonly events = new Emitter<HeardNoise>();
   /** bus seconds (advanced by `update`) */
   time = 0;
+  /** the last emission's `seq` */
+  seq = -1;
   private recent: HeardNoise[] = [];
   private sources = new Set<() => Noise | null>();
 
   /** A momentary noise, from now for `seconds`. */
   emit(n: Noise) {
-    const h: HeardNoise = { kind: n.kind, at: { x: n.at.x, y: n.at.y, z: n.at.z }, seconds: n.seconds ?? 0.25, source: n.source ?? null, radius: n.radius ?? null, t: this.time };
+    const h: HeardNoise = { kind: n.kind, at: { x: n.at.x, y: n.at.y, z: n.at.z }, seconds: n.seconds ?? 0.25, source: n.source ?? null, radius: n.radius ?? null, t: this.time, seq: ++this.seq };
     this.recent.push(h);
     this.events.emit(h);
   }
@@ -86,16 +90,19 @@ export class NoiseBus {
   }
 
   /**
-   * Every noise sounding in the last `window` seconds with how many of those seconds it sounded:
-   * the momentary ones by their overlap, the steady sources for the whole window.
+   * Every noise sounding between bus times `since` and now, with how many of those seconds it
+   * sounded (momentary ones by their overlap, steady sources for the whole span) and whether it is
+   * new to the listener (emitted after the one numbered `after`: one-shot effects count it once,
+   * whatever the timing of the looks). Returns the latest number, the listener's next `after`.
    */
-  heard(window: number, fn: (n: HeardNoise, seconds: number) => void) {
-    const t1 = this.time, t0 = t1 - Math.max(0, window);
+  heard(since: number, fn: (n: HeardNoise, seconds: number, fresh: boolean) => void, after = -1): number {
+    const t1 = this.time, t0 = Math.min(since, t1);
     for (const n of this.recent) {
+      const fresh = n.seq > after;
       const s = Math.min(t1, n.t + n.seconds) - Math.max(t0, n.t);
-      // (a noise of zero length emitted this instant still counts as heard, for an instant)
-      if (s > 0 || (n.seconds === 0 && n.t >= t0)) fn(n, Math.max(0, s));
+      if (s > 0 || fresh) fn(n, Math.max(0, s), fresh);
     }
+    const span = t1 - t0;
     for (const src of this.sources) {
       let n: Noise | null = null;
       try {
@@ -103,8 +110,9 @@ export class NoiseBus {
       } catch (e) {
         console.error("noise source", e);
       }
-      if (n) fn({ kind: n.kind, at: n.at, seconds: window, source: n.source ?? null, radius: n.radius ?? null, t: t0 }, window);
+      if (n) fn({ kind: n.kind, at: n.at, seconds: span, source: n.source ?? null, radius: n.radius ?? null, t: t0, seq: -1 }, span, false);
     }
+    return this.seq;
   }
 
   clear() {
