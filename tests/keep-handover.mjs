@@ -7,8 +7,9 @@
 //   dragon chapter left them), the dragon flies on, the town burns on, the screen stays lit.
 // skip — skipped from its last step: the keep starts at the gate and fades itself in (the skip left
 //   the screen black), the dragon still flying and the town still burning (nothing pops: the stage
-//   owns both), the underground loads behind it, and a forced skip of the keep puts the player on
-//   the gallery's far bank under the cave profile before the end card.
+//   owns both), the underground loads behind it, the keep cannot be skipped before the choice at the
+//   gate, and once Brun is chosen a skip of the keep puts the player on the gallery's far bank under
+//   the cave profile before the end card.
 import { chromium } from "playwright-core";
 
 const SHOTS = process.env.SHOTS ?? "/tmp/claude-0/shots";
@@ -142,12 +143,15 @@ async function skip() {
     await page.evaluate(() => void window.__game.stage.skipChapter());
     await page.waitForFunction(() => window.__game?.stage?.chapter?.id === "keep", null, { timeout: 300000 });
     const k = await keepAtGate(page, before, "skip");
-    // (while run() is the checkpoints' placeholder the gate has no choice to make: skippable; K0's beat
-    // makes the choice the player's again)
-    check("skip: the keep at the gate can be skipped (no dead end before K0's beat)", k.skippable === true);
+    // the choice at the gate is the player's to make (§0 #2): no skipping until it is made
+    check("skip: the keep at the gate cannot be skipped before the choice", k.skippable === false);
     await page.screenshot({ path: `${SHOTS}/kh-keep0.png` });
     await page.waitForFunction(() => !!window.__game.stage.underground, null, { timeout: 600000 });
     check("skip: the underground loads behind the gate", true);
+    // choose Brun (as the E prompt does), then the chapter may be skipped
+    await page.evaluate(() => window.__game.stage.chapter.debugChoose("brun"));
+    await page.waitForFunction(() => !!window.__game.stage.canSkip, null, { timeout: 300000 });
+    check("skip: skippable once the choice is made", true);
     await page.evaluate(() => void window.__game.stage.skipChapter());
     await page.waitForFunction(() => window.__game?.stage?.chapter === null || !!document.getElementById("endcard"), null, { timeout: 120000 });
     const after = await state(page);

@@ -252,7 +252,7 @@ export class PrologueAI {
     const scale = o.scale ?? a.scale ?? 1;
     const asset = o.asset ?? SPIDER.asset;
     this.claim(o.id);
-    const cr = await loadCreature(w, asset, o.profile ?? spiderProfile(`ai_${o.id}`, scale), { cloneMaterials: !!o.tint });
+    const cr = o.body ?? (await loadCreature(w, asset, o.profile ?? spiderProfile(`ai_${o.id}`, scale), { cloneMaterials: !!o.tint }));
     if (!cr) return null;
     if (this.disposed || w.disposed) {
       cr.dispose();
@@ -602,6 +602,8 @@ export interface CreatureSpec {
   /** manifest asset (default the spider) and its profile (default the spider's at the archetype's scale) */
   asset?: string;
   profile?: CreatureProfile;
+  /** a body made already (a creature loaded and tinted by the content, or its procedural stand-in): used instead of `asset` and disposed with the actor */
+  body?: Creature;
   scale?: number;
   /** a body colour (own materials): small spiders brown, the giant black */
   tint?: [number, number, number];

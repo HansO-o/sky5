@@ -948,7 +948,7 @@ export class PrologueStage implements Stage {
     const card = document.createElement("section");
     card.id = "endcard";
     card.appendChild(heading("雾门镇"));
-    card.insertAdjacentHTML("beforeend", `<p>序章 · 未完待续</p><p style="font-size:13px;letter-spacing:.2em">要塞与出洞两章正在制作中，完成后会从这里接着往下走</p><button>返回主菜单</button>`);
+    card.insertAdjacentHTML("beforeend", `<p>序章 · 未完待续</p><p style="font-size:13px;letter-spacing:.2em">要塞的后半段与出洞一章正在制作中，完成后会从这里接着往下走</p><button>返回主菜单</button>`);
     card.querySelector("button")!.addEventListener("click", () => {
       card.remove();
       void hud.fade(false, 0.5);
